@@ -1,0 +1,624 @@
+# REQUEST.md
+
+> 이 문서는 각 SIP 요청을 **실제 SIP 텍스트 패킷 형태**로 이해하기 위한 설명 문서이다.
+> 예시 패킷은 대표 예시이며, 모든 선택 헤더를 다 포함하지는 않는다.
+
+## 공통 요청 골격
+
+```text
+INVITE sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-generic
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: generic-request@example.com
+CSeq: 1 INVITE
+Content-Length: 0
+```
+
+공통 필수 헤더:
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+## ACK
+
+- 설명: Acknowledges the final response to an INVITE transaction.
+- 대표 상황: UE acted as UAS for INVITE and receives ACK after sending a final response.
+- RFC: RFC3261
+
+### 대표 SIP 패킷 예시
+
+```text
+ACK sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-ack
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: ack@example.com
+CSeq: 1 ACK
+Route: <sip:edge.example.com;lr>
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Route`
+
+### 조건부 규칙
+- `Route`: Populate when the INVITE dialog established a route set.
+
+## BYE
+
+- 설명: Terminates an established SIP dialog/session.
+- 대표 상황: Remote endpoint ends an active call or session with the UE.
+- RFC: RFC3261
+
+### 대표 SIP 패킷 예시
+
+```text
+BYE sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-bye
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: bye@example.com
+CSeq: 1 BYE
+Reason: SIP ;cause=200 ;text="Normal call clearing"
+User-Agent: VolteMutationFuzzer/0.1
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Reason`
+- `User-Agent`
+
+## CANCEL
+
+- 설명: Cancels a pending INVITE transaction before final response.
+- 대표 상황: Caller aborts an inbound ringing INVITE before the UE answers.
+- RFC: RFC3261
+
+### 대표 SIP 패킷 예시
+
+```text
+CANCEL sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-cancel
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: cancel@example.com
+CSeq: 1 CANCEL
+Reason: SIP ;cause=200 ;text="Normal call clearing"
+User-Agent: VolteMutationFuzzer/0.1
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Reason`
+- `User-Agent`
+
+### 조건부 규칙
+- `Reason`: Include when cancellation cause should be conveyed explicitly. — Reason is not mandatory in base RFC3261 but is common in modern deployments.
+
+## INFO
+
+- 설명: Carries mid-dialog application information using the INFO framework.
+- 대표 상황: UE receives DTMF or application signaling during an active dialog.
+- RFC: RFC6086
+
+### 대표 SIP 패킷 예시
+
+```text
+INFO sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-info
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: info@example.com
+CSeq: 1 INFO
+Info-Package: dtmf
+Content-Type: application/dtmf-relay
+Content-Length: 24
+
+Signal=5
+Duration=160
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Info-Package`
+- `Content-Type`
+
+### 조건부 규칙
+- `Info-Package`: Required when the INFO package framework is used for a named package.
+
+## INVITE
+
+- 설명: Creates a new session or modifies an existing dialog via re-INVITE.
+- 대표 상황: UE receives an initial incoming call or an in-dialog session renegotiation.
+- RFC: RFC3261, RFC6026
+
+### 대표 SIP 패킷 예시
+
+```text
+INVITE sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-invite
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: invite@example.com
+CSeq: 1 INVITE
+Contact: <sip:caller@caller.example.com>
+Supported: 100rel, timer
+Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, MESSAGE, NOTIFY, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
+Recv-Info: dtmf
+Session-Expires: 600;refresher=uac
+Min-SE: 90
+Content-Type: application/sdp
+Content-Length: 98
+
+v=0
+o=- 0 0 IN IP4 caller.example.com
+s=-
+c=IN IP4 192.0.2.10
+t=0 0
+m=audio 49170 RTP/AVP 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `Contact`
+
+### 대표 선택/조건부 헤더
+- `Supported`
+- `Allow`
+- `Recv-Info`
+- `Session-Expires`
+- `Min-SE`
+- `Content-Type`
+
+### 조건부 규칙
+- `Body`: Often carries SDP offer/answer, but offerless INVITE is also valid.
+- `Recv-Info`: Include in an initial INVITE when advertising supported INFO packages; an empty Recv-Info value is valid.
+
+## MESSAGE
+
+- 설명: Transports pager-mode instant messages to the UE.
+- 대표 상황: Remote endpoint sends a SIP MESSAGE text or signaling payload.
+- RFC: RFC3428
+
+### 대표 SIP 패킷 예시
+
+```text
+MESSAGE sip:ue@example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-message
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: message@example.com
+CSeq: 1 MESSAGE
+Content-Type: text/plain
+Content-Language: ko
+Content-Length: 24
+
+Hello from SIP MESSAGE
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Content-Type`
+- `Content-Language`
+
+### 금지 헤더
+- `Contact`
+
+### 조건부 규칙
+- `Body`: MESSAGE usually carries an instant-message payload, but the model keeps the body optional for RFC-tolerant parsing/fuzzing.
+
+## NOTIFY
+
+- 설명: Delivers subscription state or REFER progress notifications.
+- 대표 상황: UE previously subscribed to an event package or created an implicit REFER subscription.
+- RFC: RFC6665
+
+### 대표 SIP 패킷 예시
+
+```text
+NOTIFY sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-notify
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: notify@example.com
+CSeq: 1 NOTIFY
+Contact: <sip:caller@caller.example.com>
+Event: presence
+Subscription-State: active;expires=300
+Content-Type: application/pidf+xml
+Content-Length: 71
+
+<?xml version="1.0"?>
+<presence entity="sip:callee@ue.example.com"/>
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `Contact`
+- `Event`
+- `Subscription-State`
+
+### 대표 선택/조건부 헤더
+- `Content-Type`
+
+### 조건부 규칙
+- `Body`: Most event packages send a body, but empty NOTIFY is possible for some terminal states.
+
+## OPTIONS
+
+- 설명: Queries UE capabilities and reachability.
+- 대표 상황: Network or peer probes the UE's supported SIP features.
+- RFC: RFC3261
+
+### 대표 SIP 패킷 예시
+
+```text
+OPTIONS sip:ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-options
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: options@example.com
+CSeq: 1 OPTIONS
+Supported: 100rel, timer
+Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, MESSAGE, NOTIFY, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
+Accept: application/sdp
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Accept`
+- `Allow`
+- `Supported`
+
+## PRACK
+
+- 설명: Acknowledges a reliable provisional response (100rel).
+- 대표 상황: UE sent a reliable provisional INVITE response and receives PRACK in return.
+- RFC: RFC3262
+
+### 대표 SIP 패킷 예시
+
+```text
+PRACK sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-prack
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: prack@example.com
+CSeq: 1 PRACK
+Recv-Info: dtmf
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `RAck`
+
+### 대표 선택/조건부 헤더
+- `Recv-Info`
+
+### 조건부 규칙
+- `Recv-Info`: May be included when the UA advertises support for INFO packages during dialog establishment.
+
+## PUBLISH
+
+- 설명: Publishes event state to an event state compositor.
+- 대표 상황: Only meaningful when the UE exposes publication-server-like behavior.
+- RFC: RFC3903
+
+### 대표 SIP 패킷 예시
+
+```text
+PUBLISH sip:presence.ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-publish
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: publish@example.com
+CSeq: 1 PUBLISH
+Event: presence
+Expires: 600
+SIP-If-Match: etag-1
+Content-Type: application/pidf+xml
+Content-Length: 68
+
+<?xml version="1.0"?>
+<presence entity="sip:caller@example.com"/>
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `Event`
+
+### 대표 선택/조건부 헤더
+- `Expires`
+- `SIP-If-Match`
+- `Content-Type`
+
+### 조건부 규칙
+- `Expires`: Typically supplied to define publication lifetime.
+- `Body`: Required when publishing state document content.
+
+## REFER
+
+- 설명: Requests that the UE contact a third party, typically for call transfer.
+- 대표 상황: Remote endpoint instructs the UE to transfer or initiate another SIP request.
+- RFC: RFC3515
+
+### 대표 SIP 패킷 예시
+
+```text
+REFER sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-refer
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: refer@example.com
+CSeq: 1 REFER
+Contact: <sip:caller@caller.example.com>
+Refer-To: <sip:transfer-target@example.com>
+Referred-By: <sip:referrer@example.com>
+Refer-Sub: false
+Target-Dialog: dialog-1234@example.com;local-tag=ltag;remote-tag=rtag
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `Contact`
+- `Refer-To`
+
+### 대표 선택/조건부 헤더
+- `Referred-By`
+- `Refer-Sub`
+- `Target-Dialog`
+
+## REGISTER
+
+- 설명: Registers or refreshes AOR bindings with a registrar.
+- 대표 상황: Rare for handset UE because the UE is normally the REGISTER sender, not receiver.
+- RFC: RFC3261
+
+### 대표 SIP 패킷 예시
+
+```text
+REGISTER sip:registrar.ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-register
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: register@example.com
+CSeq: 1 REGISTER
+Contact: <sip:caller@caller.example.com>
+Expires: 3600
+Recv-Info: dtmf
+Path: <sip:path.example.com;lr>
+User-Agent: VolteMutationFuzzer/0.1
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+
+### 대표 선택/조건부 헤더
+- `Contact`
+- `Expires`
+- `Path`
+- `Recv-Info`
+- `User-Agent`
+
+### 조건부 규칙
+- `Contact`: Needed for normal binding add/update flows; omitted or specialized in query variants.
+- `Recv-Info`: May be included to advertise INFO-package support as allowed by RFC6086.
+
+## SUBSCRIBE
+
+- 설명: Creates or refreshes a subscription to an event package.
+- 대표 상황: Peer subscribes to presence, dialog, or another UE-hosted event package.
+- RFC: RFC6665
+
+### 대표 SIP 패킷 예시
+
+```text
+SUBSCRIBE sip:presence.ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-subscribe
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: subscribe@example.com
+CSeq: 1 SUBSCRIBE
+Contact: <sip:caller@caller.example.com>
+Supported: 100rel, timer
+Accept: application/pidf+xml
+Event: presence
+Expires: 300
+Content-Length: 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `Contact`
+- `Event`
+
+### 대표 선택/조건부 헤더
+- `Expires`
+- `Accept`
+- `Supported`
+
+## UPDATE
+
+- 설명: Updates session parameters without creating a new dialog.
+- 대표 상황: UE receives in-dialog or early-dialog SDP/session refresh adjustments.
+- RFC: RFC3311
+
+### 대표 SIP 패킷 예시
+
+```text
+UPDATE sip:callee@ue.example.com SIP/2.0
+Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-update
+Max-Forwards: 70
+From: "Caller" <sip:caller@example.com>;tag=from-tag
+To: <sip:callee@ue.example.com>
+Call-ID: update@example.com
+CSeq: 1 UPDATE
+Contact: <sip:caller@caller.example.com>
+Recv-Info: dtmf
+Session-Expires: 600;refresher=uac
+Min-SE: 90
+Content-Type: application/sdp
+Content-Length: 98
+
+v=0
+o=- 1 1 IN IP4 caller.example.com
+s=-
+c=IN IP4 192.0.2.10
+t=0 0
+m=audio 49172 RTP/AVP 0
+```
+
+### 필수 헤더
+- `Request-URI`
+- `Via`
+- `Max-Forwards`
+- `From`
+- `To`
+- `Call-ID`
+- `CSeq`
+- `Contact`
+
+### 대표 선택/조건부 헤더
+- `Recv-Info`
+- `Session-Expires`
+- `Min-SE`
+- `Content-Type`
+
+### 조건부 규칙
+- `Body`: Required when the UPDATE carries SDP or another message body.
+- `Recv-Info`: May be included when the UA refreshes advertised INFO-package support in-dialog.
+
+## 참고 RFC
+
+- [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261)
+- [RFC 3262](https://www.rfc-editor.org/rfc/rfc3262)
+- [RFC 3311](https://www.rfc-editor.org/rfc/rfc3311)
+- [RFC 3329](https://www.rfc-editor.org/rfc/rfc3329)
+- [RFC 3428](https://www.rfc-editor.org/rfc/rfc3428)
+- [RFC 3515](https://www.rfc-editor.org/rfc/rfc3515)
+- [RFC 3903](https://www.rfc-editor.org/rfc/rfc3903)
+- [RFC 5360](https://www.rfc-editor.org/rfc/rfc5360)
+- [RFC 5839](https://www.rfc-editor.org/rfc/rfc5839)
+- [RFC 6086](https://www.rfc-editor.org/rfc/rfc6086)
+- [RFC 6442](https://www.rfc-editor.org/rfc/rfc6442)
+- [RFC 6665](https://www.rfc-editor.org/rfc/rfc6665)
+- [RFC 7647](https://www.rfc-editor.org/rfc/rfc7647)
+- [RFC 8197](https://www.rfc-editor.org/rfc/rfc8197)
+- [RFC 8599](https://www.rfc-editor.org/rfc/rfc8599)
+- [RFC 8688](https://www.rfc-editor.org/rfc/rfc8688)
+- [RFC 8876](https://www.rfc-editor.org/rfc/rfc8876)

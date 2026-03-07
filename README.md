@@ -25,3 +25,41 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 8. 화상 회의 시스템 - 여러 사용자가 동시에 영상 통신을 하는 시스템.
 9. Unified Communication - 기업 협업 플랫폼.
 10. IoT / 인터콤 / CCTV
+
+## CI / 품질 체크
+이 저장소에는 GitHub Actions 기반 CI가 포함되어 있으며, pull request마다 아래 검사를 수행한다.
+
+- `uv run ruff check .`
+- `uv run ruff format --check .`
+- `uv run ty check`
+
+워크플로 파일:
+- `.github/workflows/ci.yml`
+
+로컬에서도 동일하게 아래 순서로 재현할 수 있다.
+
+```bash
+uv sync --dev
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check
+```
+
+## 구현 및 분류에 참고한 주요 RFC
+- RFC 3261 - SIP 기본 프로토콜: https://www.rfc-editor.org/rfc/rfc3261
+- RFC 3262 - PRACK / Reliable Provisional Response: https://www.rfc-editor.org/rfc/rfc3262
+- RFC 3311 - UPDATE Method: https://www.rfc-editor.org/rfc/rfc3311
+- RFC 3329 - Security Agreement / 494: https://www.rfc-editor.org/rfc/rfc3329
+- RFC 3428 - MESSAGE Method: https://www.rfc-editor.org/rfc/rfc3428
+- RFC 3515 - REFER Method: https://www.rfc-editor.org/rfc/rfc3515
+- RFC 3903 - PUBLISH Method: https://www.rfc-editor.org/rfc/rfc3903
+- RFC 5360 - Consent / 470: https://www.rfc-editor.org/rfc/rfc5360
+- RFC 5839 - 204 No Notification: https://www.rfc-editor.org/rfc/rfc5839
+- RFC 6086 - INFO Package Framework: https://www.rfc-editor.org/rfc/rfc6086
+- RFC 6442 - 424 Bad Location Information: https://www.rfc-editor.org/rfc/rfc6442
+- RFC 6665 - SUBSCRIBE / NOTIFY framework: https://www.rfc-editor.org/rfc/rfc6665
+- RFC 7647 - REFER response updates (202 deprecation context): https://www.rfc-editor.org/rfc/rfc7647
+- RFC 8197 - 607 Unwanted: https://www.rfc-editor.org/rfc/rfc8197
+- RFC 8599 - 555 Push Notification Service Not Supported: https://www.rfc-editor.org/rfc/rfc8599
+- RFC 8688 - 608 Rejected: https://www.rfc-editor.org/rfc/rfc8688
+- RFC 8876 - 425 Bad Alert Message: https://www.rfc-editor.org/rfc/rfc8876
