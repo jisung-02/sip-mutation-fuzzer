@@ -26,6 +26,25 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 9. Unified Communication - 기업 협업 플랫폼.
 10. IoT / 인터콤 / CCTV
 
+## CI / 품질 체크
+이 저장소에는 GitHub Actions 기반 CI가 포함되어 있으며, push 및 pull request마다 아래 검사를 수행한다.
+
+- `uv run ruff check .`
+- `uv run ruff format --check .`
+- `uv run ty check`
+
+워크플로 파일:
+- `.github/workflows/ci.yml`
+
+로컬에서도 동일하게 아래 순서로 재현할 수 있다.
+
+```bash
+uv sync --dev
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check
+```
+
 ## 구현 및 분류에 참고한 주요 RFC
 - RFC 3261 - SIP 기본 프로토콜: https://www.rfc-editor.org/rfc/rfc3261
 - RFC 3262 - PRACK / Reliable Provisional Response: https://www.rfc-editor.org/rfc/rfc3262
