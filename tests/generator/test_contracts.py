@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from volte_mutation_fuzzer.generator import DialogContext, GeneratorSettings
+from volte_mutation_fuzzer.generator import DialogContext, GeneratorSettings, RequestSpec
 from volte_mutation_fuzzer.sip.common import NameAddress, SIPURI
 
 
@@ -113,6 +113,37 @@ class DialogContextTests(unittest.TestCase):
         self.assertEqual(reinvite_context.route_set, (route,))
         self.assertEqual(reinvite_context.request_uri, request_uri)
         self.assertTrue(reinvite_context.is_registered)
+
+
+class RequestSpecTests(unittest.TestCase):
+    def test_normalizes_optional_text_and_copies_overrides(self) -> None:
+        source_overrides = {"max_forwards": 68}
+        spec = RequestSpec(
+            method="INVITE",
+            scenario=" initial inbound call ",
+            body_kind=" sdp_offer ",
+            overrides=source_overrides,
+        )
+
+        self.assertEqual(spec.method.value, "INVITE")
+        self.assertEqual(spec.scenario, "initial inbound call")
+        self.assertEqual(spec.body_kind, "sdp_offer")
+        self.assertEqual(spec.overrides, {"max_forwards": 68})
+        self.assertTrue(spec.has_overrides)
+        self.assertIsNot(spec.overrides, source_overrides)
+
+    def test_defaults_to_empty_overrides_when_none_is_given(self) -> None:
+        spec = RequestSpec(method="OPTIONS", scenario=" ", body_kind=" ", overrides=None)
+
+        self.assertEqual(spec.method.value, "OPTIONS")
+        self.assertIsNone(spec.scenario)
+        self.assertIsNone(spec.body_kind)
+        self.assertEqual(spec.overrides, {})
+        self.assertFalse(spec.has_overrides)
+
+    def test_rejects_unknown_fields(self) -> None:
+        with self.assertRaises(ValueError):
+            RequestSpec(method="BYE", unexpected=True)
 
 
 if __name__ == "__main__":

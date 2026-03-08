@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from volte_mutation_fuzzer.sip.common import NameAddress, URIReference
+from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, URIReference
 
 
 class GeneratorSettings(BaseModel):
@@ -153,3 +153,35 @@ class DialogContext(BaseModel):
             return value
         stripped = value.strip()
         return stripped or None
+
+
+class RequestSpec(BaseModel):
+    """Describes which SIP request the generator should produce."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    method: SIPMethod
+    scenario: str | None = None
+    body_kind: str | None = None
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def has_overrides(self) -> bool:
+        return bool(self.overrides)
+
+    @field_validator("scenario", "body_kind", mode="before")
+    @classmethod
+    def _normalize_text(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("overrides", mode="before")
+    @classmethod
+    def _coerce_overrides(cls, value: Any) -> Any:
+        if value is None:
+            return {}
+        if isinstance(value, Mapping):
+            return dict(value)
+        return value
