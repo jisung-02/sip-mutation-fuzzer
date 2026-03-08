@@ -9,7 +9,7 @@ from volte_mutation_fuzzer.generator.contracts import (
     ResponseSpec,
 )
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
-from volte_mutation_fuzzer.sip.requests import SIPRequest
+from volte_mutation_fuzzer.sip.requests import REQUEST_MODELS_BY_METHOD, SIPRequest
 from volte_mutation_fuzzer.sip.responses import SIPResponse
 
 
@@ -40,7 +40,28 @@ class SIPGenerator:
         raise NotImplementedError("response generation is not implemented yet")
 
     def _resolve_request_model(self, spec: RequestSpec) -> type[SIPRequest]:
-        raise NotImplementedError
+        try:
+            definition = self.catalog.get_request(spec.method)
+        except StopIteration as exc:
+            raise ValueError(
+                f"request method {spec.method} is not present in the SIP catalog"
+            ) from exc
+
+        try:
+            model = REQUEST_MODELS_BY_METHOD[spec.method]
+        except KeyError as exc:
+            raise ValueError(
+                f"request method {spec.method} does not have a registered SIP model"
+            ) from exc
+
+        if model.__name__ != definition.model_name:
+            raise ValueError(
+                f"request model mismatch for {spec.method}: "
+                f"catalog expects {definition.model_name}, "
+                f"mapping provides {model.__name__}"
+            )
+
+        return model
 
     def _resolve_response_model(self, spec: ResponseSpec) -> type[SIPResponse]:
         raise NotImplementedError
