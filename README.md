@@ -8,6 +8,7 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 ## 문서 구조
 - [docs/README.md](docs/README.md): 전체 문서 인덱스
 - [docs/기획/PRD.md](docs/기획/PRD.md): 프로젝트 목표, 범위, 요구사항, 완료 기준
+- [docs/결과/GENERATOR-구현-결과.md](docs/결과/GENERATOR-구현-결과.md): Generator 구현 및 CLI 적용 결과
 - [docs/프로토콜/단말-기준-SIP-메시지-분류.md](docs/프로토콜/단말-기준-SIP-메시지-분류.md): 단말 기준 SIP 메시지 전체 분류
 - [docs/프로토콜/요청-패킷-예시.md](docs/프로토콜/요청-패킷-예시.md): 요청 패킷 예시 문서
 - [docs/프로토콜/응답-패킷-예시.md](docs/프로토콜/응답-패킷-예시.md): 응답 패킷 예시 문서
@@ -33,6 +34,47 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 8. 화상 회의 시스템 - 여러 사용자가 동시에 영상 통신을 하는 시스템.
 9. Unified Communication - 기업 협업 플랫폼.
 10. IoT / 인터콤 / CCTV
+
+## Generator CLI 빠른 사용
+Generator의 현재 CLI 엔트리포인트는 `project.scripts` 기준으로 **`fuzzer`** 이다.
+
+초기 설정:
+
+```bash
+uv sync --dev
+```
+
+기본 request 생성:
+
+```bash
+uv run fuzzer request OPTIONS
+```
+
+response 생성:
+
+```bash
+uv run fuzzer response 200 INVITE --context '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":7}'
+```
+
+환경 변수 기반 기본값 변경:
+
+```bash
+VMF_GENERATOR_REQUEST_URI_HOST=ims.example.net uv run fuzzer request OPTIONS
+```
+
+override 주입:
+
+```bash
+uv run fuzzer request OPTIONS --override '{"Max-Forwards": 10}'
+```
+
+CLI 상세 옵션:
+
+```bash
+uv run fuzzer --help
+uv run fuzzer request --help
+uv run fuzzer response --help
+```
 
 ## CI / 품질 체크
 이 저장소에는 GitHub Actions 기반 CI가 포함되어 있으며, pull request마다 아래 검사를 수행한다.
