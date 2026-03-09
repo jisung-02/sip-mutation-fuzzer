@@ -27,7 +27,7 @@ dev = [
 ]
 
 [tool.poe.tasks]
-format = "ruff format src tests"
-lint = "ruff check src tests"
-lint-fix = "ruff check src tests --fix"
-ty = "ty check"
+format = "ruff format ."
+lint = "ruff check ."
+lint-fix = "ruff check . --fix"
+type-check = "ty check"

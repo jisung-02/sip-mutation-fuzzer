@@ -23,9 +23,9 @@ class PoeTaskConfigTests(unittest.TestCase):
     def test_poe_tasks_cover_format_lint_lint_fix_and_type_check(self) -> None:
         tasks = self.pyproject["tool"]["poe"]["tasks"]
 
-        self.assertEqual(tasks["format"], "ruff format src tests")
-        self.assertEqual(tasks["lint"], "ruff check src tests")
-        self.assertEqual(tasks["lint-fix"], "ruff check src tests --fix")
+        self.assertEqual(tasks["format"], "ruff format .")
+        self.assertEqual(tasks["lint"], "ruff check .")
+        self.assertEqual(tasks["lint-fix"], "ruff check . --fix")
         self.assertEqual(tasks["type-check"], "ty check")
 
 

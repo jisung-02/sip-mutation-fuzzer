@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from volte_mutation_fuzzer.sip import SIPMethod
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import wire_field_name
 
+ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_DOCS_DIR = ROOT / "docs" / "프로토콜"
 REQUEST_DOC_PATH = PROTOCOL_DOCS_DIR / "요청-패킷-예시.md"
 RESPONSE_DOC_PATH = PROTOCOL_DOCS_DIR / "응답-패킷-예시.md"
@@ -708,7 +703,6 @@ def main() -> None:
         REQUEST_DOC_PATH.relative_to(ROOT),
         RESPONSE_DOC_PATH.relative_to(ROOT),
     )
-
 
 
 if __name__ == "__main__":
