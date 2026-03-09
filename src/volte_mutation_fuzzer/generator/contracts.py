@@ -70,6 +70,7 @@ class GeneratorSettings(BaseModel):
                 continue
             payload[field_name] = cls._parse_env_value(field_name, raw_value)
 
+        # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
         return cls.model_validate(payload)
 
     @classmethod
