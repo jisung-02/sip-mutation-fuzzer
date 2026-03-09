@@ -158,7 +158,9 @@ class SIPGenerator:
             definition.related_methods
             and spec.related_method not in definition.related_methods
         ):
-            allowed_methods = ", ".join(method.value for method in definition.related_methods)
+            allowed_methods = ", ".join(
+                method.value for method in definition.related_methods
+            )
             raise ValueError(
                 f"response status {spec.status_code} does not support related method "
                 f"{spec.related_method}; expected one of: {allowed_methods}"
@@ -226,7 +228,10 @@ class SIPGenerator:
         if spec.method == SIPMethod.SUBSCRIBE:
             defaults["event"] = self._build_event_header()
 
-        if "contact" in model.model_fields and model.model_fields["contact"].is_required():
+        if (
+            "contact" in model.model_fields
+            and model.model_fields["contact"].is_required()
+        ):
             defaults.setdefault("contact", [self._build_contact()])
 
         return defaults
@@ -473,7 +478,9 @@ class SIPGenerator:
         local_origin: bool = False,
     ) -> CSeqHeader:
         if local_origin:
-            sequence = 1 if context is None or context.local_cseq == 0 else context.local_cseq
+            sequence = (
+                1 if context is None or context.local_cseq == 0 else context.local_cseq
+            )
             return CSeqHeader(sequence=sequence, method=method)
 
         sequence = 1 if context is None else context.next_remote_cseq()

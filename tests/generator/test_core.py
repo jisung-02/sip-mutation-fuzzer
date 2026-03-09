@@ -176,7 +176,9 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             RESPONSE_MODELS_BY_CODE[200],
         )
 
-    def test_resolve_response_model_rejects_status_code_missing_from_catalog(self) -> None:
+    def test_resolve_response_model_rejects_status_code_missing_from_catalog(
+        self,
+    ) -> None:
         generator = SIPGenerator(GeneratorSettings())
 
         with self.assertRaisesRegex(ValueError, "response status 201"):
@@ -210,10 +212,14 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                 ResponseSpec(status_code=200, related_method=SIPMethod.INVITE)
             )
 
-    def test_build_request_defaults_produces_valid_initial_options_payload(self) -> None:
+    def test_build_request_defaults_produces_valid_initial_options_payload(
+        self,
+    ) -> None:
         generator = SIPGenerator(GeneratorSettings())
 
-        defaults = generator._build_request_defaults(RequestSpec(method=SIPMethod.OPTIONS))
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
         packet = OptionsRequest.model_validate(defaults)
 
         self.assertEqual(packet.method, SIPMethod.OPTIONS)
@@ -363,7 +369,9 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                 self.assertEqual(packet.cseq.sequence, 3)
                 self.assertEqual(packet.cseq.method, related_method)
 
-    def test_apply_overrides_returns_new_payload_without_mutating_defaults(self) -> None:
+    def test_apply_overrides_returns_new_payload_without_mutating_defaults(
+        self,
+    ) -> None:
         generator = SIPGenerator(GeneratorSettings())
         defaults = {
             "method": SIPMethod.OPTIONS,
@@ -384,7 +392,9 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
     def test_apply_overrides_normalizes_from_alias(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        defaults = generator._build_request_defaults(RequestSpec(method=SIPMethod.OPTIONS))
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
         replacement_from = NameAddress(
             display_name="Override Remote",
             uri=SIPURI(scheme="sip", user="override", host="override.example.net"),
@@ -400,9 +410,13 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.from_.uri.host, "override.example.net")
         self.assertEqual(packet.from_.parameters["tag"], "override-tag")
 
-    def test_apply_overrides_normalizes_wire_header_names_case_insensitively(self) -> None:
+    def test_apply_overrides_normalizes_wire_header_names_case_insensitively(
+        self,
+    ) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        defaults = generator._build_request_defaults(RequestSpec(method=SIPMethod.OPTIONS))
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
         replacement_from = NameAddress(
             display_name="Override Remote",
             uri=SIPURI(scheme="sip", user="override", host="override.example.net"),

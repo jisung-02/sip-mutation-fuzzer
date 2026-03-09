@@ -47,7 +47,9 @@ def _parse_json_object(raw_value: str | None, *, option_name: str) -> dict[str, 
 def _parse_context(raw_value: str | None, *, required: bool) -> DialogContext | None:
     if raw_value is None:
         if required:
-            raise typer.BadParameter("must be provided as a JSON object", param_hint="--context")
+            raise typer.BadParameter(
+                "must be provided as a JSON object", param_hint="--context"
+            )
         return None
 
     payload = _parse_json_object(raw_value, option_name="--context")
