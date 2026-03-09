@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from uuid import uuid4
 from typing import Any
 
@@ -294,13 +295,18 @@ class SIPGenerator:
         defaults: dict[str, Any],
         overrides: dict[str, Any],
     ) -> dict[str, Any]:
-        merged = dict(defaults)
+        merged = deepcopy(defaults)
 
         for field_name, value in overrides.items():
-            normalized_field_name = "from_" if field_name == "from" else field_name
-            merged[normalized_field_name] = value
+            merged[self._normalize_override_field_name(field_name)] = deepcopy(value)
 
         return merged
+
+    def _normalize_override_field_name(self, field_name: str) -> str:
+        normalized_field_name = field_name.replace("-", "_").lower()
+        if normalized_field_name == "from":
+            return "from_"
+        return normalized_field_name
 
     def _validate_preconditions(
         self,

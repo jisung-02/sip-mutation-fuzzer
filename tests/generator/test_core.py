@@ -299,6 +299,32 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.from_.uri.host, "override.example.net")
         self.assertEqual(packet.from_.parameters["tag"], "override-tag")
 
+    def test_apply_overrides_normalizes_wire_header_names_case_insensitively(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        defaults = generator._build_request_defaults(RequestSpec(method=SIPMethod.OPTIONS))
+        replacement_from = NameAddress(
+            display_name="Override Remote",
+            uri=SIPURI(scheme="sip", user="override", host="override.example.net"),
+            parameters={"tag": "override-tag"},
+        )
+
+        merged = generator._apply_overrides(
+            defaults,
+            {
+                "From": replacement_from,
+                "Call-ID": "override-call-id",
+                "Max-Forwards": 9,
+            },
+        )
+        packet = OptionsRequest.model_validate(merged)
+
+        self.assertNotIn("From", merged)
+        self.assertNotIn("Call-ID", merged)
+        self.assertNotIn("Max-Forwards", merged)
+        self.assertEqual(packet.from_.display_name, "Override Remote")
+        self.assertEqual(packet.call_id, "override-call-id")
+        self.assertEqual(packet.max_forwards, 9)
+
     def test_validate_preconditions_allows_empty_precondition_list(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
 
