@@ -8,7 +8,7 @@ from volte_mutation_fuzzer.generator import (
     RequestSpec,
     ResponseSpec,
 )
-from volte_mutation_fuzzer.sip.common import NameAddress, SIPURI
+from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
 
 
 class GeneratorSettingsTests(unittest.TestCase):
@@ -123,14 +123,16 @@ class DialogContextTests(unittest.TestCase):
 class RequestSpecTests(unittest.TestCase):
     def test_normalizes_optional_text_and_copies_overrides(self) -> None:
         source_overrides = {"max_forwards": 68}
-        spec = RequestSpec(
-            method="INVITE",
-            scenario=" initial inbound call ",
-            body_kind=" sdp_offer ",
-            overrides=source_overrides,
+        spec = RequestSpec.model_validate(
+            {
+                "method": "INVITE",
+                "scenario": " initial inbound call ",
+                "body_kind": " sdp_offer ",
+                "overrides": source_overrides,
+            }
         )
 
-        self.assertEqual(spec.method.value, "INVITE")
+        self.assertEqual(spec.method, SIPMethod.INVITE)
         self.assertEqual(spec.scenario, "initial inbound call")
         self.assertEqual(spec.body_kind, "sdp_offer")
         self.assertEqual(spec.overrides, {"max_forwards": 68})
@@ -138,9 +140,16 @@ class RequestSpecTests(unittest.TestCase):
         self.assertIsNot(spec.overrides, source_overrides)
 
     def test_defaults_to_empty_overrides_when_none_is_given(self) -> None:
-        spec = RequestSpec(method="OPTIONS", scenario=" ", body_kind=" ", overrides=None)
+        spec = RequestSpec.model_validate(
+            {
+                "method": "OPTIONS",
+                "scenario": " ",
+                "body_kind": " ",
+                "overrides": None,
+            }
+        )
 
-        self.assertEqual(spec.method.value, "OPTIONS")
+        self.assertEqual(spec.method, SIPMethod.OPTIONS)
         self.assertIsNone(spec.scenario)
         self.assertIsNone(spec.body_kind)
         self.assertEqual(spec.overrides, {})
@@ -148,43 +157,47 @@ class RequestSpecTests(unittest.TestCase):
 
     def test_rejects_unknown_fields(self) -> None:
         with self.assertRaises(ValueError):
-            RequestSpec(method="BYE", unexpected=True)
+            RequestSpec.model_validate({"method": "BYE", "unexpected": True})
 
 
 class ResponseSpecTests(unittest.TestCase):
     def test_normalizes_scenario_and_copies_overrides(self) -> None:
         source_overrides = {"contact": [{"uri": {"scheme": "sip", "host": "ims.example.net"}}]}
-        spec = ResponseSpec(
-            status_code=180,
-            related_method="INVITE",
-            scenario=" outbound call ringing ",
-            overrides=source_overrides,
+        spec = ResponseSpec.model_validate(
+            {
+                "status_code": 180,
+                "related_method": "INVITE",
+                "scenario": " outbound call ringing ",
+                "overrides": source_overrides,
+            }
         )
 
         self.assertEqual(spec.status_code, 180)
-        self.assertEqual(spec.related_method.value, "INVITE")
+        self.assertEqual(spec.related_method, SIPMethod.INVITE)
         self.assertEqual(spec.scenario, "outbound call ringing")
         self.assertEqual(spec.overrides, source_overrides)
         self.assertTrue(spec.has_overrides)
         self.assertIsNot(spec.overrides, source_overrides)
 
     def test_defaults_to_empty_overrides_when_none_is_given(self) -> None:
-        spec = ResponseSpec(
-            status_code=200,
-            related_method="REGISTER",
-            scenario=" ",
-            overrides=None,
+        spec = ResponseSpec.model_validate(
+            {
+                "status_code": 200,
+                "related_method": "REGISTER",
+                "scenario": " ",
+                "overrides": None,
+            }
         )
 
         self.assertEqual(spec.status_code, 200)
-        self.assertEqual(spec.related_method.value, "REGISTER")
+        self.assertEqual(spec.related_method, SIPMethod.REGISTER)
         self.assertIsNone(spec.scenario)
         self.assertEqual(spec.overrides, {})
         self.assertFalse(spec.has_overrides)
 
     def test_rejects_status_code_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
-            ResponseSpec(status_code=99, related_method="INVITE")
+            ResponseSpec.model_validate({"status_code": 99, "related_method": "INVITE"})
 
 
 if __name__ == "__main__":

@@ -18,9 +18,6 @@ from volte_mutation_fuzzer.sip.requests import (
 )
 from volte_mutation_fuzzer.sip.responses import (
     RESPONSE_MODELS_BY_CODE,
-    OkResponse,
-    RingingResponse,
-    TryingResponse,
 )
 
 
@@ -41,6 +38,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
         self.assertIsInstance(packet, OptionsRequest)
         self.assertEqual(packet.method, SIPMethod.OPTIONS)
+        assert isinstance(packet.request_uri, SIPURI)
         self.assertEqual(packet.request_uri.host, "example.com")
         self.assertEqual(packet.cseq.sequence, 1)
         self.assertEqual(packet.cseq.method, SIPMethod.OPTIONS)
@@ -72,7 +70,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             context,
         )
 
-        self.assertIsInstance(packet, OkResponse)
+        self.assertIsInstance(packet, RESPONSE_MODELS_BY_CODE[200])
         self.assertEqual(packet.status_code, 200)
         self.assertEqual(packet.reason_phrase, "OK")
         self.assertEqual(packet.call_id, "call-1")
@@ -163,19 +161,19 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             generator._resolve_response_model(
                 ResponseSpec(status_code=100, related_method=SIPMethod.OPTIONS)
             ),
-            TryingResponse,
+            RESPONSE_MODELS_BY_CODE[100],
         )
         self.assertIs(
             generator._resolve_response_model(
                 ResponseSpec(status_code=180, related_method=SIPMethod.INVITE)
             ),
-            RingingResponse,
+            RESPONSE_MODELS_BY_CODE[180],
         )
         self.assertIs(
             generator._resolve_response_model(
                 ResponseSpec(status_code=200, related_method=SIPMethod.BYE)
             ),
-            OkResponse,
+            RESPONSE_MODELS_BY_CODE[200],
         )
 
     def test_resolve_response_model_rejects_status_code_missing_from_catalog(self) -> None:
@@ -219,6 +217,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         packet = OptionsRequest.model_validate(defaults)
 
         self.assertEqual(packet.method, SIPMethod.OPTIONS)
+        assert isinstance(packet.request_uri, SIPURI)
         self.assertEqual(packet.request_uri.host, "example.com")
         self.assertEqual(packet.cseq.sequence, 1)
         self.assertEqual(packet.cseq.method, SIPMethod.OPTIONS)
@@ -308,7 +307,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
             context,
         )
-        packet = OkResponse.model_validate(defaults)
+        response_model = RESPONSE_MODELS_BY_CODE[200]
+        packet = response_model.model_validate(defaults)
 
         self.assertEqual(packet.status_code, 200)
         self.assertEqual(packet.reason_phrase, "OK")
@@ -321,6 +321,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.cseq.method, SIPMethod.INVITE)
         self.assertEqual(packet.server, "volte-mutation-fuzzer/0.1.0")
         self.assertEqual(packet.record_route, list(context.route_set))
+        assert packet.contact is not None
         self.assertEqual(len(packet.contact), 1)
 
     def test_build_response_defaults_cover_all_response_models(self) -> None:
@@ -395,6 +396,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
         self.assertNotIn("from", merged)
         self.assertEqual(packet.from_.display_name, "Override Remote")
+        assert isinstance(packet.from_.uri, SIPURI)
         self.assertEqual(packet.from_.uri.host, "override.example.net")
         self.assertEqual(packet.from_.parameters["tag"], "override-tag")
 
