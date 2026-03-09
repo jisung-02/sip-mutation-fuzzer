@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import os
+from contextlib import chdir
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from volte_mutation_fuzzer.generator import (
     DialogContext,
@@ -63,6 +68,36 @@ class GeneratorSettingsTests(unittest.TestCase):
     def test_from_env_rejects_blank_required_string(self) -> None:
         with self.assertRaises(ValueError):
             GeneratorSettings.from_env({"VMF_GENERATOR_VIA_HOST": "   "})
+
+    def test_from_env_auto_loads_dotenv_when_no_env_mapping_is_given(self) -> None:
+        with TemporaryDirectory() as temp_dir, chdir(temp_dir):
+            Path(".env").write_text(
+                "VMF_GENERATOR_REQUEST_URI_HOST=ims.example.net\n"
+                "VMF_GENERATOR_TRANSPORT=tcp\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                settings = GeneratorSettings.from_env()
+
+        self.assertEqual(settings.request_uri_host, "ims.example.net")
+        self.assertEqual(settings.transport, "TCP")
+
+    def test_from_env_prefers_process_env_over_dotenv_values(self) -> None:
+        with TemporaryDirectory() as temp_dir, chdir(temp_dir):
+            Path(".env").write_text(
+                "VMF_GENERATOR_REQUEST_URI_HOST=ims.example.net\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {"VMF_GENERATOR_REQUEST_URI_HOST": "override.example.net"},
+                clear=True,
+            ):
+                settings = GeneratorSettings.from_env()
+
+        self.assertEqual(settings.request_uri_host, "override.example.net")
 
 
 class DialogContextTests(unittest.TestCase):

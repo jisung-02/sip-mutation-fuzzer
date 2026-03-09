@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import unittest
 
 from typer.testing import CliRunner
@@ -62,6 +63,19 @@ class SIPGeneratorCLITests(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Invalid value", result.output)
         self.assertIn("--override", result.output)
+
+    def test_request_command_auto_loads_dotenv_file(self) -> None:
+        with self.runner.isolated_filesystem():
+            Path(".env").write_text(
+                "VMF_GENERATOR_REQUEST_URI_HOST=ims.example.net\n",
+                encoding="utf-8",
+            )
+
+            result = self.runner.invoke(app, ["request", "OPTIONS"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["request_uri"]["host"], "ims.example.net")
 
 
 if __name__ == "__main__":

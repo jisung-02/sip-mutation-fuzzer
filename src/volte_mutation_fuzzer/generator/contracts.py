@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -59,7 +60,7 @@ class GeneratorSettings(BaseModel):
     ) -> "GeneratorSettings":
         """Load generator defaults from an env mapping or the process env."""
 
-        source = os.environ if env is None else env
+        source = cls._load_default_env() if env is None else env
         env_prefix = cls.ENV_PREFIX if prefix is None else prefix
         payload: dict[str, Any] = {}
 
@@ -72,6 +73,40 @@ class GeneratorSettings(BaseModel):
 
         # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
         return cls.model_validate(payload)
+
+    @classmethod
+    def _load_default_env(cls) -> Mapping[str, str]:
+        source: dict[str, str] = {}
+        source.update(cls._read_dotenv(Path(".env")))
+        source.update(os.environ)
+        return source
+
+    @classmethod
+    def _read_dotenv(cls, path: Path) -> dict[str, str]:
+        if not path.is_file():
+            return {}
+
+        values: dict[str, str] = {}
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            if "=" not in line:
+                continue
+
+            key, raw_value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+
+            value = raw_value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1]
+            values[key] = value
+
+        return values
 
     @classmethod
     def _parse_env_value(cls, field_name: str, raw_value: str) -> Any:
