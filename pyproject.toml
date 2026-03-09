@@ -21,6 +21,13 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "poethepoet>=0.37.0",
     "ruff>=0.15.5",
     "ty>=0.0.21",
 ]
+
+[tool.poe.tasks]
+format = "ruff format src tests"
+lint = "ruff check src tests"
+lint-fix = "ruff check src tests --fix"
+ty = "ty check"
