@@ -116,7 +116,9 @@ class SIPMutator:
         packet: PacketModel,
         definition: PacketDefinition,
     ) -> tuple[MutationTarget, ...]:
-        available_roots = {descriptor.python_name for descriptor in definition.field_descriptors}
+        available_roots = {
+            descriptor.python_name for descriptor in definition.field_descriptors
+        }
         targets: list[MutationTarget] = []
 
         for path in _SUPPORTED_MODEL_TARGETS:
@@ -153,7 +155,9 @@ class SIPMutator:
         canonical_path = target.path
         before_value = self._get_path_value(packet, canonical_path)
         if before_value is _MISSING or before_value is None:
-            raise ValueError(f"model target is not available on packet: {canonical_path}")
+            raise ValueError(
+                f"model target is not available on packet: {canonical_path}"
+            )
 
         after_value = self._build_model_value(
             target_path=canonical_path,
@@ -164,8 +168,7 @@ class SIPMutator:
         payload = self._build_packet_payload(packet)
         self._set_path_value(payload, canonical_path, after_value)
         mutated_packet = packet.__class__.model_validate(payload)
-        record = MutationRecord(
-            layer="model",
+        record = self._record_mutation(
             target=target,
             operator=operator,
             before=before_value,
@@ -181,13 +184,15 @@ class SIPMutator:
         context: DialogContext | None,
         target: MutationTarget | None = None,
     ) -> MutatedCase:
-        _ = context
+        self._snapshot_context(context)
         available_targets = self._collect_model_targets(packet, definition)
-        rng = random.Random(config.seed)
+        rng = self._rng_from_seed(config.seed)
 
         if target is not None:
             selected_target = self._build_canonical_model_target(target)
-            if not any(candidate.path == selected_target.path for candidate in available_targets):
+            if not any(
+                candidate.path == selected_target.path for candidate in available_targets
+            ):
                 raise ValueError(
                     f"model target is not available for packet: {selected_target.path}"
                 )
@@ -207,7 +212,10 @@ class SIPMutator:
                 final_layer="model",
             )
 
-        candidate_targets = self._targets_for_strategy(available_targets, config.strategy)
+        candidate_targets = self._targets_for_strategy(
+            available_targets,
+            config.strategy,
+        )
         if not candidate_targets:
             raise ValueError("no model mutation targets available for packet")
 
@@ -249,7 +257,9 @@ class SIPMutator:
         self._validate_supported_strategy(config.strategy)
 
         if config.layer in {"wire", "byte"}:
-            raise ValueError("model mutation phase only supports layer='model' or 'auto'")
+            raise ValueError(
+                "model mutation phase only supports layer='model' or 'auto'"
+            )
 
         return self._mutate_model(
             packet=packet,
@@ -258,6 +268,35 @@ class SIPMutator:
             context=context,
             target=target,
         )
+
+    def _rng_from_seed(self, seed: int | None) -> random.Random:
+        return random.Random(seed)
+
+    def _record_mutation(
+        self,
+        *,
+        target: MutationTarget,
+        operator: str,
+        before: Any,
+        after: Any,
+        note: str | None = None,
+    ) -> MutationRecord:
+        return MutationRecord(
+            layer="model",
+            target=target,
+            operator=operator,
+            before=before,
+            after=after,
+            note=note,
+        )
+
+    def _snapshot_context(
+        self,
+        context: DialogContext | None,
+    ) -> dict[str, Any] | None:
+        if context is None:
+            return None
+        return context.model_dump(mode="python")
 
     def _build_canonical_model_target(self, target: MutationTarget) -> MutationTarget:
         canonical_path = self._normalize_target_name(target)

@@ -9,10 +9,14 @@ from volte_mutation_fuzzer.generator import (
     ResponseSpec,
     SIPGenerator,
 )
-from volte_mutation_fuzzer.mutator.contracts import MutationConfig, MutationTarget
+from volte_mutation_fuzzer.mutator.contracts import (
+    MutationConfig,
+    MutationRecord,
+    MutationTarget,
+)
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
-from volte_mutation_fuzzer.sip.common import SIPMethod
+from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.requests import SIPRequestDefinition
 from volte_mutation_fuzzer.sip.responses import SIPResponseDefinition
 
@@ -34,6 +38,17 @@ class SIPMutatorTestCase(unittest.TestCase):
         return self.generator.generate_response(
             ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
             context,
+        )
+
+    def build_context(self) -> DialogContext:
+        return DialogContext(
+            call_id="call-ctx-1",
+            local_tag="local-tag",
+            remote_tag="remote-tag",
+            local_cseq=3,
+            remote_cseq=4,
+            request_uri=SIPURI(scheme="sip", user="ue", host="device.example.net"),
+            is_registered=True,
         )
 
     def path_value(self, packet, path: str):
@@ -83,6 +98,64 @@ class SIPMutatorDefinitionResolutionTests(SIPMutatorTestCase):
 
         self.assertEqual(definition.status_code, 200)
         self.assertEqual(definition.model_name, packet.__class__.__name__)
+
+
+class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
+    def test_rng_from_seed_returns_reproducible_sequence(self) -> None:
+        mutator = SIPMutator()
+
+        first_rng = mutator._rng_from_seed(19)
+        second_rng = mutator._rng_from_seed(19)
+
+        self.assertEqual(
+            [first_rng.randrange(1000) for _ in range(4)],
+            [second_rng.randrange(1000) for _ in range(4)],
+        )
+
+    def test_record_mutation_creates_normalized_model_record(self) -> None:
+        mutator = SIPMutator()
+        target = MutationTarget(layer="model", path="call_id")
+
+        record = mutator._record_mutation(
+            target=target,
+            operator="replace_text",
+            before="call-1",
+            after="call-2",
+            note=" generated in helper ",
+        )
+
+        self.assertIsInstance(record, MutationRecord)
+        self.assertEqual(record.layer, "model")
+        self.assertEqual(record.target.path, "call_id")
+        self.assertEqual(record.operator, "replace_text")
+        self.assertEqual(record.before, "call-1")
+        self.assertEqual(record.after, "call-2")
+        self.assertEqual(record.note, "generated in helper")
+
+    def test_snapshot_context_returns_none_for_missing_context(self) -> None:
+        mutator = SIPMutator()
+
+        self.assertIsNone(mutator._snapshot_context(None))
+
+    def test_snapshot_context_returns_copy_without_mutating_source(self) -> None:
+        mutator = SIPMutator()
+        context = self.build_context()
+
+        snapshot = mutator._snapshot_context(context)
+
+        self.assertIsInstance(snapshot, dict)
+        assert snapshot is not None
+        self.assertEqual(snapshot["call_id"], "call-ctx-1")
+        self.assertEqual(snapshot["local_cseq"], 3)
+        self.assertEqual(snapshot["request_uri"]["host"], "device.example.net")
+
+        snapshot["local_cseq"] = 99
+        snapshot["request_uri"]["host"] = "mutated.example.net"
+
+        self.assertEqual(context.local_cseq, 3)
+        request_uri = context.request_uri
+        assert isinstance(request_uri, SIPURI)
+        self.assertEqual(request_uri.host, "device.example.net")
 
 
 class SIPMutatorModelMutationTests(SIPMutatorTestCase):
@@ -182,6 +255,25 @@ class SIPMutatorModelMutationTests(SIPMutatorTestCase):
             tuple(record.model_dump(mode="python") for record in first_case.records),
             tuple(record.model_dump(mode="python") for record in second_case.records),
         )
+
+    def test_mutate_does_not_mutate_original_context(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        context = self.build_context()
+
+        mutator.mutate(
+            packet,
+            MutationConfig(seed=13, layer="model"),
+            context=context,
+        )
+
+        self.assertEqual(context.call_id, "call-ctx-1")
+        self.assertEqual(context.local_tag, "local-tag")
+        self.assertEqual(context.remote_tag, "remote-tag")
+        self.assertEqual(context.local_cseq, 3)
+        request_uri = context.request_uri
+        assert isinstance(request_uri, SIPURI)
+        self.assertEqual(request_uri.host, "device.example.net")
 
 
 class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
