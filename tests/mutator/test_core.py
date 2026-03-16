@@ -15,6 +15,7 @@ from volte_mutation_fuzzer.mutator.contracts import (
     MutationTarget,
 )
 from volte_mutation_fuzzer.mutator.core import SIPMutator
+from volte_mutation_fuzzer.mutator.editable import EditableSIPMessage
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.requests import SIPRequestDefinition
@@ -276,13 +277,183 @@ class SIPMutatorModelMutationTests(SIPMutatorTestCase):
         self.assertEqual(request_uri.host, "device.example.net")
 
 
-class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
-    def test_mutate_rejects_wire_layer_until_later_phase(self) -> None:
+class SIPMutatorWireMutationTests(SIPMutatorTestCase):
+    def test_to_editable_message_converts_request_packet(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
 
-        with self.assertRaisesRegex(ValueError, "layer='model' or 'auto'"):
-            mutator.mutate(packet, MutationConfig(layer="wire"))
+        editable_message = mutator._to_editable_message(packet)
+
+        self.assertIsInstance(editable_message, EditableSIPMessage)
+        self.assertEqual(
+            editable_message.start_line.text,
+            (
+                f"{packet.method} "
+                f"sip:{packet.request_uri.user}@{packet.request_uri.host} "
+                f"{packet.sip_version}"
+            ),
+        )
+        header_names = [header.name for header in editable_message.headers]
+        self.assertIn("Call-ID", header_names)
+        self.assertIn("CSeq", header_names)
+        self.assertIn("From", header_names)
+        self.assertIn("To", header_names)
+        self.assertIn("Content-Length", header_names)
+        self.assertEqual(editable_message.body, "")
+        self.assertEqual(editable_message.declared_content_length, packet.content_length)
+
+    def test_to_editable_message_converts_response_packet(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+
+        editable_message = mutator._to_editable_message(packet)
+
+        self.assertEqual(
+            editable_message.start_line.text,
+            f"{packet.sip_version} {packet.status_code} {packet.reason_phrase}",
+        )
+        header_names = [header.name for header in editable_message.headers]
+        self.assertIn("Call-ID", header_names)
+        self.assertIn("Contact", header_names)
+        self.assertIn("Server", header_names)
+
+    def test_mutate_wire_returns_wire_case(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=17, layer="wire", strategy="default", max_operations=2),
+        )
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertIsNone(case.mutated_packet)
+        self.assertIsNotNone(case.wire_text)
+        self.assertGreaterEqual(len(case.records), 1)
+        assert case.wire_text is not None
+        self.assertTrue(case.wire_text.startswith("OPTIONS "))
+
+    def test_same_seed_produces_same_wire_mutation(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config = MutationConfig(seed=29, layer="wire", strategy="default")
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_mutate_field_supports_wire_header_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(
+                layer="wire",
+                path="header:Call-ID",
+                operator_hint="remove_header",
+            ),
+            MutationConfig(seed=3, layer="wire"),
+        )
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(case.records[0].target.path, "header:Call-ID")
+        assert case.wire_text is not None
+        self.assertNotIn("\r\nCall-ID:", case.wire_text)
+
+    def test_mutate_field_supports_wire_header_index_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        editable_message = mutator._to_editable_message(packet)
+        original_first_header = editable_message.headers[0]
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(
+                layer="wire",
+                path="header[0]",
+                operator_hint="duplicate_header",
+            ),
+            MutationConfig(seed=7, layer="wire"),
+        )
+
+        self.assertEqual(case.records[0].target.path, "header[0]")
+        assert case.wire_text is not None
+        self.assertEqual(
+            case.wire_text.count(
+                f"\r\n{original_first_header.name}: {original_first_header.value}\r\n"
+            ),
+            1,
+        )
+        self.assertGreaterEqual(
+            case.wire_text.count(
+                f"{original_first_header.name}: {original_first_header.value}"
+            ),
+            2,
+        )
+
+    def test_mutate_field_normalizes_wire_start_line_alias(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(layer="wire", path="start-line"),
+            MutationConfig(seed=5, layer="wire"),
+        )
+
+        self.assertEqual(case.records[0].target.path, "start_line")
+        assert case.wire_text is not None
+        self.assertIn("MUT-", case.wire_text.split("\r\n", 1)[0])
+
+    def test_mutate_field_supports_wire_content_length_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(
+                layer="wire",
+                path="content-length",
+                operator_hint="mismatch_content_length",
+            ),
+            MutationConfig(seed=9, layer="wire"),
+        )
+
+        self.assertEqual(case.records[0].target.path, "content_length")
+        assert case.wire_text is not None
+        self.assertIn("\r\nContent-Length: ", case.wire_text)
+        self.assertNotIn("\r\nContent-Length: 0\r\n", case.wire_text)
+
+    def test_mutate_with_auto_still_returns_model_case(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=31, layer="auto"),
+        )
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertIsNotNone(case.mutated_packet)
+        self.assertIsNone(case.wire_text)
+
+
+class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
+    def test_mutate_rejects_unsupported_wire_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported wire mutation strategy"):
+            mutator.mutate(
+                packet,
+                MutationConfig(layer="wire", strategy="state_breaker"),
+            )
 
     def test_mutate_rejects_unsupported_strategy(self) -> None:
         mutator = SIPMutator()
@@ -323,6 +494,35 @@ class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
                 MutationTarget(layer="model", path="via.host"),
                 MutationConfig(layer="model"),
             )
+
+    def test_mutate_field_rejects_missing_wire_header_name(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "wire target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="wire", path="header:Does-Not-Exist"),
+                MutationConfig(layer="wire"),
+            )
+
+    def test_mutate_field_rejects_out_of_bounds_wire_header_index(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "wire target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="wire", path="header[999]"),
+                MutationConfig(layer="wire"),
+            )
+
+    def test_mutate_rejects_byte_layer_until_later_phase(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "byte mutation is not implemented yet"):
+            mutator.mutate(packet, MutationConfig(layer="byte"))
 
 
 if __name__ == "__main__":
