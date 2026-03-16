@@ -36,6 +36,15 @@ class SIPMutatorTestCase(unittest.TestCase):
             context,
         )
 
+    def path_value(self, packet, path: str):
+        current = packet
+        for segment in path.split("."):
+            if isinstance(current, dict):
+                current = current[segment]
+            else:
+                current = getattr(current, segment)
+        return current
+
 
 class SIPMutatorInitTests(SIPMutatorTestCase):
     def test_init_uses_default_catalog(self) -> None:
@@ -76,21 +85,152 @@ class SIPMutatorDefinitionResolutionTests(SIPMutatorTestCase):
         self.assertEqual(definition.model_name, packet.__class__.__name__)
 
 
-class SIPMutatorPublicAPITests(SIPMutatorTestCase):
-    def test_mutate_raises_explicit_not_implemented_error(self) -> None:
+class SIPMutatorModelMutationTests(SIPMutatorTestCase):
+    def test_mutate_request_returns_model_case(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
 
-        with self.assertRaisesRegex(NotImplementedError, "not implemented yet"):
-            mutator.mutate(packet, MutationConfig())
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=11, layer="auto", max_operations=2),
+        )
 
-    def test_mutate_field_raises_explicit_not_implemented_error(self) -> None:
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(len(case.records), 2)
+        self.assertEqual(len({record.target.path for record in case.records}), 2)
+        self.assertEqual(case.original_packet.call_id, packet.call_id)
+
+        for record in case.records:
+            self.assertEqual(self.path_value(packet, record.target.path), record.before)
+            self.assertEqual(
+                self.path_value(mutated_packet, record.target.path),
+                record.after,
+            )
+            self.assertNotEqual(record.before, record.after)
+
+    def test_mutate_response_supports_state_breaker_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=7, layer="model", strategy="state_breaker"),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+        record = case.records[0]
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(len(case.records), 1)
+        self.assertIn(
+            record.target.path,
+            {
+                "call_id",
+                "cseq.sequence",
+                "from_.parameters.tag",
+                "to.parameters.tag",
+                "request_uri.host",
+            },
+        )
+        self.assertEqual(self.path_value(packet, record.target.path), record.before)
+        self.assertEqual(self.path_value(mutated_packet, record.target.path), record.after)
+
+    def test_mutate_field_normalizes_alias_and_only_changes_requested_field(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
-        target = MutationTarget(layer="model", path="call_id")
 
-        with self.assertRaisesRegex(NotImplementedError, "not implemented yet"):
-            mutator.mutate_field(packet, target, MutationConfig())
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(layer="model", path="Call-ID"),
+            MutationConfig(seed=5, layer="model"),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+        record = case.records[0]
+
+        self.assertEqual(record.target.path, "call_id")
+        self.assertNotEqual(mutated_packet.call_id, packet.call_id)
+        self.assertEqual(mutated_packet.cseq.sequence, packet.cseq.sequence)
+        self.assertEqual(
+            self.path_value(mutated_packet, "request_uri.host"),
+            self.path_value(packet, "request_uri.host"),
+        )
+
+    def test_same_seed_produces_same_model_mutation(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config = MutationConfig(seed=23, layer="model", max_operations=2)
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        first_mutated_packet = first_case.mutated_packet
+        second_mutated_packet = second_case.mutated_packet
+        assert first_mutated_packet is not None
+        assert second_mutated_packet is not None
+
+        self.assertEqual(
+            first_mutated_packet.model_dump(mode="python"),
+            second_mutated_packet.model_dump(mode="python"),
+        )
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+
+class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
+    def test_mutate_rejects_wire_layer_until_later_phase(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "layer='model' or 'auto'"):
+            mutator.mutate(packet, MutationConfig(layer="wire"))
+
+    def test_mutate_rejects_unsupported_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported mutation strategy"):
+            mutator.mutate(packet, MutationConfig(strategy="header_chaos"))
+
+    def test_mutate_field_rejects_reason_phrase_for_request_packets(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "model target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="reason_phrase"),
+                MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_missing_to_tag_on_request_packets(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "model target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="To.tag"),
+                MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_unsupported_target_path(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported model target path"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="via.host"),
+                MutationConfig(layer="model"),
+            )
 
 
 if __name__ == "__main__":
