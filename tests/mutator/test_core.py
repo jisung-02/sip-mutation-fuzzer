@@ -61,6 +61,20 @@ class SIPMutatorTestCase(unittest.TestCase):
                 current = getattr(current, segment)
         return current
 
+    def packet_payload(self, packet):
+        return packet.model_dump(mode="python")
+
+    def assert_record_matches_packet_values(
+        self, original_packet, mutated_packet, record
+    ):
+        self.assertEqual(
+            self.path_value(original_packet, record.target.path), record.before
+        )
+        self.assertEqual(
+            self.path_value(mutated_packet, record.target.path), record.after
+        )
+        self.assertNotEqual(record.before, record.after)
+
 
 class SIPMutatorInitTests(SIPMutatorTestCase):
     def test_init_uses_default_catalog(self) -> None:
@@ -160,34 +174,38 @@ class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
 
 
 class SIPMutatorModelMutationTests(SIPMutatorTestCase):
-    def test_mutate_request_returns_model_case(self) -> None:
+    def test_mutate_request_returns_model_case_for_requested_operations(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
+        original_payload = self.packet_payload(packet)
 
         case = mutator.mutate(
             packet,
-            MutationConfig(seed=11, layer="auto", max_operations=2),
+            MutationConfig(seed=11, layer="model", max_operations=2),
         )
 
         mutated_packet = case.mutated_packet
         assert mutated_packet is not None
 
         self.assertEqual(case.final_layer, "model")
+        self.assertEqual(case.seed, 11)
+        self.assertEqual(case.strategy, "default")
         self.assertEqual(len(case.records), 2)
         self.assertEqual(len({record.target.path for record in case.records}), 2)
-        self.assertEqual(case.original_packet.call_id, packet.call_id)
+        self.assertEqual(self.packet_payload(case.original_packet), original_payload)
+        self.assertEqual(self.packet_payload(packet), original_payload)
 
         for record in case.records:
-            self.assertEqual(self.path_value(packet, record.target.path), record.before)
-            self.assertEqual(
-                self.path_value(mutated_packet, record.target.path),
-                record.after,
-            )
-            self.assertNotEqual(record.before, record.after)
+            self.assert_record_matches_packet_values(packet, mutated_packet, record)
 
-    def test_mutate_response_supports_state_breaker_strategy(self) -> None:
+        self.assertNotEqual(self.packet_payload(mutated_packet), original_payload)
+
+    def test_mutate_response_returns_model_case_for_state_breaker_strategy(
+        self,
+    ) -> None:
         mutator = SIPMutator()
         packet = self.build_response()
+        original_payload = self.packet_payload(packet)
 
         case = mutator.mutate(
             packet,
@@ -199,6 +217,7 @@ class SIPMutatorModelMutationTests(SIPMutatorTestCase):
         record = case.records[0]
 
         self.assertEqual(case.final_layer, "model")
+        self.assertEqual(case.strategy, "state_breaker")
         self.assertEqual(len(case.records), 1)
         self.assertIn(
             record.target.path,
@@ -210,12 +229,16 @@ class SIPMutatorModelMutationTests(SIPMutatorTestCase):
                 "request_uri.host",
             },
         )
-        self.assertEqual(self.path_value(packet, record.target.path), record.before)
-        self.assertEqual(self.path_value(mutated_packet, record.target.path), record.after)
+        self.assert_record_matches_packet_values(packet, mutated_packet, record)
+        self.assertEqual(self.packet_payload(packet), original_payload)
+        self.assertNotEqual(self.packet_payload(mutated_packet), original_payload)
 
-    def test_mutate_field_normalizes_alias_and_only_changes_requested_field(self) -> None:
+    def test_mutate_field_normalizes_alias_and_only_changes_requested_field(
+        self,
+    ) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
+        original_payload = self.packet_payload(packet)
 
         case = mutator.mutate_field(
             packet,
@@ -227,13 +250,40 @@ class SIPMutatorModelMutationTests(SIPMutatorTestCase):
         assert mutated_packet is not None
         record = case.records[0]
 
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(len(case.records), 1)
         self.assertEqual(record.target.path, "call_id")
+        self.assert_record_matches_packet_values(packet, mutated_packet, record)
         self.assertNotEqual(mutated_packet.call_id, packet.call_id)
         self.assertEqual(mutated_packet.cseq.sequence, packet.cseq.sequence)
         self.assertEqual(
             self.path_value(mutated_packet, "request_uri.host"),
             self.path_value(packet, "request_uri.host"),
         )
+        self.assertEqual(self.packet_payload(packet), original_payload)
+
+    def test_mutate_field_supports_response_specific_reason_phrase_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+        original_payload = self.packet_payload(packet)
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(layer="model", path="reason-phrase"),
+            MutationConfig(seed=41, layer="model"),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+        record = case.records[0]
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "reason_phrase")
+        self.assert_record_matches_packet_values(packet, mutated_packet, record)
+        self.assertEqual(mutated_packet.call_id, packet.call_id)
+        self.assertEqual(mutated_packet.cseq.sequence, packet.cseq.sequence)
+        self.assertEqual(self.packet_payload(packet), original_payload)
 
     def test_same_seed_produces_same_model_mutation(self) -> None:
         mutator = SIPMutator()
@@ -300,7 +350,9 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         self.assertIn("To", header_names)
         self.assertIn("Content-Length", header_names)
         self.assertEqual(editable_message.body, "")
-        self.assertEqual(editable_message.declared_content_length, packet.content_length)
+        self.assertEqual(
+            editable_message.declared_content_length, packet.content_length
+        )
 
     def test_to_editable_message_converts_response_packet(self) -> None:
         mutator = SIPMutator()
@@ -445,16 +497,6 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
 
 
 class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
-    def test_mutate_rejects_unsupported_wire_strategy(self) -> None:
-        mutator = SIPMutator()
-        packet = self.build_request()
-
-        with self.assertRaisesRegex(ValueError, "unsupported wire mutation strategy"):
-            mutator.mutate(
-                packet,
-                MutationConfig(layer="wire", strategy="state_breaker"),
-            )
-
     def test_mutate_rejects_unsupported_strategy(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
@@ -462,6 +504,8 @@ class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
         with self.assertRaisesRegex(ValueError, "unsupported mutation strategy"):
             mutator.mutate(packet, MutationConfig(strategy="header_chaos"))
 
+
+class SIPMutatorCatalogFailureTests(SIPMutatorTestCase):
     def test_mutate_field_rejects_reason_phrase_for_request_packets(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
@@ -493,6 +537,31 @@ class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
                 packet,
                 MutationTarget(layer="model", path="via.host"),
                 MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_reason_phrase_alias_before_mutation_for_requests(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "model target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="reason-phrase"),
+                MutationConfig(layer="model"),
+            )
+
+
+class SIPMutatorWireAndByteFailureTests(SIPMutatorTestCase):
+    def test_mutate_rejects_unsupported_wire_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported wire mutation strategy"):
+            mutator.mutate(
+                packet,
+                MutationConfig(layer="wire", strategy="state_breaker"),
             )
 
     def test_mutate_field_rejects_missing_wire_header_name(self) -> None:
