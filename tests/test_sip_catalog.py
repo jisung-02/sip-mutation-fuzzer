@@ -14,7 +14,10 @@ from volte_mutation_fuzzer.sip.common import (
 )
 from volte_mutation_fuzzer.sip.requests import REQUEST_MODELS_BY_METHOD
 from volte_mutation_fuzzer.sip.responses import RESPONSE_MODELS_BY_CODE
-from scripts.generate_packet_docs import render_request_docs, render_response_docs
+from volte_mutation_fuzzer.packet_docs import (
+    render_request_docs,
+    render_response_docs,
+)
 
 
 class SIPCatalogTests(unittest.TestCase):

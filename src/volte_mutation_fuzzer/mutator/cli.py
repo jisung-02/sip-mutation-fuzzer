@@ -41,7 +41,9 @@ def _parse_packet_json(raw_json: str) -> PacketModel:
         ) from exc
 
     if not isinstance(data, dict):
-        raise typer.BadParameter("Invalid value: must be a JSON object", param_hint="stdin")
+        raise typer.BadParameter(
+            "Invalid value: must be a JSON object", param_hint="stdin"
+        )
 
     try:
         if "method" in data:
@@ -57,13 +59,17 @@ def _parse_packet_json(raw_json: str) -> PacketModel:
 def _parse_context(raw_value: str | None, *, required: bool) -> DialogContext | None:
     if raw_value is None:
         if required:
-            raise typer.BadParameter("must be provided as a JSON object", param_hint="--context")
+            raise typer.BadParameter(
+                "must be provided as a JSON object", param_hint="--context"
+            )
         return None
 
     try:
         data = json.loads(raw_value)
     except json.JSONDecodeError as exc:
-        raise typer.BadParameter(f"must be valid JSON: {exc.msg}", param_hint="--context") from exc
+        raise typer.BadParameter(
+            f"must be valid JSON: {exc.msg}", param_hint="--context"
+        ) from exc
 
     if not isinstance(data, dict):
         raise typer.BadParameter("must be a JSON object", param_hint="--context")
@@ -104,10 +110,18 @@ def _render_result(case: MutatedCase) -> str:
 
 @app.command("packet")
 def packet_command(
-    strategy: Annotated[str, typer.Option("--strategy", help="Mutation strategy name.")] = "default",
-    layer: Annotated[str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")] = "auto",
-    seed: Annotated[int | None, typer.Option("--seed", help="Random seed for reproducibility.")] = None,
-    target: Annotated[str | None, typer.Option("--target", help="Explicit mutation target path.")] = None,
+    strategy: Annotated[
+        str, typer.Option("--strategy", help="Mutation strategy name.")
+    ] = "default",
+    layer: Annotated[
+        str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
+    ] = "auto",
+    seed: Annotated[
+        int | None, typer.Option("--seed", help="Random seed for reproducibility.")
+    ] = None,
+    target: Annotated[
+        str | None, typer.Option("--target", help="Explicit mutation target path.")
+    ] = None,
 ) -> None:
     """Mutate a SIP packet from JSON read on stdin."""
     raw = sys.stdin.read()
@@ -122,10 +136,18 @@ def packet_command(
 @app.command("request")
 def request_command(
     method: SIPMethod,
-    strategy: Annotated[str, typer.Option("--strategy", help="Mutation strategy name.")] = "default",
-    layer: Annotated[str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")] = "auto",
-    seed: Annotated[int | None, typer.Option("--seed", help="Random seed for reproducibility.")] = None,
-    target: Annotated[str | None, typer.Option("--target", help="Explicit mutation target path.")] = None,
+    strategy: Annotated[
+        str, typer.Option("--strategy", help="Mutation strategy name.")
+    ] = "default",
+    layer: Annotated[
+        str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
+    ] = "auto",
+    seed: Annotated[
+        int | None, typer.Option("--seed", help="Random seed for reproducibility.")
+    ] = None,
+    target: Annotated[
+        str | None, typer.Option("--target", help="Explicit mutation target path.")
+    ] = None,
 ) -> None:
     """Generate a SIP request baseline and mutate it."""
     generator = SIPGenerator(GeneratorSettings.from_env(prefix=None))
@@ -146,11 +168,21 @@ def request_command(
 def response_command(
     status_code: int,
     related_method: SIPMethod,
-    context: Annotated[str, typer.Option("--context", help="Required DialogContext JSON object.")],
-    strategy: Annotated[str, typer.Option("--strategy", help="Mutation strategy name.")] = "default",
-    layer: Annotated[str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")] = "auto",
-    seed: Annotated[int | None, typer.Option("--seed", help="Random seed for reproducibility.")] = None,
-    target: Annotated[str | None, typer.Option("--target", help="Explicit mutation target path.")] = None,
+    context: Annotated[
+        str, typer.Option("--context", help="Required DialogContext JSON object.")
+    ],
+    strategy: Annotated[
+        str, typer.Option("--strategy", help="Mutation strategy name.")
+    ] = "default",
+    layer: Annotated[
+        str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
+    ] = "auto",
+    seed: Annotated[
+        int | None, typer.Option("--seed", help="Random seed for reproducibility.")
+    ] = None,
+    target: Annotated[
+        str | None, typer.Option("--target", help="Explicit mutation target path.")
+    ] = None,
 ) -> None:
     """Generate a SIP response baseline and mutate it."""
     dialog_context = _parse_context(context, required=True)

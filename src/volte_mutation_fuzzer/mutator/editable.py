@@ -70,9 +70,8 @@ class EditableSIPMessage(BaseModel):
 
     def render(self) -> str:
         rendered_headers = [header.render() for header in self.headers]
-        if (
-            self.declared_content_length is not None
-            and not self.header_values(_CONTENT_LENGTH_HEADER)
+        if self.declared_content_length is not None and not self.header_values(
+            _CONTENT_LENGTH_HEADER
         ):
             rendered_headers.append(
                 f"{_CONTENT_LENGTH_HEADER}: {self.declared_content_length}"

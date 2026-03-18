@@ -262,7 +262,8 @@ class SIPMutator:
         if target is not None:
             selected_target = self._build_canonical_model_target(target)
             if not any(
-                candidate.path == selected_target.path for candidate in available_targets
+                candidate.path == selected_target.path
+                for candidate in available_targets
             ):
                 raise ValueError(
                     f"model target is not available for packet: {selected_target.path}"
@@ -440,15 +441,11 @@ class SIPMutator:
             return
         if layer == "wire":
             if strategy != "default":
-                raise ValueError(
-                    f"unsupported wire mutation strategy: {strategy}"
-                )
+                raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
         if layer == "byte":
             if strategy != "default":
-                raise ValueError(
-                    f"unsupported byte mutation strategy: {strategy}"
-                )
+                raise ValueError(f"unsupported byte mutation strategy: {strategy}")
             return
         raise ValueError(f"unsupported mutation layer: {layer}")
 
@@ -674,7 +671,9 @@ class SIPMutator:
 
         if target is not None:
             selected_target = self._build_canonical_wire_target(target, current_message)
-            operator = self._resolve_wire_operator(selected_target, current_message, rng)
+            operator = self._resolve_wire_operator(
+                selected_target, current_message, rng
+            )
             current_message, record = self._apply_wire_operator(
                 current_message,
                 selected_target,
@@ -687,13 +686,17 @@ class SIPMutator:
             for _ in range(config.max_operations):
                 available_targets = tuple(
                     candidate
-                    for candidate in self._collect_wire_targets(current_message, self._resolve_packet_definition(packet))
+                    for candidate in self._collect_wire_targets(
+                        current_message, self._resolve_packet_definition(packet)
+                    )
                     if candidate.path not in used_paths
                 )
                 if not available_targets:
                     break
 
-                selected_target = available_targets[rng.randrange(len(available_targets))]
+                selected_target = available_targets[
+                    rng.randrange(len(available_targets))
+                ]
                 operator = self._resolve_wire_operator(
                     selected_target,
                     current_message,
@@ -862,7 +865,9 @@ class SIPMutator:
                 if not available_targets:
                     break
 
-                selected_target = available_targets[rng.randrange(len(available_targets))]
+                selected_target = available_targets[
+                    rng.randrange(len(available_targets))
+                ]
                 operator = self._resolve_byte_operator(selected_target, rng)
                 current_bytes, record = self._apply_byte_operator(
                     current_bytes,
@@ -1026,7 +1031,9 @@ class SIPMutator:
             for index, header in enumerate(editable_message.headers)
             if index not in set(indices)
         )
-        mutated_message = editable_message.model_copy(update={"headers": filtered_headers})
+        mutated_message = editable_message.model_copy(
+            update={"headers": filtered_headers}
+        )
         record = self._record_mutation(
             target=target,
             operator="remove_header",
@@ -1045,7 +1052,9 @@ class SIPMutator:
         headers = list(editable_message.headers)
         selected_header = headers[index]
         headers.insert(index + 1, selected_header.model_copy())
-        mutated_message = editable_message.model_copy(update={"headers": tuple(headers)})
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
         record = self._record_mutation(
             target=target,
             operator="duplicate_header",
@@ -1074,12 +1083,20 @@ class SIPMutator:
         ]
         destination_index = destination_choices[rng.randrange(len(destination_choices))]
         headers.insert(destination_index, selected_header)
-        mutated_message = editable_message.model_copy(update={"headers": tuple(headers)})
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
         record = self._record_mutation(
             target=target,
             operator="shuffle_header",
-            before={"index": original_index, "header": self._header_snapshot(selected_header)},
-            after={"index": destination_index, "header": self._header_snapshot(selected_header)},
+            before={
+                "index": original_index,
+                "header": self._header_snapshot(selected_header),
+            },
+            after={
+                "index": destination_index,
+                "header": self._header_snapshot(selected_header),
+            },
         )
         return mutated_message, record
 
