@@ -10,7 +10,9 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 - [docs/기획/PRD.md](docs/기획/PRD.md): 프로젝트 목표, 범위, 요구사항, 완료 기준
 - [docs/기획/GENERATOR_PRD.md](docs/기획/GENERATOR_PRD.md): Generator 상세 설계 문서
 - [docs/기획/MUTATOR_PRD.md](docs/기획/MUTATOR_PRD.md): Mutator 상세 설계 문서 (model/wire/byte 변조 + Typer CLI 설계 포함)
+- [docs/기획/PHASE4_PRD.md](docs/기획/PHASE4_PRD.md): Softphone-first Sender/Reactor 상세 설계 문서
 - [docs/결과/GENERATOR-구현-결과.md](docs/결과/GENERATOR-구현-결과.md): Generator 구현 및 CLI 적용 결과
+- [docs/결과/SIP-공격면-우선순위표.md](docs/결과/SIP-공격면-우선순위표.md): Tier 1~4 공격면 우선순위 문서
 - [docs/프로토콜/단말-기준-SIP-메시지-분류.md](docs/프로토콜/단말-기준-SIP-메시지-분류.md): 단말 기준 SIP 메시지 전체 분류
 - [docs/프로토콜/요청-패킷-예시.md](docs/프로토콜/요청-패킷-예시.md): 요청 패킷 예시 문서
 - [docs/프로토콜/응답-패킷-예시.md](docs/프로토콜/응답-패킷-예시.md): 응답 패킷 예시 문서
@@ -18,7 +20,7 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 
 ## 프로젝트 주요 구성요소
 1. Generator - SIP RFC 문서를 기반으로 하여 정상적인 SIP 메시지를 생성하는 모듈
-2. Mutator - Generator가 생성한 메시지를 변조해 다양한 입력을 생성하는 모듈 (Typer 기반 CLI 제공 목표)
+2. Mutator - Generator가 생성한 메시지를 변조해 다양한 입력을 생성하는 모듈 (Typer 기반 CLI 구현)
 3. Sender/Reactor - 생성된 메시지를 단말로 전송하고 단말의 응답 메시지를 처리하는 모듈
 4. Oracle - 퍼징 과정에서 단말의 크래시 또는 이상 동작을 탐지하고 기록하는 모듈
 5. Controller - ADB를 활용해 단말 동작을 제어하는 모듈
@@ -78,10 +80,10 @@ uv run fuzzer request --help
 uv run fuzzer response --help
 ```
 
-## Mutator CLI 설계 방향
-현재 저장소에서 구현 완료된 CLI는 Generator 쪽이지만, `docs/기획/MUTATOR_PRD.md` 기준으로 Mutator도 Typer 기반 CLI를 제공하는 방향을 목표로 한다.
+## Mutator CLI 빠른 사용
+현재 루트 CLI `fuzzer` 아래에서 Mutator 서브커맨드를 사용할 수 있다.
 
-Mutator CLI는 아래 두 가지 입력 모드를 모두 지원해야 한다.
+Mutator CLI는 아래 두 가지 입력 모드를 지원한다.
 
 1. **Generator CLI 출력 입력 모드**
    - Generator CLI가 출력한 JSON baseline을 stdin 또는 파일로 받아 변조 결과를 출력
@@ -117,7 +119,99 @@ uv run fuzzer mutate response 200 INVITE --context '{"call_id":"call-1","local_t
 - `--byte-range`
 - `--preserve-valid-model`
 
-이 인터페이스는 아직 설계 단계이며, 자세한 책임 분리와 구현 순서는 `docs/기획/MUTATOR_PRD.md`를 기준으로 한다.
+자세한 책임 분리와 내부 구현 원칙은 `docs/기획/MUTATOR_PRD.md`를 기준으로 한다.
+
+## Sender/Reactor CLI 빠른 사용
+Softphone-first Phase 4 1차 구현으로 `fuzzer send ...` 서브커맨드가 추가되었다.
+
+baseline request를 바로 전송:
+
+```bash
+uv run fuzzer send request OPTIONS --target-host 127.0.0.1 --target-port 5060
+```
+
+Generator JSON을 바로 송신:
+
+```bash
+uv run fuzzer request OPTIONS | uv run fuzzer send packet --target-host 127.0.0.1 --target-port 5060
+```
+
+Mutator wire/model 결과를 바로 송신:
+
+```bash
+uv run fuzzer mutate request OPTIONS --layer wire | uv run fuzzer send packet --target-host 127.0.0.1 --target-port 5060
+```
+
+`send packet`은 다음 stdin 입력을 지원한다.
+- Generator packet JSON
+- Mutator result JSON
+- raw SIP wire text
+
+현재 outcome 분류는 다음을 반환한다.
+- `success`
+- `provisional`
+- `error`
+- `timeout`
+- `invalid_response`
+- `send_error`
+
+## real-ue-direct(dumpipe) quick start
+현재 브랜치에는 **실제 UE IMS IP로 직접 송신하는 `real-ue-direct` 경로**가 포함된다.
+이 경로는 capstone의 dumpipe 아이디어를 현재 sender에 맞게 좁혀 넣은 것이다.
+
+제약:
+- 1차 구현은 **UDP only**
+- `--target-host` 또는 `--target-msisdn` 중 하나만 사용
+- 시스템 route는 자동 변경하지 않고, **route readiness check만 수행**
+- `--target-msisdn` 경로는 **등록된 UE contact**가 resolver에서 보일 때만 동작
+
+직접 UE IMS IP를 알고 있을 때:
+
+```bash
+uv run fuzzer send request OPTIONS \
+  --mode real-ue-direct \
+  --target-host 10.20.20.2 \
+  --target-port 5060
+```
+
+MSISDN으로 contact를 풀 때:
+
+```bash
+uv run fuzzer send request OPTIONS \
+  --mode real-ue-direct \
+  --target-msisdn 222222
+```
+
+resolver 기본값은 capstone 실험망을 따른다.
+- `VMF_REAL_UE_SCSCF_CONTAINER` (default: `scscf`)
+- `VMF_REAL_UE_PCSCF_CONTAINER` (default: `pcscf`)
+- `VMF_REAL_UE_PYHSS_URL` (optional)
+- `VMF_REAL_UE_PCSCF_LOG_TAIL` (default: `500`)
+
+CLI 결과의 `observer_events`에는 resolver, route check, direct normalization 정보가 함께 기록된다.
+
+## Softphone 실행 quick start
+현재 브랜치에는 **Baresip 실행용 poe task** 가 포함된다.
+이번 task는 softphone **설치나 SIP 계정 provisioning을 자동화하지 않고**, 이미 준비된 로컬 Baresip 실행만 담당한다.
+
+필수 환경 변수:
+- `VMF_SOFTPHONE_CONFIG_DIR`: 기존 Baresip 설정 디렉터리 경로
+
+선택 환경 변수:
+- `VMF_SOFTPHONE_BIN`: `baresip` 바이너리 경로 (미지정 시 PATH에서 검색)
+- `VMF_SOFTPHONE_ARGS`: Baresip에 그대로 넘길 추가 인자
+
+예시:
+
+```bash
+VMF_SOFTPHONE_CONFIG_DIR=$HOME/.baresip poe softphone-run
+```
+
+별도 터미널에서 sender와 함께 사용할 수 있다.
+
+```bash
+uv run fuzzer send request OPTIONS --target-host 127.0.0.1 --target-port 5060
+```
 
 ## CI / 품질 체크
 이 저장소에는 GitHub Actions 기반 CI가 포함되어 있으며, pull request마다 아래 검사를 수행한다.

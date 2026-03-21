@@ -156,6 +156,18 @@ class SubscriptionStateHeader(BaseModel):
     retry_after: int | None = Field(default=None, ge=0)
     parameters: dict[str, str | None] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_expires_requirements(self) -> "SubscriptionStateHeader":
+        if self.state in {"active", "pending"} and self.expires is None:
+            raise ValueError(
+                "Subscription-State for active/pending notifications must include expires"
+            )
+        if self.state == "terminated" and self.expires is not None:
+            raise ValueError(
+                "Subscription-State for terminated notifications must not include expires"
+            )
+        return self
+
 
 class RAckHeader(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -247,6 +259,7 @@ WIRE_NAME_OVERRIDES = {
     "min_expires": "Min-Expires",
     "min_se": "Min-SE",
     "permission_missing": "Permission-Missing",
+    "path": "Path",
     "p_asserted_identity": "P-Asserted-Identity",
     "proxy_authenticate": "Proxy-Authenticate",
     "proxy_require": "Proxy-Require",

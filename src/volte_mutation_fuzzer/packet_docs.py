@@ -161,7 +161,7 @@ RESPONSE_EXTRA_FIELDS: dict[int, list[str]] = {
     301: ["contact"],
     302: ["contact"],
     305: ["contact"],
-    380: ["contact"],
+    380: ["content_type", "body"],
     401: ["www_authenticate"],
     405: ["allow"],
     407: ["proxy_authenticate"],
@@ -238,6 +238,10 @@ RESPONSE_BODY: dict[int, tuple[str, str]] = {
         "c=IN IP4 198.51.100.20\r\n"
         "t=0 0\r\n"
         "m=audio 50002 RTP/AVP 0\r\n",
+    ),
+    380: (
+        "text/plain",
+        "Alternative service available via sip:service@example.com\r\n",
     ),
 }
 

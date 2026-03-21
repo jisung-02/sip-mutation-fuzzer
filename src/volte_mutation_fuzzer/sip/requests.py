@@ -91,6 +91,14 @@ class CancelRequest(SIPRequest):
     method: Literal[SIPMethod.CANCEL] = SIPMethod.CANCEL
     reason: str | None = None
 
+    @model_validator(mode="after")
+    def validate_cancel_extension_rules(self) -> "CancelRequest":
+        if self.require is not None:
+            raise ValueError("CANCEL must not include Require")
+        if self.proxy_require is not None:
+            raise ValueError("CANCEL must not include Proxy-Require")
+        return self
+
 
 class InfoRequest(SIPRequest):
     method: Literal[SIPMethod.INFO] = SIPMethod.INFO
@@ -133,6 +141,12 @@ class PublishRequest(SIPRequest):
     method: Literal[SIPMethod.PUBLISH] = SIPMethod.PUBLISH
     event: EventHeader
     sip_if_match: str | None = None
+
+    @model_validator(mode="after")
+    def validate_publish_initial_request_rules(self) -> "PublishRequest":
+        if self.sip_if_match is None and self.body is None:
+            raise ValueError("initial PUBLISH requests must contain a body")
+        return self
 
 
 class ReferRequest(SIPRequest):
@@ -229,12 +243,18 @@ _REQUEST_METADATA: dict[SIPMethod, RequestMetadata] = {
         "reception_profile": RequestReceptionProfile.CORE,
         "conditional_required_fields": (
             ConditionalFieldRule(
+                field_name="route",
+                condition="If the original request established a route set, CANCEL follows the same route set.",
+                reference_rfcs=("RFC3261",),
+            ),
+            ConditionalFieldRule(
                 field_name="reason",
                 condition="Include when cancellation cause should be conveyed explicitly.",
                 reference_rfcs=("RFC3326",),
                 note="Reason is not mandatory in base RFC3261 but is common in modern deployments.",
             ),
         ),
+        "forbidden_fields": ("require", "proxy_require"),
     },
     SIPMethod.INFO: {
         "description": "Carries mid-dialog application information using the INFO framework.",
@@ -294,8 +314,18 @@ _REQUEST_METADATA: dict[SIPMethod, RequestMetadata] = {
         "reception_profile": RequestReceptionProfile.CONDITIONAL,
         "conditional_required_fields": (
             ConditionalFieldRule(
+                field_name="event",
+                condition="The NOTIFY Event package must match the subscription or implicit REFER subscription it is reporting on.",
+                reference_rfcs=("RFC6665",),
+            ),
+            ConditionalFieldRule(
+                field_name="subscription_state",
+                condition="Subscription-State drives whether expires is required (active/pending) or forbidden (terminated).",
+                reference_rfcs=("RFC6665",),
+            ),
+            ConditionalFieldRule(
                 field_name="body",
-                condition="Most event packages send a body, but empty NOTIFY is possible for some terminal states.",
+                condition="If a body is present, its format must be acceptable to the subscriber; many event packages send a body, but empty NOTIFY is possible for some terminal states.",
                 reference_rfcs=("RFC6665",),
             ),
         ),
@@ -335,7 +365,12 @@ _REQUEST_METADATA: dict[SIPMethod, RequestMetadata] = {
             ),
             ConditionalFieldRule(
                 field_name="body",
-                condition="Required when publishing state document content.",
+                condition="Initial PUBLISH requests MUST carry the publication state in the message body.",
+                reference_rfcs=("RFC3903",),
+            ),
+            ConditionalFieldRule(
+                field_name="sip_if_match",
+                condition="Used for refresh/modify/remove of an existing publication and MUST NOT appear on an initial PUBLISH.",
                 reference_rfcs=("RFC3903",),
             ),
         ),
@@ -372,6 +407,13 @@ _REQUEST_METADATA: dict[SIPMethod, RequestMetadata] = {
         "preconditions": ("UE supports the targeted event package.",),
         "reference_rfcs": ("RFC6665",),
         "reception_profile": RequestReceptionProfile.CONDITIONAL,
+        "conditional_required_fields": (
+            ConditionalFieldRule(
+                field_name="expires",
+                condition="SUBSCRIBE requests SHOULD include Expires; Expires: 0 is used to fetch or terminate a subscription depending on context.",
+                reference_rfcs=("RFC6665",),
+            ),
+        ),
     },
     SIPMethod.UPDATE: {
         "description": "Updates session parameters without creating a new dialog.",

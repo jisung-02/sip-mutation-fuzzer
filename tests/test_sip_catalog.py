@@ -10,6 +10,7 @@ from volte_mutation_fuzzer.sip.common import (
     CSeqHeader,
     NameAddress,
     SIPURI,
+    SubscriptionStateHeader,
     ViaHeader,
 )
 from volte_mutation_fuzzer.sip.requests import REQUEST_MODELS_BY_METHOD
@@ -137,6 +138,71 @@ class SIPCatalogTests(unittest.TestCase):
                 }
             )
 
+    def test_publish_initial_request_requires_body(self) -> None:
+        publish_model = REQUEST_MODELS_BY_METHOD[SIPMethod.PUBLISH]
+        with self.assertRaises(Exception):
+            publish_model.model_validate(
+                {
+                    "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-pub")],
+                    "max_forwards": 70,
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="sender", host="example.com"),
+                        parameters={"tag": "a"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                    ),
+                    "call_id": "call-publish",
+                    "cseq": CSeqHeader(sequence=2, method=SIPMethod.PUBLISH),
+                    "event": {"package": "presence"},
+                }
+            )
+
+    def test_2xx_to_message_forbids_contact_and_body(self) -> None:
+        ok_model = RESPONSE_MODELS_BY_CODE[200]
+
+        with self.assertRaises(Exception):
+            ok_model.model_validate(
+                {
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-msg1")],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        parameters={"tag": "ue"},
+                    ),
+                    "call_id": "call-msg-200",
+                    "cseq": CSeqHeader(sequence=5, method=SIPMethod.MESSAGE),
+                    "contact": [
+                        NameAddress(
+                            uri=SIPURI(scheme="sip", user="remote", host="example.com")
+                        )
+                    ],
+                }
+            )
+
+        with self.assertRaises(Exception):
+            ok_model.model_validate(
+                {
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-msg2")],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        parameters={"tag": "ue"},
+                    ),
+                    "call_id": "call-msg-200",
+                    "cseq": CSeqHeader(sequence=5, method=SIPMethod.MESSAGE),
+                    "content_type": "text/plain",
+                    "body": "delivered",
+                }
+            )
+
     def test_401_requires_www_authenticate(self) -> None:
         unauthorized_model = RESPONSE_MODELS_BY_CODE[401]
         with self.assertRaises(Exception):
@@ -213,6 +279,134 @@ class SIPCatalogTests(unittest.TestCase):
                     "cseq": CSeqHeader(sequence=4, method=SIPMethod.INVITE),
                 }
             )
+
+    def test_425_requires_alert_msg_error(self) -> None:
+        bad_alert_model = RESPONSE_MODELS_BY_CODE[425]
+        with self.assertRaises(Exception):
+            bad_alert_model.model_validate(
+                {
+                    "via": [
+                        ViaHeader(host="proxy.example.com", branch="z9hG4bK-alert")
+                    ],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        parameters={"tag": "ue"},
+                    ),
+                    "call_id": "call-alert",
+                    "cseq": CSeqHeader(sequence=4, method=SIPMethod.INVITE),
+                }
+            )
+
+    def test_non_100_responses_require_to_tag(self) -> None:
+        ok_model = RESPONSE_MODELS_BY_CODE[200]
+        with self.assertRaises(Exception):
+            ok_model.model_validate(
+                {
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-tag")],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                    ),
+                    "call_id": "call-tag",
+                    "cseq": CSeqHeader(sequence=5, method=SIPMethod.OPTIONS),
+                }
+            )
+
+    def test_2xx_to_subscribe_requires_expires(self) -> None:
+        ok_model = RESPONSE_MODELS_BY_CODE[200]
+        with self.assertRaises(Exception):
+            ok_model.model_validate(
+                {
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-sub")],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        parameters={"tag": "ue"},
+                    ),
+                    "call_id": "call-sub-200",
+                    "cseq": CSeqHeader(sequence=5, method=SIPMethod.SUBSCRIBE),
+                }
+            )
+
+    def test_2xx_to_register_requires_contact(self) -> None:
+        ok_model = RESPONSE_MODELS_BY_CODE[200]
+        with self.assertRaises(Exception):
+            ok_model.model_validate(
+                {
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-reg")],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="registrar", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        parameters={"tag": "ue"},
+                    ),
+                    "call_id": "call-reg-200",
+                    "cseq": CSeqHeader(sequence=5, method=SIPMethod.REGISTER),
+                    "expires": 3600,
+                }
+            )
+
+    def test_non_100_invite_responses_require_contact(self) -> None:
+        ringing_model = RESPONSE_MODELS_BY_CODE[180]
+        with self.assertRaises(Exception):
+            ringing_model.model_validate(
+                {
+                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-180")],
+                    "from_": NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        parameters={"tag": "remote"},
+                    ),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        parameters={"tag": "ue"},
+                    ),
+                    "call_id": "call-180",
+                    "cseq": CSeqHeader(sequence=5, method=SIPMethod.INVITE),
+                }
+            )
+
+    def test_199_invite_response_allows_no_contact_when_reason_present(self) -> None:
+        terminated_model = RESPONSE_MODELS_BY_CODE[199]
+        packet = terminated_model.model_validate(
+            {
+                "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-199")],
+                "from_": NameAddress(
+                    uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                    parameters={"tag": "remote"},
+                ),
+                "to": NameAddress(
+                    uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                    parameters={"tag": "ue"},
+                ),
+                "call_id": "call-199",
+                "cseq": CSeqHeader(sequence=5, method=SIPMethod.INVITE),
+                "reason": 'SIP;cause=487;text="Request Terminated"',
+            }
+        )
+        self.assertEqual(packet.status_code, 199)
+        self.assertIsNone(packet.contact)
+
+    def test_subscription_state_requires_expires_for_active_and_pending(self) -> None:
+        with self.assertRaises(Exception):
+            SubscriptionStateHeader(state="active")
+
+        with self.assertRaises(Exception):
+            SubscriptionStateHeader(state="pending")
+
+        with self.assertRaises(Exception):
+            SubscriptionStateHeader(state="terminated", expires=10)
 
     def test_reason_phrase_is_overridable(self) -> None:
         ok_model = RESPONSE_MODELS_BY_CODE[200]

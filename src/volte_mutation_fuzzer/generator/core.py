@@ -218,6 +218,11 @@ class SIPGenerator:
 
         if spec.method == SIPMethod.PUBLISH:
             defaults["event"] = self._build_event_header()
+            defaults["content_type"] = "application/pidf+xml"
+            defaults["body"] = (
+                '<?xml version="1.0"?>\r\n'
+                '<presence entity="sip:publisher@example.com"/>\r\n'
+            )
 
         if spec.method == SIPMethod.REFER:
             defaults["refer_to"] = NameAddress(
@@ -266,8 +271,26 @@ class SIPGenerator:
 
         if (
             definition.status_class == StatusClass.SUCCESS
-            and spec.related_method == SIPMethod.INVITE
-        ) or definition.status_class == StatusClass.REDIRECTION:
+            and spec.related_method == SIPMethod.SUBSCRIBE
+        ):
+            defaults["expires"] = 3600
+
+        if (
+            (
+                definition.status_class == StatusClass.INFORMATIONAL
+                and spec.related_method == SIPMethod.INVITE
+                and spec.status_code not in {100, 199}
+            )
+            or (
+                definition.status_class == StatusClass.SUCCESS
+                and spec.related_method == SIPMethod.INVITE
+            )
+            or (
+                definition.status_class == StatusClass.SUCCESS
+                and spec.related_method == SIPMethod.REGISTER
+            )
+            or definition.status_class == StatusClass.REDIRECTION
+        ):
             defaults["contact"] = [self._build_contact()]
 
         if spec.status_code == 489:

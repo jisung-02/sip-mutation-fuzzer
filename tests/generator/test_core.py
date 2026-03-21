@@ -276,6 +276,53 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                 self.assertEqual(packet.method, method)
                 self.assertEqual(packet.cseq.method, method)
 
+    def test_build_request_defaults_populates_initial_publish_body(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.PUBLISH)
+        )
+        packet = REQUEST_MODELS_BY_METHOD[SIPMethod.PUBLISH].model_validate(defaults)
+
+        self.assertEqual(packet.method, SIPMethod.PUBLISH)
+        self.assertEqual(packet.content_type, "application/pidf+xml")
+        self.assertIsNotNone(packet.body)
+
+    def test_build_response_defaults_populates_subscribe_and_register_success_fields(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id="call-1",
+            local_tag="ue-tag",
+            local_cseq=7,
+        )
+
+        subscribe_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.SUBSCRIBE),
+            context,
+        )
+        subscribe_packet = RESPONSE_MODELS_BY_CODE[200].model_validate(
+            subscribe_defaults
+        )
+        self.assertEqual(subscribe_packet.expires, 3600)
+
+        register_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.REGISTER),
+            context,
+        )
+        register_packet = RESPONSE_MODELS_BY_CODE[200].model_validate(register_defaults)
+        assert register_packet.contact is not None
+        self.assertEqual(len(register_packet.contact), 1)
+
+        ringing_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=180, related_method=SIPMethod.INVITE),
+            context,
+        )
+        ringing_packet = RESPONSE_MODELS_BY_CODE[180].model_validate(ringing_defaults)
+        assert ringing_packet.contact is not None
+        self.assertEqual(len(ringing_packet.contact), 1)
+
     def test_build_cseq_can_reuse_local_dialog_sequence_without_mutating_context(
         self,
     ) -> None:

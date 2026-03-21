@@ -37,6 +37,7 @@ class SIPResponse(SIPPacketBase):
     call_id: str = Field(min_length=1)
     cseq: CSeqHeader
     contact: list[NameAddress] | None = None
+    path: tuple[NameAddress | URIReference, ...] | None = None
     record_route: list[NameAddress | URIReference] | None = None
     allow: tuple[SIPMethod, ...] | None = None
     allow_events: tuple[str, ...] | None = None
@@ -82,6 +83,26 @@ class SIPResponse(SIPPacketBase):
             raise ValueError("content_type is required when body is present")
         if self.content_length == 0 and self.body:
             object.__setattr__(self, "content_length", len(self.body.encode("utf-8")))
+        if self.status_code != 100 and "tag" not in self.to.parameters:
+            raise ValueError("responses other than 100 Trying must include a To tag")
+        if self.cseq.method == SIPMethod.INVITE and (
+            101 <= self.status_code < 199 or 200 <= self.status_code < 300
+        ):
+            if self.contact is None:
+                raise ValueError(
+                    "dialog-establishing INVITE responses must include contact"
+                )
+        if 200 <= self.status_code < 300 and self.cseq.method == SIPMethod.SUBSCRIBE:
+            if self.expires is None:
+                raise ValueError("2xx to SUBSCRIBE must include expires")
+        if 200 <= self.status_code < 300 and self.cseq.method == SIPMethod.REGISTER:
+            if self.contact is None:
+                raise ValueError("2xx to REGISTER must include contact")
+        if 200 <= self.status_code < 300 and self.cseq.method == SIPMethod.MESSAGE:
+            if self.contact is not None:
+                raise ValueError("2xx to MESSAGE must not include contact")
+            if self.body is not None:
+                raise ValueError("2xx to MESSAGE must not include body")
         return self
 
     @computed_field
@@ -113,18 +134,20 @@ class ResponseModelSpec(BaseModel):
 ALL_METHODS: tuple[SIPMethod, ...] = tuple(SIPMethod)
 INVITE_ONLY = (SIPMethod.INVITE,)
 INVITE_UPDATE = (SIPMethod.INVITE, SIPMethod.UPDATE)
-EVENT_METHODS = (SIPMethod.SUBSCRIBE, SIPMethod.NOTIFY)
+EVENT_METHODS = (SIPMethod.SUBSCRIBE, SIPMethod.NOTIFY, SIPMethod.PUBLISH)
 REGISTER_PUBLISH = (SIPMethod.REGISTER, SIPMethod.PUBLISH)
+REGISTER_PUBLISH_SUBSCRIBE = (
+    SIPMethod.REGISTER,
+    SIPMethod.PUBLISH,
+    SIPMethod.SUBSCRIBE,
+)
 REGISTER_ONLY = (SIPMethod.REGISTER,)
 REFER_ONLY = (SIPMethod.REFER,)
 INFO_ONLY = (SIPMethod.INFO,)
 MESSAGE_SUBSCRIBE_REFER = (SIPMethod.MESSAGE, SIPMethod.SUBSCRIBE, SIPMethod.REFER)
 GENERAL_REDIRECT = (SIPMethod.INVITE, SIPMethod.OPTIONS, SIPMethod.REGISTER)
-AUTH_RELEVANT = (
-    SIPMethod.REGISTER,
-    SIPMethod.INVITE,
-    SIPMethod.MESSAGE,
-    SIPMethod.SUBSCRIBE,
+AUTH_RELEVANT = tuple(
+    method for method in SIPMethod if method not in {SIPMethod.ACK, SIPMethod.CANCEL}
 )
 UNWANTED_OUT_OF_DIALOG = (SIPMethod.INVITE, SIPMethod.MESSAGE, SIPMethod.SUBSCRIBE)
 
@@ -135,15 +158,99 @@ RELIABLE_PROVISIONAL_RULE = ConditionalFieldRule(
     note="RSeq is not mandatory for ordinary provisional responses, only for reliable ones.",
 )
 
+NON_100_TO_TAG_RULE = ConditionalFieldRule(
+    field_name="to",
+    condition="Except for 100 Trying, if the request lacked a To tag the response MUST add one.",
+    reference_rfcs=("RFC3261",),
+)
+
+EARLY_DIALOG_CONTACT_RULE = ConditionalFieldRule(
+    field_name="contact",
+    condition="For non-100 provisional responses to INVITE that establish an early dialog, Contact is mandatory so the remote target is known.",
+    reference_rfcs=("RFC3261",),
+)
+
+EARLY_DIALOG_RECORD_ROUTE_RULE = ConditionalFieldRule(
+    field_name="record_route",
+    condition="If the INVITE request contained Record-Route, copy it into the dialog-establishing provisional response.",
+    reference_rfcs=("RFC3261",),
+)
+
+DIALOG_ESTABLISHING_RECORD_ROUTE_RULE = ConditionalFieldRule(
+    field_name="record_route",
+    condition="If the INVITE request contained Record-Route, copy it into the dialog-establishing 2xx response.",
+    reference_rfcs=("RFC3261",),
+)
+
+EARLY_DIALOG_TERMINATED_REASON_RULE = ConditionalFieldRule(
+    field_name="reason",
+    condition="A 199 Early Dialog Terminated response MUST include a Reason header indicating which final outcome terminated the dialog.",
+    reference_rfcs=("RFC6228",),
+)
+
+EARLY_DIALOG_TERMINATED_SUPPORT_RULE = ConditionalFieldRule(
+    field_name="supported",
+    condition="199 is only meaningful when the UAC indicated support for the '199' option-tag.",
+    reference_rfcs=("RFC6228",),
+)
+
 OK_CONTACT_RULE = ConditionalFieldRule(
     field_name="contact",
-    condition="Required for 2xx to INVITE and other dialog-establishing usages where a remote target must be learned.",
+    condition="2xx responses to INVITE require Contact so the remote target for the established dialog is known.",
     reference_rfcs=("RFC3261",),
+)
+
+SUBSCRIBE_SUCCESS_EXPIRES_RULE = ConditionalFieldRule(
+    field_name="expires",
+    condition="A 200-class response to SUBSCRIBE MUST include Expires to indicate the actual subscription duration granted by the notifier.",
+    reference_rfcs=("RFC6665",),
+)
+
+MESSAGE_SUCCESS_NO_CONTACT_RULE = ConditionalFieldRule(
+    field_name="contact",
+    condition="A 2xx response to MESSAGE MUST NOT include Contact because MESSAGE does not establish a dialog.",
+    reference_rfcs=("RFC3428",),
+)
+
+MESSAGE_SUCCESS_NO_BODY_RULE = ConditionalFieldRule(
+    field_name="body",
+    condition="A 2xx response to MESSAGE MUST NOT include a message body.",
+    reference_rfcs=("RFC3428",),
+)
+
+INFO_FRAMEWORK_RESPONSE_RECV_INFO_RULE = ConditionalFieldRule(
+    field_name="recv_info",
+    condition="When the associated request used the INFO package framework and carried Recv-Info, reliable 18x/2xx responses include Recv-Info as well, even if empty.",
+    reference_rfcs=("RFC6086",),
+)
+
+REGISTER_SUCCESS_CONTACT_RULE = ConditionalFieldRule(
+    field_name="contact",
+    condition="Successful REGISTER responses MUST return the current contact bindings known to the registrar.",
+    reference_rfcs=("RFC3261",),
+)
+
+REGISTER_SUCCESS_PATH_RULE = ConditionalFieldRule(
+    field_name="path",
+    condition="When the Path extension is in use, a successful REGISTER response copies the Path header field values from the request.",
+    reference_rfcs=("RFC3327",),
+)
+
+REGISTER_SUCCESS_SERVICE_ROUTE_RULE = ConditionalFieldRule(
+    field_name="service_route",
+    condition="A successful REGISTER response may include Service-Route values that the UA must use for future requests in the registered context.",
+    reference_rfcs=("RFC3608",),
 )
 
 REDIRECT_CONTACT_RULE = ConditionalFieldRule(
     field_name="contact",
     condition="Typically carries one or more alternative targets for the redirection decision.",
+    reference_rfcs=("RFC3261",),
+)
+
+ALTERNATIVE_SERVICE_BODY_RULE = ConditionalFieldRule(
+    field_name="body",
+    condition="Alternative services are described in the message body rather than by redirect Contact targets.",
     reference_rfcs=("RFC3261",),
 )
 
@@ -161,7 +268,7 @@ SERVICE_UNAVAILABLE_RETRY_RULE = ConditionalFieldRule(
 
 NO_NOTIFICATION_EXPIRES_RULE = ConditionalFieldRule(
     field_name="expires",
-    condition="Include when 204 No Notification acknowledges an in-dialog SUBSCRIBE refresh and conveys the new expiration interval.",
+    condition="204 No Notification responses to SUBSCRIBE MUST include Expires to communicate the granted subscription duration.",
     reference_rfcs=("RFC5839", "RFC6665"),
 )
 
@@ -178,6 +285,12 @@ SECURITY_AGREEMENT_REQUIRE_RULE = ConditionalFieldRule(
     note="The Require header should contain the 'sec-agree' option tag when applicable.",
 )
 
+SECURITY_AGREEMENT_CHALLENGE_RULE = ConditionalFieldRule(
+    field_name="proxy_authenticate",
+    condition="When the chosen security mechanism needs challenge material such as HTTP Digest, include the corresponding authentication challenge headers as well.",
+    reference_rfcs=("RFC3329",),
+)
+
 REJECTED_CALL_INFO_RULE = ConditionalFieldRule(
     field_name="call_info",
     condition="Include a Call-Info URI when policy wants to provide a human- or machine-readable explanation for 608 Rejected.",
@@ -187,6 +300,7 @@ REJECTED_CALL_INFO_RULE = ConditionalFieldRule(
 _RESPONSE_REQUIRED_FIELD_OVERRIDES: dict[str, tuple[object, object]] = {
     "alert_msg_error": (str, Field(..., min_length=1)),
     "allow": (tuple[SIPMethod, ...], Field(..., min_length=1)),
+    "contact": (tuple[NameAddress, ...], Field(..., min_length=1)),
     "geolocation_error": (str, Field(..., min_length=1)),
     "min_expires": (int, Field(..., ge=0)),
     "min_se": (int, Field(..., ge=0)),
@@ -217,7 +331,12 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="UE receives 180 after sending INVITE for an outbound call.",
         reference_rfcs=("RFC3261",),
         related_methods=INVITE_ONLY,
-        conditional_required_fields=(RELIABLE_PROVISIONAL_RULE,),
+        conditional_required_fields=(
+            RELIABLE_PROVISIONAL_RULE,
+            EARLY_DIALOG_CONTACT_RULE,
+            EARLY_DIALOG_RECORD_ROUTE_RULE,
+            INFO_FRAMEWORK_RESPONSE_RECV_INFO_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=181,
@@ -227,7 +346,12 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="Outbound INVITE is being redirected during early dialog handling.",
         reference_rfcs=("RFC3261",),
         related_methods=INVITE_ONLY,
-        conditional_required_fields=(RELIABLE_PROVISIONAL_RULE,),
+        conditional_required_fields=(
+            RELIABLE_PROVISIONAL_RULE,
+            EARLY_DIALOG_CONTACT_RULE,
+            EARLY_DIALOG_RECORD_ROUTE_RULE,
+            INFO_FRAMEWORK_RESPONSE_RECV_INFO_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=182,
@@ -237,7 +361,12 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="Outbound INVITE waits in a queue at the far end.",
         reference_rfcs=("RFC3261",),
         related_methods=INVITE_ONLY,
-        conditional_required_fields=(RELIABLE_PROVISIONAL_RULE,),
+        conditional_required_fields=(
+            RELIABLE_PROVISIONAL_RULE,
+            EARLY_DIALOG_CONTACT_RULE,
+            EARLY_DIALOG_RECORD_ROUTE_RULE,
+            INFO_FRAMEWORK_RESPONSE_RECV_INFO_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=183,
@@ -247,7 +376,12 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="Outbound INVITE receives early media/session setup details before final answer.",
         reference_rfcs=("RFC3261",),
         related_methods=INVITE_ONLY,
-        conditional_required_fields=(RELIABLE_PROVISIONAL_RULE,),
+        conditional_required_fields=(
+            RELIABLE_PROVISIONAL_RULE,
+            EARLY_DIALOG_CONTACT_RULE,
+            EARLY_DIALOG_RECORD_ROUTE_RULE,
+            INFO_FRAMEWORK_RESPONSE_RECV_INFO_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=199,
@@ -257,7 +391,11 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="One branch of a forked INVITE early dialog is ended before final answer.",
         reference_rfcs=("RFC6228",),
         related_methods=INVITE_ONLY,
-        conditional_required_fields=(RELIABLE_PROVISIONAL_RULE,),
+        conditional_required_fields=(
+            RELIABLE_PROVISIONAL_RULE,
+            EARLY_DIALOG_TERMINATED_REASON_RULE,
+            EARLY_DIALOG_TERMINATED_SUPPORT_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=200,
@@ -267,16 +405,26 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="UE request completed successfully.",
         reference_rfcs=("RFC3261",),
         related_methods=ALL_METHODS,
-        conditional_required_fields=(OK_CONTACT_RULE,),
+        conditional_required_fields=(
+            OK_CONTACT_RULE,
+            DIALOG_ESTABLISHING_RECORD_ROUTE_RULE,
+            SUBSCRIBE_SUCCESS_EXPIRES_RULE,
+            MESSAGE_SUCCESS_NO_CONTACT_RULE,
+            MESSAGE_SUCCESS_NO_BODY_RULE,
+            INFO_FRAMEWORK_RESPONSE_RECV_INFO_RULE,
+            REGISTER_SUCCESS_CONTACT_RULE,
+            REGISTER_SUCCESS_PATH_RULE,
+            REGISTER_SUCCESS_SERVICE_ROUTE_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=202,
         reason_phrase="Accepted (Deprecated)",
         model_name="AcceptedDeprecatedResponse",
-        description="Accepted but not yet fully completed; deprecated for several SIP usages but still registered by IANA.",
-        typical_scenario="Legacy asynchronous acceptance of MESSAGE, SUBSCRIBE, or REFER-related processing.",
+        description="Accepted but not yet fully completed; still valid for MESSAGE asynchronous handling, deprecated for SUBSCRIBE, and obsoleted for new REFER usage.",
+        typical_scenario="Asynchronous MESSAGE processing, with legacy interoperability from older SUBSCRIBE/REFER deployments still possible.",
         reference_rfcs=("RFC3261", "RFC3428", "RFC6665", "RFC7647"),
-        related_methods=MESSAGE_SUBSCRIBE_REFER,
+        related_methods=(SIPMethod.MESSAGE,),
     ),
     ResponseModelSpec(
         status_code=204,
@@ -296,6 +444,7 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="UE must choose between alternative redirect contacts.",
         reference_rfcs=("RFC3261",),
         related_methods=GENERAL_REDIRECT,
+        required_override_fields=("contact",),
         conditional_required_fields=(REDIRECT_CONTACT_RULE,),
     ),
     ResponseModelSpec(
@@ -306,6 +455,7 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="UE should update routing based on permanent redirection.",
         reference_rfcs=("RFC3261",),
         related_methods=GENERAL_REDIRECT,
+        required_override_fields=("contact",),
         conditional_required_fields=(REDIRECT_CONTACT_RULE,),
     ),
     ResponseModelSpec(
@@ -316,6 +466,7 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="UE retries the request using a temporary alternate target.",
         reference_rfcs=("RFC3261",),
         related_methods=GENERAL_REDIRECT,
+        required_override_fields=("contact",),
         conditional_required_fields=(REDIRECT_CONTACT_RULE,),
     ),
     ResponseModelSpec(
@@ -326,6 +477,7 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="UE must reattempt the request through a designated proxy.",
         reference_rfcs=("RFC3261",),
         related_methods=GENERAL_REDIRECT,
+        required_override_fields=("contact",),
         conditional_required_fields=(REDIRECT_CONTACT_RULE,),
     ),
     ResponseModelSpec(
@@ -336,7 +488,7 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="Outbound INVITE is redirected to a different service handling model.",
         reference_rfcs=("RFC3261",),
         related_methods=INVITE_ONLY,
-        conditional_required_fields=(REDIRECT_CONTACT_RULE,),
+        conditional_required_fields=(ALTERNATIVE_SERVICE_BODY_RULE,),
     ),
     ResponseModelSpec(
         status_code=400,
@@ -522,7 +674,7 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         description="Expires interval is shorter than allowed.",
         typical_scenario="REGISTER or PUBLISH requested an expiry that is too short.",
         reference_rfcs=("RFC3261",),
-        related_methods=REGISTER_PUBLISH,
+        related_methods=REGISTER_PUBLISH_SUBSCRIBE,
         required_override_fields=("min_expires",),
     ),
     ResponseModelSpec(
@@ -763,8 +915,11 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         typical_scenario="IMS-style security negotiation must complete before REGISTER/INVITE proceeds.",
         reference_rfcs=("RFC3329",),
         related_methods=(SIPMethod.REGISTER, SIPMethod.INVITE),
-        required_override_fields=("security_server",),
-        conditional_required_fields=(SECURITY_AGREEMENT_REQUIRE_RULE,),
+        required_override_fields=("security_server", "require"),
+        conditional_required_fields=(
+            SECURITY_AGREEMENT_REQUIRE_RULE,
+            SECURITY_AGREEMENT_CHALLENGE_RULE,
+        ),
     ),
     ResponseModelSpec(
         status_code=500,
@@ -955,7 +1110,10 @@ RESPONSE_DEFINITIONS: tuple[SIPResponseDefinition, ...] = tuple(
         field_descriptors=build_field_descriptors(
             RESPONSE_MODELS_BY_CODE[spec.status_code]
         ),
-        conditional_required_fields=spec.conditional_required_fields,
+        conditional_required_fields=(
+            spec.conditional_required_fields
+            + (() if spec.status_code == 100 else (NON_100_TO_TAG_RULE,))
+        ),
         related_methods=spec.related_methods,
     )
     for spec in _RESPONSE_SPECS

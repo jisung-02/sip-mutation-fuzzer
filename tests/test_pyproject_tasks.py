@@ -20,13 +20,14 @@ class PoeTaskConfigTests(unittest.TestCase):
             msg="poethepoet should be available in the dev dependency group",
         )
 
-    def test_poe_tasks_cover_format_lint_lint_fix_and_type_check(self) -> None:
+    def test_poe_tasks_cover_quality_checks_and_softphone_runner(self) -> None:
         tasks = self.pyproject["tool"]["poe"]["tasks"]
 
         self.assertEqual(tasks["format"], "ruff format .")
         self.assertEqual(tasks["lint"], "ruff check .")
         self.assertEqual(tasks["lint-fix"], "ruff check . --fix")
         self.assertEqual(tasks["type-check"], "ty check")
+        self.assertEqual(tasks["softphone-run"], "python scripts/run_baresip.py")
 
 
 if __name__ == "__main__":
