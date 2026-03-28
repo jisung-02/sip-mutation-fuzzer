@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -70,7 +68,7 @@ class MutationRecord(BaseModel):
         return stripped or None
 
     @model_validator(mode="after")
-    def _ensure_target_layer_matches(self) -> "MutationRecord":
+    def _ensure_target_layer_matches(self) -> Self:
         if self.layer != self.target.layer:
             raise ValueError("record layer must match target.layer")
         return self
@@ -99,7 +97,7 @@ class MutatedCase(BaseModel):
         return stripped or None
 
     @model_validator(mode="after")
-    def _ensure_layer_artifact_exists(self) -> "MutatedCase":
+    def _ensure_layer_artifact_exists(self) -> Self:
         if self.final_layer == "model" and self.mutated_packet is None:
             raise ValueError("model results require mutated_packet")
         if self.final_layer == "wire" and self.wire_text is None:

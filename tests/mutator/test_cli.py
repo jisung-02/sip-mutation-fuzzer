@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from importlib import import_module
 import unittest

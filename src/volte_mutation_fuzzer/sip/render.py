@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Any, TypeAlias
 
 from volte_mutation_fuzzer.mutator.editable import (

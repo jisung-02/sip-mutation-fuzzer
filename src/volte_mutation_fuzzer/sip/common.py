@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from enum import IntEnum, StrEnum
 from types import UnionType
-from typing import Any, Literal, TypeAlias, get_args, get_origin
+from typing import Any, Literal, Self, TypeAlias, get_args, get_origin
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -79,7 +77,7 @@ class SIPURI(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_scheme_specific_requirements(self) -> "SIPURI":
+    def validate_scheme_specific_requirements(self) -> Self:
         if self.scheme in {"sip", "sips"} and not self.host:
             raise ValueError("host is required for sip/sips URIs")
         if self.scheme == "tel" and not self.user:
@@ -97,7 +95,7 @@ class AbsoluteURI(BaseModel):
     uri: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_absolute_uri(self) -> "AbsoluteURI":
+    def validate_absolute_uri(self) -> Self:
         scheme, separator, _rest = self.uri.partition(":")
         if not separator or not scheme:
             raise ValueError("absolute URI must contain a scheme")
@@ -157,7 +155,7 @@ class SubscriptionStateHeader(BaseModel):
     parameters: dict[str, str | None] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_expires_requirements(self) -> "SubscriptionStateHeader":
+    def validate_expires_requirements(self) -> Self:
         if self.state in {"active", "pending"} and self.expires is None:
             raise ValueError(
                 "Subscription-State for active/pending notifications must include expires"

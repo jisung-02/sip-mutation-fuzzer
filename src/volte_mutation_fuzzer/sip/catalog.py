@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from volte_mutation_fuzzer.sip.common import SIPMethod, StatusClass

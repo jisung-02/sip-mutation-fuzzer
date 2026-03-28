@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from volte_mutation_fuzzer.packet_docs import (
     main,
     render_request_docs,

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from volte_mutation_fuzzer.generator.cli import main as generator_cli_main
 
 

@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 from collections.abc import Iterable
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,7 +48,7 @@ class EditableSIPMessage(BaseModel):
             if _header_name_key(header.name) == header_name
         )
 
-    def without_header(self, name: str) -> "EditableSIPMessage":
+    def without_header(self, name: str) -> Self:
         header_name = _header_name_key(name)
         filtered_headers = tuple(
             header
@@ -58,14 +57,14 @@ class EditableSIPMessage(BaseModel):
         )
         return self.model_copy(update={"headers": filtered_headers})
 
-    def append_header(self, name: str, value: str) -> "EditableSIPMessage":
+    def append_header(self, name: str, value: str) -> Self:
         updated_headers = (*self.headers, EditableHeader(name=name, value=value))
         return self.model_copy(update={"headers": updated_headers})
 
     def replace_headers(
         self,
         headers: Iterable[EditableHeader],
-    ) -> "EditableSIPMessage":
+    ) -> Self:
         return self.model_copy(update={"headers": tuple(headers)})
 
     def render(self) -> str:
@@ -89,10 +88,10 @@ class EditablePacketBytes(BaseModel):
     data: bytes = b""
 
     @classmethod
-    def from_message(cls, message: EditableSIPMessage) -> "EditablePacketBytes":
+    def from_message(cls, message: EditableSIPMessage) -> Self:
         return cls(data=message.render().encode("utf-8"))
 
-    def overwrite(self, offset: int, value: bytes) -> "EditablePacketBytes":
+    def overwrite(self, offset: int, value: bytes) -> Self:
         _validate_offset(offset, upper_bound=len(self.data), allow_endpoint=False)
         end = offset + len(value)
         if end > len(self.data):
@@ -100,17 +99,17 @@ class EditablePacketBytes(BaseModel):
         updated = self.data[:offset] + value + self.data[end:]
         return self.model_copy(update={"data": updated})
 
-    def insert(self, offset: int, value: bytes) -> "EditablePacketBytes":
+    def insert(self, offset: int, value: bytes) -> Self:
         _validate_offset(offset, upper_bound=len(self.data), allow_endpoint=True)
         updated = self.data[:offset] + value + self.data[offset:]
         return self.model_copy(update={"data": updated})
 
-    def delete(self, start: int, end: int) -> "EditablePacketBytes":
+    def delete(self, start: int, end: int) -> Self:
         _validate_range(start, end, upper_bound=len(self.data))
         updated = self.data[:start] + self.data[end:]
         return self.model_copy(update={"data": updated})
 
-    def truncate(self, length: int) -> "EditablePacketBytes":
+    def truncate(self, length: int) -> Self:
         if length < 0 or length > len(self.data):
             raise ValueError("truncate length must be within current data bounds")
         return self.model_copy(update={"data": self.data[:length]})

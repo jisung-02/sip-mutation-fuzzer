@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import unittest
 
 from volte_mutation_fuzzer.generator import (

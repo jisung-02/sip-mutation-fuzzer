@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -57,7 +55,7 @@ class GeneratorSettings(BaseModel):
         env: Mapping[str, str] | None = None,
         *,
         prefix: str | None = None,
-    ) -> "GeneratorSettings":
+    ) -> Self:
         """Load generator defaults from an env mapping or the process env."""
 
         source = cls._load_default_env() if env is None else env
@@ -179,7 +177,7 @@ class DialogContext(BaseModel):
         self.remote_cseq += 1
         return self.remote_cseq
 
-    def fork_for_reinvite(self) -> "DialogContext":
+    def fork_for_reinvite(self) -> Self:
         return self.model_copy(update={"is_reinvite": True})
 
     @field_validator("call_id", "local_tag", "remote_tag", mode="before")

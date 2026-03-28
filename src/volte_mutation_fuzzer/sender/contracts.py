@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 from ipaddress import ip_address
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -72,7 +70,7 @@ class TargetEndpoint(BaseModel):
         return value.strip().upper()
 
     @model_validator(mode="after")
-    def _validate_target_shape(self) -> "TargetEndpoint":
+    def _validate_target_shape(self) -> Self:
         if self.mode == "real-ue-direct":
             if self.host is None and self.msisdn is None:
                 raise ValueError(
@@ -114,15 +112,15 @@ class SendArtifact(BaseModel):
     packet_bytes: bytes | None = None
 
     @classmethod
-    def from_packet(cls, packet: PacketModel) -> "SendArtifact":
+    def from_packet(cls, packet: PacketModel) -> Self:
         return cls(packet=packet)
 
     @classmethod
-    def from_wire_text(cls, wire_text: str) -> "SendArtifact":
+    def from_wire_text(cls, wire_text: str) -> Self:
         return cls(wire_text=wire_text)
 
     @classmethod
-    def from_packet_bytes(cls, packet_bytes: bytes) -> "SendArtifact":
+    def from_packet_bytes(cls, packet_bytes: bytes) -> Self:
         return cls(packet_bytes=packet_bytes)
 
     @computed_field
@@ -135,7 +133,7 @@ class SendArtifact(BaseModel):
         return "bytes"
 
     @model_validator(mode="after")
-    def _ensure_exactly_one_artifact(self) -> "SendArtifact":
+    def _ensure_exactly_one_artifact(self) -> Self:
         artifact_count = sum(
             1
             for item in (self.packet, self.wire_text, self.packet_bytes)

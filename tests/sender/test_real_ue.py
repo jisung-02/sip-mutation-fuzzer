@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import subprocess
 import unittest
 from unittest.mock import patch

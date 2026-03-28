@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, Self, TypedDict
 
 from pydantic import Field, model_validator
 
@@ -65,13 +63,13 @@ class SIPRequest(SIPPacketBase):
     extension_headers: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_cseq_method(self) -> "SIPRequest":
+    def validate_cseq_method(self) -> Self:
         if self.cseq.method != self.method:
             raise ValueError("cseq.method must match request method")
         return self
 
     @model_validator(mode="after")
-    def validate_message_body(self) -> "SIPRequest":
+    def validate_message_body(self) -> Self:
         if self.body is not None and self.content_type is None:
             raise ValueError("content_type is required when body is present")
         if self.content_length == 0 and self.body:
@@ -92,7 +90,7 @@ class CancelRequest(SIPRequest):
     reason: str | None = None
 
     @model_validator(mode="after")
-    def validate_cancel_extension_rules(self) -> "CancelRequest":
+    def validate_cancel_extension_rules(self) -> Self:
         if self.require is not None:
             raise ValueError("CANCEL must not include Require")
         if self.proxy_require is not None:
@@ -143,7 +141,7 @@ class PublishRequest(SIPRequest):
     sip_if_match: str | None = None
 
     @model_validator(mode="after")
-    def validate_publish_initial_request_rules(self) -> "PublishRequest":
+    def validate_publish_initial_request_rules(self) -> Self:
         if self.sip_if_match is None and self.body is None:
             raise ValueError("initial PUBLISH requests must contain a body")
         return self

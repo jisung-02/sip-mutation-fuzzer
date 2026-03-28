@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, computed_field, create_model, model_validator
 
@@ -78,7 +76,7 @@ class SIPResponse(SIPPacketBase):
     extension_headers: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_body_headers(self) -> "SIPResponse":
+    def validate_body_headers(self) -> Self:
         if self.body is not None and self.content_type is None:
             raise ValueError("content_type is required when body is present")
         if self.content_length == 0 and self.body:
