@@ -11,6 +11,7 @@ SOFTPHONE_BIN_ENV: Final[str] = "VMF_SOFTPHONE_BIN"
 SOFTPHONE_CONFIG_DIR_ENV: Final[str] = "VMF_SOFTPHONE_CONFIG_DIR"
 SOFTPHONE_ARGS_ENV: Final[str] = "VMF_SOFTPHONE_ARGS"
 _DEFAULT_BARESIP_BINARY: Final[str] = "baresip"
+_DEFAULT_BARESIP_CONFIG_DIR: Final[Path] = Path.home() / ".baresip"
 
 
 class SoftphoneConfigError(ValueError):
@@ -54,14 +55,14 @@ def resolve_baresip_config_dir(env: Mapping[str, str] | None = None) -> Path:
     env_map = os.environ if env is None else env
     configured_dir = _read_env(env_map, SOFTPHONE_CONFIG_DIR_ENV)
     if configured_dir is None:
-        raise SoftphoneConfigError(
-            "VMF_SOFTPHONE_CONFIG_DIR must point to an existing baresip config directory"
-        )
+        config_dir = _DEFAULT_BARESIP_CONFIG_DIR
+    else:
+        config_dir = Path(configured_dir).expanduser()
 
-    config_dir = Path(configured_dir).expanduser()
     if not config_dir.is_dir():
         raise SoftphoneConfigError(
-            f"baresip config directory does not exist: {config_dir}"
+            f"baresip config directory does not exist: {config_dir}. "
+            "Run 'poe softphone-setup' first or set VMF_SOFTPHONE_CONFIG_DIR."
         )
 
     return config_dir

@@ -99,13 +99,21 @@ class SoftphoneRunnerTests(unittest.TestCase):
     def test_main_prints_clear_error_for_missing_config_dir(self) -> None:
         stderr = StringIO()
 
-        with patch.dict(os.environ, {}, clear=True):
-            with contextlib.redirect_stderr(stderr):
-                with self.assertRaises(SystemExit) as caught:
-                    main()
+        with patch(
+            "volte_mutation_fuzzer.softphone.shutil.which",
+            return_value="/usr/bin/baresip",
+        ):
+            with patch(
+                "volte_mutation_fuzzer.softphone._DEFAULT_BARESIP_CONFIG_DIR",
+                Path("/nonexistent/baresip-config-dir"),
+            ):
+                with patch.dict(os.environ, {}, clear=True):
+                    with contextlib.redirect_stderr(stderr):
+                        with self.assertRaises(SystemExit) as caught:
+                            main()
 
         self.assertEqual(caught.exception.code, 2)
-        self.assertIn("VMF_SOFTPHONE_CONFIG_DIR", stderr.getvalue())
+        self.assertIn("poe softphone-setup", stderr.getvalue())
 
 
 if __name__ == "__main__":

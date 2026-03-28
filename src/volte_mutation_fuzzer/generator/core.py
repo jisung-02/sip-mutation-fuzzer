@@ -417,6 +417,7 @@ class SIPGenerator:
             host=self.settings.via_host,
             port=self.settings.via_port,
             branch=f"z9hG4bK-{uuid4().hex}",
+            rport=True,
         )
 
     def _build_from(self, context: DialogContext | None) -> NameAddress:
