@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 import tomllib
 import unittest
@@ -28,6 +26,7 @@ class PoeTaskConfigTests(unittest.TestCase):
         self.assertEqual(tasks["lint-fix"], "ruff check . --fix")
         self.assertEqual(tasks["type-check"], "ty check")
         self.assertEqual(tasks["softphone-run"], "python scripts/run_baresip.py")
+        self.assertEqual(tasks["softphone-setup"], "python scripts/setup_baresip.py")
 
 
 if __name__ == "__main__":
