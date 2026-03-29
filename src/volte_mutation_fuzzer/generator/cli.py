@@ -11,6 +11,7 @@ from volte_mutation_fuzzer.generator.contracts import (
     ResponseSpec,
 )
 from volte_mutation_fuzzer.generator.core import SIPGenerator
+from volte_mutation_fuzzer.campaign.cli import app as campaign_app
 from volte_mutation_fuzzer.mutator.cli import app as mutator_app
 from volte_mutation_fuzzer.sender.cli import app as sender_app
 from volte_mutation_fuzzer.sip.common import SIPMethod
@@ -23,6 +24,7 @@ app = typer.Typer(
 )
 app.add_typer(mutator_app, name="mutate")
 app.add_typer(sender_app, name="send")
+app.add_typer(campaign_app, name="campaign")
 
 
 def _parse_json_object(raw_value: str | None, *, option_name: str) -> dict[str, Any]:
