@@ -1,9 +1,11 @@
+import os
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
-from volte_mutation_fuzzer.oracle.core import OracleEngine, ProcessOracle, SocketOracle
+from volte_mutation_fuzzer.oracle.core import LogOracle, OracleEngine, ProcessOracle, SocketOracle
 from volte_mutation_fuzzer.sender.contracts import (
     SendReceiveResult,
     SocketObservation,
@@ -185,3 +187,162 @@ class OracleEngineTests(unittest.TestCase):
             verdict = self.engine.evaluate(result, self.ctx, process_name="baresip")
         self.assertEqual(verdict.verdict, "suspicious")
         self.assertTrue(verdict.process_alive)
+
+
+# ---------------------------------------------------------------------------
+# LogOracle tests
+# ---------------------------------------------------------------------------
+
+
+class LogOracleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.oracle = LogOracle()
+
+    def _write_log(self, content: str) -> str:
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False)
+        f.write(content)
+        f.close()
+        return f.name
+
+    def test_missing_file_returns_no_match_with_error(self) -> None:
+        result, pos = self.oracle.check("/nonexistent/path/to.log")
+        self.assertFalse(result.matched)
+        self.assertIsNotNone(result.error)
+        self.assertEqual(pos, 0)
+
+    def test_empty_file_returns_no_match(self) -> None:
+        path = self._write_log("")
+        try:
+            result, _ = self.oracle.check(path)
+            self.assertFalse(result.matched)
+        finally:
+            os.unlink(path)
+
+    def test_sigsegv_detected(self) -> None:
+        path = self._write_log("normal line\nReceived signal SIGSEGV at 0x0\n")
+        try:
+            result, _ = self.oracle.check(path)
+            self.assertTrue(result.matched)
+            self.assertEqual(result.matched_pattern, "SIGSEGV")
+            self.assertIn("SIGSEGV", result.matched_line)
+        finally:
+            os.unlink(path)
+
+    def test_assertion_failed_detected(self) -> None:
+        path = self._write_log("Assertion failed: x > 0, file foo.c, line 42\n")
+        try:
+            result, _ = self.oracle.check(path)
+            self.assertTrue(result.matched)
+        finally:
+            os.unlink(path)
+
+    def test_python_traceback_detected(self) -> None:
+        path = self._write_log("Traceback (most recent call last):\n  File foo.py\n")
+        try:
+            result, _ = self.oracle.check(path)
+            self.assertTrue(result.matched)
+        finally:
+            os.unlink(path)
+
+    def test_go_panic_detected(self) -> None:
+        path = self._write_log("goroutine 1 [running]:\npanic: runtime error\n")
+        try:
+            result, _ = self.oracle.check(path)
+            self.assertTrue(result.matched)
+        finally:
+            os.unlink(path)
+
+    def test_normal_log_no_match(self) -> None:
+        path = self._write_log("INFO: started\nDEBUG: processing request\nINFO: response 200\n")
+        try:
+            result, _ = self.oracle.check(path)
+            self.assertFalse(result.matched)
+            self.assertEqual(result.lines_scanned, 3)
+        finally:
+            os.unlink(path)
+
+    def test_incremental_read_skips_old_content(self) -> None:
+        path = self._write_log("SIGSEGV old crash\n")
+        try:
+            result1, pos1 = self.oracle.check(path)
+            self.assertTrue(result1.matched)
+
+            # Second read from pos1 — no new content
+            result2, pos2 = self.oracle.check(path, after_position=pos1)
+            self.assertFalse(result2.matched)
+
+            # Append new content with a pattern
+            with open(path, "a") as f:
+                f.write("new SIGABRT here\n")
+
+            result3, _ = self.oracle.check(path, after_position=pos1)
+            self.assertTrue(result3.matched)
+            self.assertEqual(result3.matched_pattern, "SIGABRT")
+        finally:
+            os.unlink(path)
+
+    def test_custom_patterns(self) -> None:
+        oracle = LogOracle(patterns=("CUSTOM_ERROR",))
+        path = self._write_log("SIGSEGV should not match\nCUSTOM_ERROR should match\n")
+        try:
+            result, _ = oracle.check(path)
+            self.assertTrue(result.matched)
+            self.assertEqual(result.matched_pattern, "CUSTOM_ERROR")
+        finally:
+            os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# OracleEngine log integration tests
+# ---------------------------------------------------------------------------
+
+
+class OracleEngineLogTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.log_oracle = LogOracle()
+        self.engine = OracleEngine(log_oracle=self.log_oracle)
+        self.ctx = OracleContext(method="OPTIONS")
+
+    def _write_log(self, content: str) -> str:
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False)
+        f.write(content)
+        f.close()
+        return f.name
+
+    def test_stack_failure_when_log_has_pattern(self) -> None:
+        path = self._write_log("SIGSEGV\n")
+        try:
+            result = _make_result("success", status_code=200)
+            verdict = self.engine.evaluate(result, self.ctx, log_path=path)
+            self.assertEqual(verdict.verdict, "stack_failure")
+            self.assertIn("SIGSEGV", verdict.reason)
+        finally:
+            os.unlink(path)
+
+    def test_no_log_oracle_ignores_log_path(self) -> None:
+        engine = OracleEngine()  # no log_oracle
+        result = _make_result("success", status_code=200)
+        verdict = engine.evaluate(result, self.ctx, log_path="/some/path.log")
+        self.assertEqual(verdict.verdict, "normal")
+
+    def test_clean_log_falls_through_to_normal(self) -> None:
+        path = self._write_log("INFO: all good\n")
+        try:
+            result = _make_result("success", status_code=200)
+            verdict = self.engine.evaluate(result, self.ctx, log_path=path)
+            self.assertEqual(verdict.verdict, "normal")
+        finally:
+            os.unlink(path)
+
+    def test_stack_failure_takes_precedence_over_crash(self) -> None:
+        path = self._write_log("Segmentation fault (core dumped)\n")
+        try:
+            dead_result = type("R", (), {"returncode": 1, "stdout": b""})()
+            result = _make_result("success", status_code=200)
+            with patch("subprocess.run", return_value=dead_result):
+                verdict = self.engine.evaluate(
+                    result, self.ctx, process_name="baresip", log_path=path
+                )
+            self.assertEqual(verdict.verdict, "stack_failure")
+        finally:
+            os.unlink(path)

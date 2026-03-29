@@ -17,23 +17,78 @@ app = typer.Typer(
 @app.command("run")
 def run_command(
     target_host: Annotated[str, typer.Option("--target-host", help="Target SIP host.")],
-    target_port: Annotated[int, typer.Option("--target-port", help="Target SIP port.")] = 5060,
-    scope: Annotated[str, typer.Option("--scope", help="Tier scope (tier1/tier2/tier3/tier4/all).")] = "tier1",
-    strategy: Annotated[str | None, typer.Option("--strategy", help="Mutation strategy (default/state_breaker). Comma-separated for multiple.")] = None,
-    layer: Annotated[str | None, typer.Option("--layer", help="Mutation layer (model/wire/byte). Comma-separated for multiple.")] = None,
-    max_cases: Annotated[int, typer.Option("--max-cases", help="Maximum number of test cases.")] = 1000,
-    timeout: Annotated[float, typer.Option("--timeout", help="Socket timeout in seconds.")] = 5.0,
-    cooldown: Annotated[float, typer.Option("--cooldown", help="Cooldown seconds between cases.")] = 0.2,
-    seed_start: Annotated[int, typer.Option("--seed-start", help="Starting seed value.")] = 0,
-    output: Annotated[str, typer.Option("--output", help="Output JSONL file path.")] = "results/campaign.jsonl",
-    process_name: Annotated[str, typer.Option("--process-name", help="Process name to check for crash detection.")] = "baresip",
-    no_process_check: Annotated[bool, typer.Option("--no-process-check", help="Disable process liveness check.")] = False,
-    transport: Annotated[str, typer.Option("--transport", help="Transport protocol (UDP/TCP).")] = "UDP",
-    mode: Annotated[str, typer.Option("--mode", help="Target mode (softphone/real-ue-pcscf/real-ue-direct).")] = "softphone",
+    target_port: Annotated[
+        int, typer.Option("--target-port", help="Target SIP port.")
+    ] = 5060,
+    scope: Annotated[
+        str, typer.Option("--scope", help="Tier scope (tier1/tier2/tier3/tier4/all).")
+    ] = "tier1",
+    strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--strategy",
+            help="Mutation strategy (default/state_breaker). Comma-separated for multiple.",
+        ),
+    ] = None,
+    layer: Annotated[
+        str | None,
+        typer.Option(
+            "--layer",
+            help="Mutation layer (model/wire/byte). Comma-separated for multiple.",
+        ),
+    ] = None,
+    max_cases: Annotated[
+        int, typer.Option("--max-cases", help="Maximum number of test cases.")
+    ] = 1000,
+    timeout: Annotated[
+        float, typer.Option("--timeout", help="Socket timeout in seconds.")
+    ] = 5.0,
+    cooldown: Annotated[
+        float, typer.Option("--cooldown", help="Cooldown seconds between cases.")
+    ] = 0.2,
+    seed_start: Annotated[
+        int, typer.Option("--seed-start", help="Starting seed value.")
+    ] = 0,
+    output: Annotated[
+        str, typer.Option("--output", help="Output JSONL file path.")
+    ] = "results/campaign.jsonl",
+    process_name: Annotated[
+        str,
+        typer.Option(
+            "--process-name", help="Process name to check for crash detection."
+        ),
+    ] = "baresip",
+    no_process_check: Annotated[
+        bool, typer.Option("--no-process-check", help="Disable process liveness check.")
+    ] = False,
+    transport: Annotated[
+        str, typer.Option("--transport", help="Transport protocol (UDP/TCP).")
+    ] = "UDP",
+    mode: Annotated[
+        str,
+        typer.Option(
+            "--mode", help="Target mode (softphone/real-ue-pcscf/real-ue-direct)."
+        ),
+    ] = "softphone",
+    log_path: Annotated[
+        str | None,
+        typer.Option(
+            "--log-path",
+            help="Path to target process log file for stack trace detection.",
+        ),
+    ] = None,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
-    strategies = tuple(s.strip() for s in strategy.split(",")) if strategy else ("default", "state_breaker")
-    layers = tuple(lyr.strip() for lyr in layer.split(",")) if layer else ("model", "wire", "byte")
+    strategies = (
+        tuple(s.strip() for s in strategy.split(","))
+        if strategy
+        else ("default", "state_breaker")
+    )
+    layers = (
+        tuple(lyr.strip() for lyr in layer.split(","))
+        if layer
+        else ("model", "wire", "byte")
+    )
 
     try:
         config = CampaignConfig(
@@ -51,6 +106,7 @@ def run_command(
             output_path=output,
             process_name=process_name,
             check_process=not no_process_check,
+            log_path=log_path,
         )
     except Exception as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
@@ -69,7 +125,8 @@ def run_command(
         f" normal={result.summary.normal}"
         f" suspicious={result.summary.suspicious}"
         f" timeout={result.summary.timeout}"
-        f" crash={result.summary.crash}",
+        f" crash={result.summary.crash}"
+        f" stack_failure={result.summary.stack_failure}",
         file=sys.stderr,
     )
     print(f"[vmf campaign] results saved to: {output}", file=sys.stderr)
@@ -80,7 +137,10 @@ def report_command(
     path: Annotated[str, typer.Argument(help="Path to campaign JSONL file.")],
     filter_verdict: Annotated[
         str | None,
-        typer.Option("--filter", help="Filter by verdict(s). Comma-separated (e.g. suspicious,crash)."),
+        typer.Option(
+            "--filter",
+            help="Filter by verdict(s). Comma-separated (e.g. suspicious,crash).",
+        ),
     ] = None,
 ) -> None:
     """Display campaign results summary."""
@@ -95,7 +155,9 @@ def report_command(
     if filter_verdict:
         verdicts_filter = {v.strip() for v in filter_verdict.split(",")}
 
-    filtered = [c for c in cases if verdicts_filter is None or c.verdict in verdicts_filter]
+    filtered = [
+        c for c in cases if verdicts_filter is None or c.verdict in verdicts_filter
+    ]
 
     report = {
         "campaign_id": header.campaign_id,
@@ -154,6 +216,4 @@ def replay_command(
         strategy=case.strategy,
     )
     result = executor._execute_case(spec)
-    typer.echo(
-        json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
-    )
+    typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))

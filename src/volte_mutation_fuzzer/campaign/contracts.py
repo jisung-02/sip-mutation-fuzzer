@@ -34,6 +34,7 @@ class CampaignConfig(BaseModel):
     output_path: str = Field(default="results/campaign.jsonl", min_length=1)
     process_name: str = Field(default="baresip", min_length=1)
     check_process: bool = True
+    log_path: str | None = None
 
 
 class CaseSpec(BaseModel):

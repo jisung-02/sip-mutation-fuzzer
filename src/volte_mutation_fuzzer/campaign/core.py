@@ -20,7 +20,7 @@ from volte_mutation_fuzzer.generator.core import SIPGenerator
 from volte_mutation_fuzzer.mutator.contracts import MutationConfig, MutatedCase
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
-from volte_mutation_fuzzer.oracle.core import OracleEngine
+from volte_mutation_fuzzer.oracle.core import LogOracle, OracleEngine
 from volte_mutation_fuzzer.sender.contracts import (
     SendArtifact,
     TargetEndpoint,
@@ -97,7 +97,9 @@ class CaseGenerator:
                     for strategy in tier.strategies:
                         if strategy not in config.strategies:
                             continue
-                        if strategy not in _SUPPORTED_STRATEGIES.get(layer, frozenset()):
+                        if strategy not in _SUPPORTED_STRATEGIES.get(
+                            layer, frozenset()
+                        ):
                             continue
                         key = (method, layer, strategy)
                         if key not in seen:
@@ -198,7 +200,12 @@ class CampaignExecutor:
         self._generator = generator or SIPGenerator(GeneratorSettings())
         self._mutator = mutator or SIPMutator()
         self._sender = sender or SIPSenderReactor()
-        self._oracle = oracle or OracleEngine()
+        if oracle is not None:
+            self._oracle = oracle
+        elif config.log_path is not None:
+            self._oracle = OracleEngine(log_oracle=LogOracle())
+        else:
+            self._oracle = OracleEngine()
         self._store = store or ResultStore(Path(config.output_path))
         self._target = TargetEndpoint(
             host=config.target_host,
@@ -230,7 +237,11 @@ class CampaignExecutor:
                 self._update_summary(summary, case_result.verdict)
 
                 label = f"[{spec.case_id + 1}/{config.max_cases}] {spec.method} {spec.layer}/{spec.strategy} seed={spec.seed}"
-                code_str = f" ({case_result.response_code}," if case_result.response_code else " ("
+                code_str = (
+                    f" ({case_result.response_code},"
+                    if case_result.response_code
+                    else " ("
+                )
                 print(
                     f"{label} → {case_result.verdict}{code_str} {case_result.elapsed_ms:.0f}ms)",
                     file=sys.stderr,
@@ -239,6 +250,15 @@ class CampaignExecutor:
                 if case_result.verdict == "crash":
                     print(
                         f"  [CRASH] reproduction: {case_result.reproduction_cmd}",
+                        file=sys.stderr,
+                    )
+                if case_result.verdict == "stack_failure":
+                    print(
+                        f"  [STACK_FAILURE] {case_result.reason}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  [STACK_FAILURE] reproduction: {case_result.reproduction_cmd}",
                         file=sys.stderr,
                     )
                 if case_result.verdict == "unknown":
@@ -296,13 +316,21 @@ class CampaignExecutor:
                 timeout_threshold_ms=config.timeout_seconds * 1000,
             )
             process_name = config.process_name if config.check_process else None
-            verdict = self._oracle.evaluate(send_result, context, process_name=process_name)
+            verdict = self._oracle.evaluate(
+                send_result,
+                context,
+                process_name=process_name,
+                log_path=config.log_path,
+            )
 
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated.records
             )
             raw_response: str | None = None
-            if verdict.verdict in ("suspicious", "crash") and send_result.final_response:
+            if (
+                verdict.verdict in ("suspicious", "crash", "stack_failure")
+                and send_result.final_response
+            ):
                 raw_response = send_result.final_response.raw_text or None
 
             return CaseResult(

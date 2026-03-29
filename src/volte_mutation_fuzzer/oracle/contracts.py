@@ -2,7 +2,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Verdict = Literal["normal", "suspicious", "timeout", "crash", "stack_failure", "unknown"]
+Verdict = Literal[
+    "normal", "suspicious", "timeout", "crash", "stack_failure", "unknown"
+]
 
 
 class OracleContext(BaseModel):
@@ -25,6 +27,19 @@ class ProcessCheckResult(BaseModel):
     alive: bool
     pid: int | None = None
     check_time: float
+    error: str | None = None
+
+
+class LogCheckResult(BaseModel):
+    """Result of scanning a log file for stack trace patterns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    log_path: str
+    matched: bool
+    matched_pattern: str | None = None
+    matched_line: str | None = None
+    lines_scanned: int = 0
     error: str | None = None
 
 
