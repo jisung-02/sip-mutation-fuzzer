@@ -3,7 +3,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 Verdict = Literal[
-    "normal", "suspicious", "timeout", "crash", "stack_failure", "unknown"
+    "normal",
+    "suspicious",
+    "timeout",
+    "crash",
+    "stack_failure",
+    "setup_failed",
+    "unknown",
 ]
 
 

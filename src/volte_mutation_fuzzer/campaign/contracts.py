@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TierScope = Literal["tier1", "tier2", "tier3", "tier4", "all"]
+TierScope = Literal["tier1", "tier2", "tier3", "tier4", "tier5", "all"]
 
 
 class TierDefinition(BaseModel):
@@ -13,6 +13,7 @@ class TierDefinition(BaseModel):
     methods: tuple[str, ...]
     layers: tuple[str, ...] = ("model", "wire", "byte")
     strategies: tuple[str, ...] = ("default", "state_breaker")
+    requires_dialog: bool = False
 
 
 class CampaignConfig(BaseModel):
@@ -47,6 +48,7 @@ class CaseSpec(BaseModel):
     method: str = Field(min_length=1)
     layer: str = Field(min_length=1)
     strategy: str = Field(min_length=1)
+    dialog_scenario: str | None = None
 
 
 class CaseResult(BaseModel):
@@ -69,6 +71,8 @@ class CaseResult(BaseModel):
     reproduction_cmd: str
     error: str | None = None
     timestamp: float
+    dialog_scenario: str | None = None
+    setup_succeeded: bool | None = None
 
 
 class CampaignSummary(BaseModel):
@@ -82,6 +86,7 @@ class CampaignSummary(BaseModel):
     timeout: int = 0
     crash: int = 0
     stack_failure: int = 0
+    setup_failed: int = 0
     unknown: int = 0
 
 
