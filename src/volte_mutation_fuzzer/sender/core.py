@@ -30,6 +30,100 @@ _TCP_READ_SIZE: Final[int] = 65535
 _CRLF = "\r\n"
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers (reusable by dialog orchestrator etc.)
+# ---------------------------------------------------------------------------
+
+
+def classify_status_code(status_code: int) -> ObservationClass:
+    """Map a numeric SIP status code to its ObservationClass."""
+    if 100 <= status_code < 200:
+        return "provisional"
+    if 200 <= status_code < 300:
+        return "success"
+    if 300 <= status_code < 400:
+        return "redirection"
+    if 400 <= status_code < 500:
+        return "client_error"
+    if 500 <= status_code < 600:
+        return "server_error"
+    if 600 <= status_code < 700:
+        return "global_error"
+    return "invalid"
+
+
+def parse_sip_response(
+    data: bytes,
+    remote_addr: tuple[str, int] | Sequence[object] | None,
+) -> SocketObservation:
+    """Parse raw UDP/TCP bytes into a SocketObservation."""
+    raw_text = data.decode("utf-8", errors="replace")
+    lines = raw_text.split(_CRLF)
+    headers: dict[str, str] = {}
+    body = ""
+    status_code: int | None = None
+    reason_phrase: str | None = None
+    classification: ObservationClass = "invalid"
+
+    if lines and (match := _STATUS_LINE_PATTERN.match(lines[0])):
+        status_code = int(match.group(1))
+        reason_phrase = match.group(2).strip() or None
+        classification = classify_status_code(status_code)
+
+        header_end = len(lines)
+        for index, line in enumerate(lines[1:], start=1):
+            if line == "":
+                header_end = index
+                break
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            headers[name.strip().casefold()] = value.strip()
+
+        if header_end < len(lines) - 1:
+            body = _CRLF.join(lines[header_end + 1 :])
+
+    remote_host: str | None = None
+    remote_port: int | None = None
+    if remote_addr is not None and len(remote_addr) >= 2:  # type: ignore[arg-type]
+        remote_host = str(remote_addr[0])
+        remote_port_candidate = remote_addr[1]
+        if isinstance(remote_port_candidate, int):
+            remote_port = remote_port_candidate
+
+    return SocketObservation(
+        remote_host=remote_host,
+        remote_port=remote_port,
+        status_code=status_code,
+        reason_phrase=reason_phrase,
+        headers=headers,
+        body=body,
+        raw_text=raw_text,
+        raw_size=len(data),
+        classification=classification,
+    )
+
+
+def read_udp_observations(
+    sock: socket.socket,
+    *,
+    collect_all_responses: bool,
+) -> list[SocketObservation]:
+    """Read SIP responses from a UDP socket until timeout or final response."""
+    observations: list[SocketObservation] = []
+    while len(observations) < _MAX_UDP_RESPONSES:
+        try:
+            data, addr = sock.recvfrom(_TCP_READ_SIZE)
+        except TimeoutError:
+            break
+
+        observation = parse_sip_response(data, addr)
+        observations.append(observation)
+        if not collect_all_responses and observation.classification != "provisional":
+            break
+    return observations
+
+
 class SIPSenderReactor:
     """Sender/Reactor that can target softphones and real-ue-direct dumpipe flows."""
 
@@ -233,21 +327,7 @@ class SIPSenderReactor:
         *,
         collect_all_responses: bool,
     ) -> list[SocketObservation]:
-        observations: list[SocketObservation] = []
-        while len(observations) < _MAX_UDP_RESPONSES:
-            try:
-                data, addr = sock.recvfrom(_TCP_READ_SIZE)
-            except TimeoutError:
-                break
-
-            observation = self._parse_response(data, addr)
-            observations.append(observation)
-            if (
-                not collect_all_responses
-                and observation.classification != "provisional"
-            ):
-                break
-        return observations
+        return read_udp_observations(sock, collect_all_responses=collect_all_responses)
 
     def _send_tcp(
         self, payload: bytes, target: TargetEndpoint
@@ -280,66 +360,10 @@ class SIPSenderReactor:
         data: bytes,
         remote_addr: tuple[str, int] | Sequence[object] | None,
     ) -> SocketObservation:
-        raw_text = data.decode("utf-8", errors="replace")
-        lines = raw_text.split(_CRLF)
-        headers: dict[str, str] = {}
-        body = ""
-        status_code: int | None = None
-        reason_phrase: str | None = None
-        classification: ObservationClass = "invalid"
-
-        if lines and (match := _STATUS_LINE_PATTERN.match(lines[0])):
-            status_code = int(match.group(1))
-            reason_phrase = match.group(2).strip() or None
-            classification = self._classify_status_code(status_code)
-
-            header_end = len(lines)
-            for index, line in enumerate(lines[1:], start=1):
-                if line == "":
-                    header_end = index
-                    break
-                if ":" not in line:
-                    continue
-                name, value = line.split(":", 1)
-                headers[name.strip().casefold()] = value.strip()
-
-            if header_end < len(lines) - 1:
-                body = _CRLF.join(lines[header_end + 1 :])
-
-        remote_host: str | None = None
-        remote_port: int | None = None
-        if remote_addr is not None and len(remote_addr) >= 2:
-            remote_host = str(remote_addr[0])
-            remote_port_candidate = remote_addr[1]
-            if isinstance(remote_port_candidate, int):
-                remote_port = remote_port_candidate
-
-        return SocketObservation(
-            remote_host=remote_host,
-            remote_port=remote_port,
-            status_code=status_code,
-            reason_phrase=reason_phrase,
-            headers=headers,
-            body=body,
-            raw_text=raw_text,
-            raw_size=len(data),
-            classification=classification,
-        )
+        return parse_sip_response(data, remote_addr)
 
     def _classify_status_code(self, status_code: int) -> ObservationClass:
-        if 100 <= status_code < 200:
-            return "provisional"
-        if 200 <= status_code < 300:
-            return "success"
-        if 300 <= status_code < 400:
-            return "redirection"
-        if 400 <= status_code < 500:
-            return "client_error"
-        if 500 <= status_code < 600:
-            return "server_error"
-        if 600 <= status_code < 700:
-            return "global_error"
-        return "invalid"
+        return classify_status_code(status_code)
 
     def _resolve_outcome(
         self,
@@ -365,4 +389,9 @@ class SIPSenderReactor:
         return "error"
 
 
-__all__ = ["SIPSenderReactor"]
+__all__ = [
+    "SIPSenderReactor",
+    "classify_status_code",
+    "parse_sip_response",
+    "read_udp_observations",
+]
