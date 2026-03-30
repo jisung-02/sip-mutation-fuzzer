@@ -53,13 +53,17 @@ class CampaignConfigTests(unittest.TestCase):
 
 class CaseSpecTests(unittest.TestCase):
     def test_valid(self) -> None:
-        spec = CaseSpec(case_id=0, seed=42, method="OPTIONS", layer="model", strategy="default")
+        spec = CaseSpec(
+            case_id=0, seed=42, method="OPTIONS", layer="model", strategy="default"
+        )
         self.assertEqual(spec.case_id, 0)
         self.assertEqual(spec.seed, 42)
 
     def test_negative_case_id_rejected(self) -> None:
         with self.assertRaises(ValidationError):
-            CaseSpec(case_id=-1, seed=0, method="OPTIONS", layer="model", strategy="default")
+            CaseSpec(
+                case_id=-1, seed=0, method="OPTIONS", layer="model", strategy="default"
+            )
 
 
 class CaseResultTests(unittest.TestCase):

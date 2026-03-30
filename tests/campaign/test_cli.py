@@ -77,17 +77,27 @@ class CampaignRunCLITests(unittest.TestCase):
             result = self.runner.invoke(
                 app,
                 [
-                    "campaign", "run",
-                    "--target-host", responder.host,
-                    "--target-port", str(responder.port),
-                    "--scope", "tier1",
-                    "--layer", "model",
-                    "--strategy", "default",
-                    "--max-cases", "2",
-                    "--timeout", "0.5",
-                    "--cooldown", "0",
+                    "campaign",
+                    "run",
+                    "--target-host",
+                    responder.host,
+                    "--target-port",
+                    str(responder.port),
+                    "--scope",
+                    "tier1",
+                    "--layer",
+                    "model",
+                    "--strategy",
+                    "default",
+                    "--max-cases",
+                    "2",
+                    "--timeout",
+                    "0.5",
+                    "--cooldown",
+                    "0",
                     "--no-process-check",
-                    "--output", out,
+                    "--output",
+                    out,
                 ],
             )
             self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -97,9 +107,12 @@ class CampaignRunCLITests(unittest.TestCase):
         result = self.runner.invoke(
             app,
             [
-                "campaign", "run",
-                "--target-host", "",
-                "--max-cases", "1",
+                "campaign",
+                "run",
+                "--target-host",
+                "",
+                "--max-cases",
+                "1",
             ],
         )
         self.assertNotEqual(result.exit_code, 0)
@@ -142,7 +155,9 @@ class CampaignReportCLITests(unittest.TestCase):
             self.assertEqual(payload["cases"][0]["verdict"], "suspicious")
 
     def test_report_missing_file_exits_nonzero(self) -> None:
-        result = self.runner.invoke(app, ["campaign", "report", "/nonexistent/file.jsonl"])
+        result = self.runner.invoke(
+            app, ["campaign", "report", "/nonexistent/file.jsonl"]
+        )
         self.assertNotEqual(result.exit_code, 0)
 
 

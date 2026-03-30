@@ -46,7 +46,12 @@ class TestDialogScenario:
             scenario_type=DialogScenarioType.invite_dialog,
             fuzz_method="BYE",
             setup_steps=(
-                DialogStep(method="INVITE", role="send", expect_status_min=200, expect_status_max=299),
+                DialogStep(
+                    method="INVITE",
+                    role="send",
+                    expect_status_min=200,
+                    expect_status_max=299,
+                ),
                 DialogStep(method="ACK", role="send"),
             ),
             fuzz_step=DialogStep(method="BYE", role="send", is_fuzz_target=True),
@@ -110,7 +115,9 @@ class TestDialogExchangeResult:
         result = DialogExchangeResult(
             scenario_type=DialogScenarioType.invite_dialog,
             setup_results=(
-                DialogStepResult(step_index=0, method="INVITE", role="send", success=True),
+                DialogStepResult(
+                    step_index=0, method="INVITE", role="send", success=True
+                ),
                 DialogStepResult(step_index=1, method="ACK", role="send", success=True),
             ),
             fuzz_result=fuzz,

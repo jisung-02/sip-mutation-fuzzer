@@ -18,7 +18,9 @@ class OracleContextTests(unittest.TestCase):
         self.assertEqual(ctx.slow_threshold_ms, 3000.0)
 
     def test_custom_thresholds(self) -> None:
-        ctx = OracleContext(method="INVITE", timeout_threshold_ms=2000.0, slow_threshold_ms=1000.0)
+        ctx = OracleContext(
+            method="INVITE", timeout_threshold_ms=2000.0, slow_threshold_ms=1000.0
+        )
         self.assertEqual(ctx.timeout_threshold_ms, 2000.0)
         self.assertEqual(ctx.slow_threshold_ms, 1000.0)
 
@@ -39,7 +41,9 @@ class OracleContextTests(unittest.TestCase):
 
 class ProcessCheckResultTests(unittest.TestCase):
     def test_alive(self) -> None:
-        r = ProcessCheckResult(process_name="baresip", alive=True, pid=1234, check_time=1.0)
+        r = ProcessCheckResult(
+            process_name="baresip", alive=True, pid=1234, check_time=1.0
+        )
         self.assertTrue(r.alive)
         self.assertEqual(r.pid, 1234)
         self.assertIsNone(r.error)
@@ -70,7 +74,14 @@ class OracleVerdictTests(unittest.TestCase):
         self.assertEqual(v.details, {})
 
     def test_all_verdict_values(self) -> None:
-        for val in ("normal", "suspicious", "timeout", "crash", "stack_failure", "unknown"):
+        for val in (
+            "normal",
+            "suspicious",
+            "timeout",
+            "crash",
+            "stack_failure",
+            "unknown",
+        ):
             v = OracleVerdict(verdict=val, reason="test", elapsed_ms=0.0)
             self.assertEqual(v.verdict, val)
 

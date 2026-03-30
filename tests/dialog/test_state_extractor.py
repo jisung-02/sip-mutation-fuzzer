@@ -54,6 +54,7 @@ class TestExtractContactUri:
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         from volte_mutation_fuzzer.sip.common import SIPURI
+
         assert isinstance(ctx.request_uri, SIPURI)
         assert ctx.request_uri.port == 5070
 
@@ -80,16 +81,19 @@ class TestExtractRecordRoute:
     def test_multiple_record_routes_reversed(self) -> None:
         # Record-Route is ordered from first proxy to last (UAC→UAS direction)
         # Route set must be reversed for UAC use (RFC 3261 §12.1.2)
-        obs = _make_observation({
-            "Record-Route": "<sip:p1@example.com;lr>,<sip:p2@example.com;lr>"
-        })
+        obs = _make_observation(
+            {"Record-Route": "<sip:p1@example.com;lr>,<sip:p2@example.com;lr>"}
+        )
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         from volte_mutation_fuzzer.sip.common import SIPURI
+
         assert len(ctx.route_set) == 2
         assert isinstance(ctx.route_set[0], SIPURI)
         # p2 should be first after reversal
-        assert ctx.route_set[0].host == "p2@example.com" or ctx.route_set[0].user == "p2"
+        assert (
+            ctx.route_set[0].host == "p2@example.com" or ctx.route_set[0].user == "p2"
+        )
 
     def test_no_record_route_leaves_empty(self) -> None:
         obs = _make_observation({"To": "<sip:ue@example.com>;tag=t1"})

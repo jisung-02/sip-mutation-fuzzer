@@ -5,7 +5,12 @@ import unittest
 from unittest.mock import patch
 
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
-from volte_mutation_fuzzer.oracle.core import LogOracle, OracleEngine, ProcessOracle, SocketOracle
+from volte_mutation_fuzzer.oracle.core import (
+    LogOracle,
+    OracleEngine,
+    ProcessOracle,
+    SocketOracle,
+)
 from volte_mutation_fuzzer.sender.contracts import (
     SendReceiveResult,
     SocketObservation,
@@ -253,7 +258,9 @@ class LogOracleTests(unittest.TestCase):
             os.unlink(path)
 
     def test_normal_log_no_match(self) -> None:
-        path = self._write_log("INFO: started\nDEBUG: processing request\nINFO: response 200\n")
+        path = self._write_log(
+            "INFO: started\nDEBUG: processing request\nINFO: response 200\n"
+        )
         try:
             result, _ = self.oracle.check(path)
             self.assertFalse(result.matched)
