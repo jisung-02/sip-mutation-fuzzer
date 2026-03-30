@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+
 
 from volte_mutation_fuzzer.campaign.contracts import (
     CampaignConfig,
@@ -168,7 +168,9 @@ class ResultStoreTests(unittest.TestCase):
             campaign = self._make_campaign(str(path))
             store.write_header(campaign)
             store.append(self._make_case_result(0))
-            completed = campaign.model_copy(update={"status": "completed", "completed_at": "2026-01-01T01:00:00Z"})
+            completed = campaign.model_copy(
+                update={"status": "completed", "completed_at": "2026-01-01T01:00:00Z"}
+            )
             store.write_footer(completed)
 
             header, cases = store.read_all()
@@ -249,7 +251,8 @@ class CampaignExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = str(Path(tmpdir) / "campaign.jsonl")
             cfg = self._make_config(
-                responder.host, responder.port,
+                responder.host,
+                responder.port,
                 output_path=out_path,
             )
             executor = CampaignExecutor(cfg)
@@ -274,7 +277,8 @@ class CampaignExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = str(Path(tmpdir) / "campaign.jsonl")
             cfg = self._make_config(
-                responder.host, responder.port,
+                responder.host,
+                responder.port,
                 output_path=out_path,
             )
             executor = CampaignExecutor(cfg)
@@ -286,7 +290,8 @@ class CampaignExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = str(Path(tmpdir) / "campaign.jsonl")
             cfg = self._make_config(
-                "127.0.0.1", 19999,
+                "127.0.0.1",
+                19999,
                 max_cases=2,
                 output_path=out_path,
                 timeout_seconds=0.2,
@@ -312,7 +317,8 @@ class CampaignExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = str(Path(tmpdir) / "campaign.jsonl")
             cfg = self._make_config(
-                responder.host, responder.port,
+                responder.host,
+                responder.port,
                 max_cases=3,
                 output_path=out_path,
             )
@@ -339,7 +345,8 @@ class CampaignExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = str(Path(tmpdir) / "campaign.jsonl")
             cfg = self._make_config(
-                responder.host, responder.port,
+                responder.host,
+                responder.port,
                 output_path=out_path,
                 max_cases=1,
             )
@@ -361,7 +368,8 @@ class CampaignExecutorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_path = str(Path(tmpdir) / "campaign.jsonl")
             cfg = self._make_config(
-                "127.0.0.1", 19998,
+                "127.0.0.1",
+                19998,
                 max_cases=1,
                 output_path=out_path,
                 timeout_seconds=0.1,
@@ -369,7 +377,11 @@ class CampaignExecutorTests(unittest.TestCase):
                 strategies=("default",),
             )
             executor = CampaignExecutor(cfg)
-            with mock_patch.object(executor._generator, "generate_request", side_effect=RuntimeError("test error")):
+            with mock_patch.object(
+                executor._generator,
+                "generate_request",
+                side_effect=RuntimeError("test error"),
+            ):
                 stderr_buf = io.StringIO()
                 with mock_patch("sys.stderr", stderr_buf):
                     executor.run()
@@ -414,6 +426,7 @@ class Tier5CaseGeneratorTests(unittest.TestCase):
 
     def test_tier5_scenario_types_are_valid(self) -> None:
         from volte_mutation_fuzzer.dialog.contracts import DialogScenarioType
+
         valid_types = {t.value for t in DialogScenarioType}
         cfg = self._config(
             scope="tier5",
@@ -431,6 +444,56 @@ class Tier5CaseGeneratorTests(unittest.TestCase):
         cases = list(CaseGenerator(cfg).generate())
         for case in cases:
             self.assertIsNone(case.dialog_scenario)
+
+
+class Tier2And3CaseGeneratorTests(unittest.TestCase):
+    def _config(self, **kwargs) -> CampaignConfig:
+        defaults = dict(target_host="127.0.0.1")
+        defaults.update(kwargs)
+        return CampaignConfig(**defaults)
+
+    def test_tier2_methods(self) -> None:
+        cfg = self._config(scope="tier2", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        methods_seen = {c.method for c in cases}
+        self.assertEqual(methods_seen, {"SUBSCRIBE", "NOTIFY", "PUBLISH", "PRACK"})
+
+    def test_tier2_no_dialog_scenario(self) -> None:
+        cfg = self._config(scope="tier2", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        for case in cases:
+            self.assertIsNone(case.dialog_scenario)
+
+    def test_tier3_methods(self) -> None:
+        cfg = self._config(scope="tier3", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        methods_seen = {c.method for c in cases}
+        self.assertEqual(methods_seen, {"CANCEL", "ACK"})
+
+    def test_tier3_no_dialog_scenario(self) -> None:
+        cfg = self._config(scope="tier3", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        for case in cases:
+            self.assertIsNone(case.dialog_scenario)
+
+    def test_scope_all_generates_both_stateless_and_stateful_cancel_ack(self) -> None:
+        # tier3 produces stateless CANCEL/ACK (dialog_scenario=None)
+        # tier5 produces stateful CANCEL/ACK (dialog_scenario set)
+        # Both must survive deduplication when scope=all
+        cfg = self._config(scope="all", max_cases=100000)
+        cases = list(CaseGenerator(cfg).generate())
+        cancel_scenarios = {c.dialog_scenario for c in cases if c.method == "CANCEL"}
+        ack_scenarios = {c.dialog_scenario for c in cases if c.method == "ACK"}
+        self.assertIn(None, cancel_scenarios, "stateless CANCEL missing")
+        self.assertTrue(
+            any(s is not None for s in cancel_scenarios),
+            "stateful CANCEL missing",
+        )
+        self.assertIn(None, ack_scenarios, "stateless ACK missing")
+        self.assertTrue(
+            any(s is not None for s in ack_scenarios),
+            "stateful ACK missing",
+        )
 
 
 class DialogCaseExecutionTests(unittest.TestCase):
@@ -461,12 +524,15 @@ class DialogCaseExecutionTests(unittest.TestCase):
 
         # All cases should be setup_failed (target doesn't respond to INVITE)
         self.assertGreater(result.summary.setup_failed, 0)
-        self.assertEqual(result.summary.total, result.summary.setup_failed + result.summary.unknown)
+        self.assertEqual(
+            result.summary.total, result.summary.setup_failed + result.summary.unknown
+        )
 
     def test_dialog_case_verdict_in_summary(self) -> None:
         """Summary properly counts setup_failed."""
         summary = CampaignSummary()
         from volte_mutation_fuzzer.campaign.core import CampaignExecutor as CE
+
         CE._update_summary(summary, "setup_failed")
         self.assertEqual(summary.setup_failed, 1)
         self.assertEqual(summary.total, 1)

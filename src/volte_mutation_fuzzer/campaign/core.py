@@ -49,13 +49,13 @@ TIER_DEFINITIONS: dict[str, TierDefinition] = {
         strategies=("default", "state_breaker"),
     ),
     "tier2": TierDefinition(
-        methods=("PRACK", "UPDATE", "INFO"),
+        methods=("SUBSCRIBE", "NOTIFY", "PUBLISH", "PRACK"),
         layers=("model", "wire"),
         strategies=("default",),
     ),
     "tier3": TierDefinition(
-        methods=("SUBSCRIBE", "NOTIFY", "PUBLISH", "REFER"),
-        layers=("model",),
+        methods=("CANCEL", "ACK"),
+        layers=("model", "wire"),
         strategies=("default",),
     ),
     "tier4": TierDefinition(
@@ -94,8 +94,10 @@ class CaseGenerator:
         else:
             tiers = [TIER_DEFINITIONS[scope]]
 
-        # Collect unique ordered combinations from all relevant tiers
-        seen: set[tuple[str, str, str]] = set()
+        # Collect unique ordered combinations from all relevant tiers.
+        # Key includes dialog_scenario so stateless and stateful variants of the
+        # same method (e.g. CANCEL in tier3 vs tier5) are both generated.
+        seen: set[tuple[str, str, str, str | None]] = set()
         combos: list[tuple[str, str, str, str | None]] = []
         for tier in tiers:
             for method in tier.methods:
@@ -113,7 +115,7 @@ class CaseGenerator:
                             layer, frozenset()
                         ):
                             continue
-                        key = (method, layer, strategy)
+                        key = (method, layer, strategy, dialog_scenario)
                         if key not in seen:
                             seen.add(key)
                             combos.append((method, layer, strategy, dialog_scenario))
