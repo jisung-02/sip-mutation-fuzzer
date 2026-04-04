@@ -1,6 +1,9 @@
 import random
 import re
-from typing import Any, TypeAlias
+from types import UnionType
+from typing import Any, TypeAlias, Union, get_args, get_origin
+
+from pydantic import ValidationError
 
 from volte_mutation_fuzzer.generator import DialogContext
 from volte_mutation_fuzzer.mutator.contracts import (
@@ -26,8 +29,10 @@ from volte_mutation_fuzzer.sip.common import (
     RAckHeader,
     RetryAfterHeader,
     SIPFieldLocation,
+    SIPMethod,
     SIPURI,
     SubscriptionStateHeader,
+    URIReference,
     ViaHeader,
 )
 from volte_mutation_fuzzer.sip.requests import SIPRequest, SIPRequestDefinition
@@ -102,7 +107,114 @@ _BYTE_RANGE_PATTERN = re.compile(r"^range\[(\d+):(\d+)\]$")
 _CONTENT_LENGTH_HEADER = "Content-Length"
 _CRLF_DELIMITER = b"\r\n"
 
+_MODEL_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {
+        "sip_version",
+        "method",
+        "status_code",
+        "content_length",
+        "body",
+        "extension_headers",
+        "content_type",
+    }
+)
+
 _MISSING = object()
+
+
+def _is_union_annotation(annotation: Any) -> bool:
+    return get_origin(annotation) in (Union, UnionType)
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    if not _is_union_annotation(annotation):
+        return annotation
+
+    args = tuple(arg for arg in get_args(annotation) if arg is not type(None))
+    if len(args) == 1:
+        return args[0]
+    return annotation
+
+
+def _annotation_union_members(annotation: Any) -> tuple[Any, ...]:
+    annotation = _unwrap_optional(annotation)
+    if not _is_union_annotation(annotation):
+        return ()
+    return tuple(arg for arg in get_args(annotation) if arg is not type(None))
+
+
+def _is_uri_reference_annotation(annotation: Any) -> bool:
+    annotation = _unwrap_optional(annotation)
+    if annotation in {SIPURI, AbsoluteURI, URIReference}:
+        return True
+
+    union_args = _annotation_union_members(annotation)
+    return SIPURI in union_args
+
+
+def _is_name_address_or_uri_annotation(annotation: Any) -> bool:
+    annotation = _unwrap_optional(annotation)
+    if annotation is NameAddress or _is_uri_reference_annotation(annotation):
+        return True
+
+    union_args = _annotation_union_members(annotation)
+    return bool(union_args) and all(
+        arg is NameAddress or _is_uri_reference_annotation(arg) for arg in union_args
+    )
+
+
+def _classify_field(field_name: str, annotation: Any, value: Any) -> str:
+    del field_name
+    annotation = _unwrap_optional(annotation)
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if annotation is str:
+        return "string"
+    if annotation is bool or isinstance(value, bool):
+        return "boolean"
+    if annotation is int:
+        return "integer"
+    if annotation is float:
+        return "float_"
+    if annotation is NameAddress:
+        return "name_address"
+    if annotation is CSeqHeader:
+        return "cseq"
+    if annotation is EventHeader:
+        return "event"
+    if annotation is SubscriptionStateHeader:
+        return "subscription_state"
+    if annotation is RAckHeader:
+        return "rack"
+    if _is_uri_reference_annotation(annotation):
+        return "uri_reference"
+
+    if origin is list and args:
+        item_annotation = _unwrap_optional(args[0])
+        if item_annotation is NameAddress:
+            return "name_address_list"
+        if item_annotation is ViaHeader:
+            return "via_list"
+        if _is_name_address_or_uri_annotation(item_annotation):
+            return "addr_or_uri_list"
+        return "unsupported"
+
+    if origin is tuple and len(args) == 2 and args[1] is Ellipsis:
+        item_annotation = _unwrap_optional(args[0])
+        if item_annotation in {str, SIPMethod}:
+            return "str_tuple"
+        if _is_name_address_or_uri_annotation(item_annotation):
+            return "addr_or_uri_tuple"
+        return "unsupported"
+
+    if _is_union_annotation(annotation):
+        if isinstance(value, NameAddress):
+            return "name_address"
+        if isinstance(value, (SIPURI, AbsoluteURI)):
+            return "uri_reference"
+
+    return "unsupported"
 
 
 class SIPMutator:
@@ -154,19 +266,33 @@ class SIPMutator:
         packet: PacketModel,
         definition: PacketDefinition,
     ) -> tuple[MutationTarget, ...]:
-        available_roots = {
-            descriptor.python_name for descriptor in definition.field_descriptors
-        }
+        del definition
         targets: list[MutationTarget] = []
 
-        for path in _SUPPORTED_MODEL_TARGETS:
-            root_name = path.split(".", 1)[0]
-            if root_name not in available_roots:
+        for field_name, field_info in packet.__class__.model_fields.items():
+            if field_name in _MODEL_EXCLUDED_FIELDS:
                 continue
-            value = self._get_path_value(packet, path)
+            value = getattr(packet, field_name)
+            if value is None:
+                continue
+            category = _classify_field(field_name, field_info.annotation, value)
+            if category == "unsupported":
+                continue
+            targets.append(MutationTarget(layer="model", path=field_name))
+
+        legacy_sub_paths = {
+            "cseq": "cseq.sequence",
+            "request_uri": "request_uri.host",
+            "from_": "from_.parameters.tag",
+            "to": "to.parameters.tag",
+        }
+        for root_name, sub_path in legacy_sub_paths.items():
+            if not any(target.path == root_name for target in targets):
+                continue
+            value = self._get_path_value(packet, sub_path)
             if value is _MISSING or value is None:
                 continue
-            targets.append(MutationTarget(layer="model", path=path))
+            targets.append(MutationTarget(layer="model", path=sub_path))
 
         return tuple(targets)
 
@@ -177,9 +303,13 @@ class SIPMutator:
                 return raw_name
 
             canonical_name = _MODEL_TARGET_ALIASES.get(raw_name.lower())
-            if canonical_name is None:
+            if canonical_name is not None:
+                return canonical_name
+
+            normalized = raw_name.lower().replace("-", "_")
+            if "." in normalized:
                 raise ValueError(f"unsupported model target path: {target.path}")
-            return canonical_name
+            return normalized
 
         if target.layer == "wire":
             raw_name = target.path.strip()
@@ -222,19 +352,23 @@ class SIPMutator:
         rng: random.Random,
     ) -> tuple[PacketModel, MutationRecord]:
         canonical_path = target.path
+        category = self._resolve_field_category(packet, canonical_path)
         before_value = self._get_path_value(packet, canonical_path)
         if before_value is _MISSING or before_value is None:
             raise ValueError(
                 f"model target is not available on packet: {canonical_path}"
             )
 
+        payload = self._build_packet_payload(packet)
+        payload_value = self._get_path_value(payload, canonical_path)
+
         after_value = self._build_model_value(
             target_path=canonical_path,
-            current_value=before_value,
+            current_value=payload_value,
+            category=category,
             rng=rng,
         )
 
-        payload = self._build_packet_payload(packet)
         self._set_path_value(payload, canonical_path, after_value)
         mutated_packet = packet.__class__.model_validate(payload)
         record = self._record_mutation(
@@ -266,13 +400,18 @@ class SIPMutator:
                 raise ValueError(
                     f"model target is not available for packet: {selected_target.path}"
                 )
-            operator = self._resolve_model_operator(selected_target)
-            mutated_packet, record = self._apply_model_operator(
-                packet,
-                selected_target,
-                operator,
-                rng,
-            )
+            operator = self._resolve_model_operator(selected_target, packet)
+            try:
+                mutated_packet, record = self._apply_model_operator(
+                    packet,
+                    selected_target,
+                    operator,
+                    rng,
+                )
+            except (ValidationError, ValueError) as exc:
+                raise ValueError(
+                    f"model target could not be mutated: {selected_target.path}"
+                ) from exc
             return MutatedCase(
                 original_packet=packet,
                 mutated_packet=mutated_packet,
@@ -290,21 +429,26 @@ class SIPMutator:
             raise ValueError("no model mutation targets available for packet")
 
         remaining_targets = list(candidate_targets)
-        operation_count = min(config.max_operations, len(remaining_targets))
         current_packet = packet
         records: list[MutationRecord] = []
 
-        for _index in range(operation_count):
+        while remaining_targets and len(records) < config.max_operations:
             selected_index = rng.randrange(len(remaining_targets))
             selected_target = remaining_targets.pop(selected_index)
-            operator = self._resolve_model_operator(selected_target)
-            current_packet, record = self._apply_model_operator(
-                current_packet,
-                selected_target,
-                operator,
-                rng,
-            )
+            operator = self._resolve_model_operator(selected_target, current_packet)
+            try:
+                current_packet, record = self._apply_model_operator(
+                    current_packet,
+                    selected_target,
+                    operator,
+                    rng,
+                )
+            except (ValidationError, ValueError):
+                continue
             records.append(record)
+
+        if not records:
+            raise ValueError("no model mutation targets available for packet")
 
         return MutatedCase(
             original_packet=packet,
@@ -407,8 +551,40 @@ class SIPMutator:
             operator_hint=target.operator_hint,
         )
 
-    def _resolve_model_operator(self, target: MutationTarget) -> str:
-        operator = _MODEL_TARGET_OPERATORS[target.path]
+    def _resolve_model_operator(
+        self,
+        target: MutationTarget,
+        packet: PacketModel | None = None,
+    ) -> str:
+        if target.path in _MODEL_TARGET_OPERATORS:
+            operator = _MODEL_TARGET_OPERATORS[target.path]
+        else:
+            if packet is None:
+                raise ValueError(
+                    f"packet required to resolve operator for: {target.path}"
+                )
+            category = self._resolve_field_category(packet, target.path)
+            category_operators = {
+                "string": "replace_text",
+                "integer": "replace_integer",
+                "float_": "replace_float",
+                "boolean": "flip_boolean",
+                "str_tuple": "mutate_str_tuple",
+                "name_address": "corrupt_name_address",
+                "name_address_list": "corrupt_name_address_list",
+                "via_list": "corrupt_via",
+                "cseq": "replace_integer",
+                "event": "corrupt_event",
+                "subscription_state": "corrupt_subscription_state",
+                "rack": "corrupt_rack",
+                "uri_reference": "replace_host",
+                "addr_or_uri_list": "corrupt_addr_or_uri_list",
+                "addr_or_uri_tuple": "corrupt_addr_or_uri_tuple",
+            }
+            operator = category_operators.get(category)
+            if operator is None:
+                raise ValueError(f"no operator for category: {category}")
+
         if target.operator_hint is not None and target.operator_hint != operator:
             raise ValueError(
                 f"operator_hint '{target.operator_hint}' is not supported for {target.path}"
@@ -452,30 +628,150 @@ class SIPMutator:
         *,
         target_path: str,
         current_value: Any,
+        category: str,
         rng: random.Random,
     ) -> Any:
-        if target_path in {
-            "call_id",
-            "from_.parameters.tag",
-            "to.parameters.tag",
-            "reason_phrase",
-        }:
-            return f"mut-{rng.getrandbits(32):08x}"
-        if target_path == "request_uri.host":
-            return f"mut-{rng.getrandbits(32):08x}.invalid"
+        token = f"mut-{rng.getrandbits(32):08x}"
+        host = f"{token}.invalid"
+
+        if target_path in {"from_.parameters.tag", "to.parameters.tag"}:
+            return token
         if target_path == "cseq.sequence":
             return self._mutate_bounded_integer(
                 current_value=int(current_value),
                 modulus=2**31,
                 rng=rng,
             )
+        if target_path == "request_uri.host":
+            return host
         if target_path == "max_forwards":
             return self._mutate_bounded_integer(
                 current_value=int(current_value),
                 modulus=256,
                 rng=rng,
             )
+
+        if category == "string":
+            return token
+        if category == "integer":
+            return self._mutate_bounded_integer(
+                current_value=int(current_value),
+                modulus=2**31,
+                rng=rng,
+            )
+        if category == "float_":
+            return round(float(current_value) + rng.uniform(-100.0, 100.0), 3)
+        if category == "boolean":
+            return not current_value
+        if category == "str_tuple":
+            items = list(current_value)
+            if not items:
+                return (token,)
+            operation_choices = ["add", "replace"]
+            if len(items) > 1:
+                operation_choices.insert(0, "remove")
+            operation = operation_choices[rng.randrange(len(operation_choices))]
+            if operation == "remove":
+                items.pop(rng.randrange(len(items)))
+            elif operation == "add":
+                items.insert(rng.randrange(len(items) + 1), token)
+            else:
+                items[rng.randrange(len(items))] = token
+            return tuple(items)
+        if category == "name_address":
+            mutated_value = dict(current_value)
+            uri = dict(mutated_value["uri"])
+            if "host" in uri:
+                uri["host"] = host
+            elif "uri" in uri:
+                uri["uri"] = f"https://{host}"
+            mutated_value["uri"] = uri
+            return mutated_value
+        if category == "name_address_list":
+            mutated_value = [dict(item) for item in current_value]
+            first = dict(mutated_value[0])
+            uri = dict(first["uri"])
+            if "host" in uri:
+                uri["host"] = host
+            elif "uri" in uri:
+                uri["uri"] = f"https://{host}"
+            first["uri"] = uri
+            mutated_value[0] = first
+            return mutated_value
+        if category == "via_list":
+            mutated_value = [dict(item) for item in current_value]
+            first = dict(mutated_value[0])
+            first["host"] = host
+            first["branch"] = f"z9hG4bK-{token}"
+            mutated_value[0] = first
+            return mutated_value
+        if category == "cseq":
+            mutated_value = dict(current_value)
+            mutated_value["sequence"] = self._mutate_bounded_integer(
+                current_value=int(mutated_value["sequence"]),
+                modulus=2**31,
+                rng=rng,
+            )
+            return mutated_value
+        if category == "event":
+            mutated_value = dict(current_value)
+            mutated_value["package"] = token
+            return mutated_value
+        if category == "subscription_state":
+            mutated_value = dict(current_value)
+            mutated_value["state"] = token
+            return mutated_value
+        if category == "rack":
+            mutated_value = dict(current_value)
+            mutated_value["response_num"] = self._mutate_bounded_integer(
+                current_value=int(mutated_value["response_num"]),
+                modulus=2**31,
+                rng=rng,
+            )
+            return mutated_value
+        if category == "uri_reference":
+            mutated_value = dict(current_value)
+            if "host" in mutated_value:
+                mutated_value["host"] = host
+            elif "uri" in mutated_value:
+                mutated_value["uri"] = f"https://{host}"
+            return mutated_value
+        if category in {"addr_or_uri_list", "addr_or_uri_tuple"}:
+            items = [dict(item) for item in current_value]
+            first = dict(items[0])
+            if "uri" in first and isinstance(first["uri"], dict):
+                uri = dict(first["uri"])
+                if "host" in uri:
+                    uri["host"] = host
+                elif "uri" in uri:
+                    uri["uri"] = f"https://{host}"
+                first["uri"] = uri
+            elif "host" in first:
+                first["host"] = host
+            elif "uri" in first:
+                first["uri"] = f"https://{host}"
+            items[0] = first
+            if category == "addr_or_uri_tuple":
+                return tuple(items)
+            return items
         raise ValueError(f"unsupported model target path: {target_path}")
+
+    def _resolve_field_category(self, packet: PacketModel, path: str) -> str:
+        legacy_path_categories = {
+            "cseq.sequence": "integer",
+            "request_uri.host": "string",
+            "from_.parameters.tag": "string",
+            "to.parameters.tag": "string",
+        }
+        if path in legacy_path_categories:
+            return legacy_path_categories[path]
+
+        root_name = path.split(".", 1)[0]
+        field_info = packet.__class__.model_fields.get(root_name)
+        if field_info is None:
+            raise ValueError(f"unknown model field: {root_name}")
+        value = getattr(packet, root_name)
+        return _classify_field(root_name, field_info.annotation, value)
 
     def _mutate_bounded_integer(
         self,
@@ -646,6 +942,8 @@ class SIPMutator:
             return self._remove_wire_header(editable_message, target)
         if operator == "duplicate_header":
             return self._duplicate_wire_header(editable_message, target, rng)
+        if operator == "mutate_header_value":
+            return self._mutate_wire_header_value(editable_message, target, rng)
         if operator == "shuffle_header":
             return self._shuffle_wire_header(editable_message, target, rng)
 
@@ -972,7 +1270,7 @@ class SIPMutator:
         elif target.path in {"body", "content_length"}:
             operators = ("mismatch_content_length",)
         else:
-            operators = ["remove_header", "duplicate_header"]
+            operators = ["remove_header", "duplicate_header", "mutate_header_value"]
             if len(editable_message.headers) > 1:
                 operators.append("shuffle_header")
             operators = tuple(operators)
@@ -1061,6 +1359,55 @@ class SIPMutator:
                 self._header_snapshot(headers[index]),
                 self._header_snapshot(headers[index + 1]),
             ),
+        )
+        return mutated_message, record
+
+    def _mutate_wire_header_value(
+        self,
+        editable_message: EditableSIPMessage,
+        target: MutationTarget,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        index = self._select_header_index(editable_message, target, rng)
+        headers = list(editable_message.headers)
+        original_header = headers[index]
+        strategy = rng.choice(
+            (
+                "empty",
+                "overflow",
+                "garbage",
+                "wrong_format",
+                "crlf_inject",
+                "null_byte",
+            )
+        )
+
+        if strategy == "empty":
+            mutated_value = ""
+        elif strategy == "overflow":
+            mutated_value = "X" * rng.randint(1000, 5000)
+        elif strategy == "garbage":
+            mutated_value = rng.randbytes(rng.randint(10, 100)).hex()
+        elif strategy == "wrong_format":
+            mutated_value = str(rng.randint(0, 99999))
+        elif strategy == "crlf_inject":
+            mutated_value = f"injected\r\nEvil-Header: mut-{rng.getrandbits(32):08x}"
+        else:
+            mutated_value = f"before\x00after-{rng.getrandbits(16):04x}"
+
+        headers[index] = EditableHeader(
+            name=original_header.name,
+            value=mutated_value,
+        )
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        record = self._record_mutation(
+            target=target,
+            operator="mutate_header_value",
+            before=(original_header.name, original_header.value),
+            after=(original_header.name, mutated_value),
+            note=f"sub_strategy={strategy}",
         )
         return mutated_message, record
 
