@@ -334,6 +334,7 @@ class SIPGenerator:
                 body_ctx = BodyContext(
                     method=spec.related_method,
                     status_code=spec.status_code,
+                    event_package=spec.event_package,
                 )
                 body_model = self._body_factory.create(body_ctx)
                 if body_model is not None:

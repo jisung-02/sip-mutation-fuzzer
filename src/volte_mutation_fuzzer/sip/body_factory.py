@@ -72,6 +72,10 @@ class BodyFactory:
         status_code = ctx.status_code
         if status_code is None:
             return None
+        if ctx.method == SIPMethod.NOTIFY and ctx.event_package:
+            body_cls = self._EVENT_BODY_MAP.get(self._normalize(ctx.event_package))
+            if body_cls is not None and 200 <= status_code < 300:
+                return body_cls
         if ctx.method == SIPMethod.INVITE and status_code == 380:
             return ImsServiceBody
         if ctx.method in self._SDP_METHODS and (
