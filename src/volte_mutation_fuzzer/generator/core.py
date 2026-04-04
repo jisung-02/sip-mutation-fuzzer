@@ -8,6 +8,10 @@ from volte_mutation_fuzzer.generator.contracts import (
     RequestSpec,
     ResponseSpec,
 )
+from volte_mutation_fuzzer.generator.optional_defaults import (
+    get_request_optional_defaults,
+    get_response_optional_defaults,
+)
 from volte_mutation_fuzzer.sip.body_factory import BodyContext, BodyFactory
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import (
@@ -235,6 +239,17 @@ class SIPGenerator:
         ):
             defaults.setdefault("contact", [self._build_contact()])
 
+        optional = get_request_optional_defaults(spec.method)
+        for key, value in optional.items():
+            defaults.setdefault(key, value)
+
+        if spec.method == SIPMethod.INVITE:
+            defaults.setdefault(
+                "p_asserted_identity", (self._build_from_name_address(),)
+            )
+        if spec.method == SIPMethod.REFER:
+            defaults.setdefault("referred_by", self._build_from_name_address())
+
         if "body" not in (spec.overrides or {}):
             event_pkg = spec.event_package or self._infer_event_package(defaults)
             body_ctx = BodyContext(
@@ -322,6 +337,17 @@ class SIPGenerator:
         for header_name in policy.required_headers:
             if header_name not in defaults:
                 defaults[header_name] = self._build_required_response_field(header_name)
+        for header_name in policy.forbidden_headers:
+            defaults.pop(header_name, None)
+
+        optional = get_response_optional_defaults(spec.related_method, spec.status_code)
+        for key, value in optional.items():
+            defaults.setdefault(key, value)
+
+        if spec.related_method == SIPMethod.REGISTER and 200 <= spec.status_code < 300:
+            defaults.setdefault("service_route", (self._build_from_name_address().uri,))
+            defaults.setdefault("sip_etag", uuid4().hex)
+
         for header_name in policy.forbidden_headers:
             defaults.pop(header_name, None)
 
@@ -578,3 +604,14 @@ class SIPGenerator:
 
     def _new_tag(self) -> str:
         return uuid4().hex[:16]
+
+    def _build_from_name_address(self) -> NameAddress:
+        """Build a tag-less NameAddress from the from_* settings."""
+        return NameAddress(
+            display_name=self.settings.from_display_name,
+            uri=SIPURI(
+                user=self.settings.from_user,
+                host=self.settings.from_host,
+                port=self.settings.from_port,
+            ),
+        )

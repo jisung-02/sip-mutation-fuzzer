@@ -11,8 +11,10 @@ from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.requests import (
     REQUEST_MODELS_BY_METHOD,
+    CancelRequest,
     InviteRequest,
     OptionsRequest,
+    SubscribeRequest,
 )
 from volte_mutation_fuzzer.sip.responses import (
     RESPONSE_MODELS_BY_CODE,
@@ -631,6 +633,117 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                 context=None,
                 preconditions=("Unexpected request precondition.",),
             )
+
+    def test_request_defaults_populate_optional_headers_for_invite(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(local_tag="ue-tag")
+
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.INVITE),
+            context,
+        )
+        packet = InviteRequest.model_validate(defaults)
+
+        self.assertEqual(packet.session_expires, 1800)
+        self.assertEqual(packet.min_se, 90)
+        self.assertEqual(packet.privacy, ("none",))
+        self.assertEqual(packet.subject, "VoLTE Call")
+        self.assertEqual(packet.priority, "normal")
+        assert packet.supported is not None
+        self.assertIn("histinfo", packet.supported)
+        self.assertIn("norefersub", packet.supported)
+        assert packet.p_asserted_identity is not None
+        self.assertEqual(len(packet.p_asserted_identity), 1)
+        self.assertEqual(packet.p_asserted_identity[0].display_name, "Remote")
+
+    def test_request_defaults_populate_optional_headers_for_subscribe(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.SUBSCRIBE)
+        )
+        packet = SubscribeRequest.model_validate(defaults)
+
+        self.assertEqual(packet.expires, 3600)
+        self.assertEqual(packet.organization, "VoLTE Test Operator")
+        assert packet.allow is not None
+        self.assertIn(SIPMethod.INVITE, packet.allow)
+
+    def test_request_defaults_populate_optional_headers_for_cancel(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.CANCEL)
+        )
+        packet = CancelRequest.model_validate(defaults)
+
+        self.assertEqual(
+            packet.reason,
+            'SIP;cause=location_cancelled;text="Call cancelled"',
+        )
+        self.assertIsNone(packet.require)
+        self.assertIsNone(packet.proxy_require)
+
+    def test_response_defaults_populate_optional_headers_for_invite_180(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id="call-1",
+            local_tag="ue-tag",
+            local_cseq=7,
+        )
+
+        defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=180, related_method=SIPMethod.INVITE),
+            context,
+        )
+        packet = RESPONSE_MODELS_BY_CODE[180].model_validate(defaults)
+
+        self.assertEqual(packet.rseq, 1)
+        self.assertEqual(packet.session_expires, 1800)
+        self.assertEqual(packet.min_se, 90)
+        assert packet.recv_info is not None
+        self.assertEqual(packet.recv_info, ("g.3gpp.iari-ref",))
+        assert packet.supported is not None
+        self.assertIn("100rel", packet.supported)
+
+    def test_overrides_take_precedence_over_optional_defaults(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(local_tag="ue-tag")
+
+        packet = generator.generate_request(
+            RequestSpec(
+                method=SIPMethod.INVITE,
+                overrides={
+                    "session_expires": 900,
+                    "supported": ("custom",),
+                    "subject": "Overridden Subject",
+                },
+            ),
+            context,
+        )
+
+        self.assertEqual(packet.session_expires, 900)
+        self.assertEqual(packet.supported, ("custom",))
+        self.assertEqual(packet.subject, "Overridden Subject")
+
+    def test_response_defaults_do_not_populate_message_success_forbidden_headers(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id="call-1",
+            local_tag="ue-tag",
+            local_cseq=7,
+        )
+
+        defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.MESSAGE),
+            context,
+        )
+        packet = RESPONSE_MODELS_BY_CODE[200].model_validate(defaults)
+
+        self.assertIsNone(packet.contact)
+        self.assertIsNone(packet.body)
 
 
 if __name__ == "__main__":
