@@ -419,8 +419,13 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         status_code=202,
         reason_phrase="Accepted (Deprecated)",
         model_name="AcceptedDeprecatedResponse",
-        description="Accepted but not yet fully completed; still valid for MESSAGE asynchronous handling, deprecated for SUBSCRIBE, and obsoleted for new REFER usage.",
-        typical_scenario="Asynchronous MESSAGE processing, with legacy interoperability from older SUBSCRIBE/REFER deployments still possible.",
+        description=(
+            "Accepted but not yet fully completed; explicitly allowed for MESSAGE"
+            " asynchronous gateway delivery (RFC 3428). Not mentioned by RFC 6665"
+            " for SUBSCRIBE (200 OK is the expected response). Forbidden for REFER"
+            " by RFC 7647 (MUST NOT send 202)."
+        ),
+        typical_scenario="Asynchronous MESSAGE processing via a store-and-forward gateway.",
         reference_rfcs=("RFC3261", "RFC3428", "RFC6665", "RFC7647"),
         related_methods=(SIPMethod.MESSAGE,),
     ),
@@ -854,10 +859,15 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
         status_code=486,
         reason_phrase="Busy Here",
         model_name="BusyHereResponse",
-        description="Specific target is busy.",
+        description=(
+            "The callee's end system was contacted successfully but the callee is"
+            " currently not willing or able to take additional calls at this end system"
+            " (RFC 3261 §21.4.23). Semantically INVITE-specific: 'callee' and 'calls'"
+            " terminology applies exclusively to session-establishment requests."
+        ),
         typical_scenario="Remote user rejects INVITE because they are busy at this location.",
         reference_rfcs=("RFC3261",),
-        related_methods=ALL_METHODS,
+        related_methods=INVITE_ONLY,
     ),
     ResponseModelSpec(
         status_code=487,

@@ -163,30 +163,27 @@ class CaseGenerator:
 
             # Response-plane cases
             for code in tier.response_codes:
-                # Use tier's default related_method, but fall back to the first
-                # allowed method from the catalog if the default isn't supported.
                 defn = SIP_CATALOG.get_response(code)
-                if (
-                    defn.related_methods
-                    and SIPMethod(tier.related_method) not in defn.related_methods
-                ):
-                    related = defn.related_methods[0].value
-                else:
-                    related = tier.related_method
-                for layer in tier.layers:
-                    if layer not in config.layers:
-                        continue
-                    for strategy in tier.strategies:
-                        if strategy not in config.strategies:
+                related_methods = (
+                    [m.value for m in defn.related_methods]
+                    if defn.related_methods
+                    else [tier.related_method]
+                )
+                for related in related_methods:
+                    for layer in tier.layers:
+                        if layer not in config.layers:
                             continue
-                        if strategy not in _SUPPORTED_STRATEGIES.get(
-                            layer, frozenset()
-                        ):
-                            continue
-                        key = (f"R{code}/{related}", layer, strategy, None)
-                        if key not in seen:
-                            seen.add(key)
-                            combos.append((related, layer, strategy, None, code))
+                        for strategy in tier.strategies:
+                            if strategy not in config.strategies:
+                                continue
+                            if strategy not in _SUPPORTED_STRATEGIES.get(
+                                layer, frozenset()
+                            ):
+                                continue
+                            key = (f"R{code}/{related}", layer, strategy, None)
+                            if key not in seen:
+                                seen.add(key)
+                                combos.append((related, layer, strategy, None, code))
 
         for case_id, (
             method,

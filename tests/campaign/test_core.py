@@ -679,3 +679,54 @@ class ResponseTierCaseGeneratorTests(unittest.TestCase):
         self.assertIn("mutate response", cmd)
         self.assertIn("200", cmd)
         self.assertIn("INVITE", cmd)
+
+    def test_all_methods_code_generates_all_related_methods(self) -> None:
+        """200 OK (ALL_METHODS)는 14개 related_method를 모두 생성해야 한다."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="tier7", max_cases=500)
+        cases = list(CaseGenerator(cfg).generate())
+        code_200_methods = {c.related_method for c in cases if c.status_code == 200}
+        self.assertEqual(len(code_200_methods), 14)
+
+    def test_auth_relevant_code_generates_12_methods(self) -> None:
+        """401 Unauthorized (AUTH_RELEVANT)는 ACK, CANCEL 제외 12개 메서드를 생성해야 한다."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="tier9", max_cases=500)
+        cases = list(CaseGenerator(cfg).generate())
+        code_401_methods = {c.related_method for c in cases if c.status_code == 401}
+        self.assertEqual(len(code_401_methods), 12)
+        self.assertNotIn("ACK", code_401_methods)
+        self.assertNotIn("CANCEL", code_401_methods)
+
+    def test_invite_only_code_generates_single_method(self) -> None:
+        """600 Busy Everywhere (INVITE_ONLY)는 INVITE 하나만 생성해야 한다."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="tier11", max_cases=500)
+        cases = list(CaseGenerator(cfg).generate())
+        code_600_methods = {c.related_method for c in cases if c.status_code == 600}
+        self.assertEqual(code_600_methods, {"INVITE"})
+
+    def test_general_redirect_generates_3_methods(self) -> None:
+        """301 Moved Permanently (GENERAL_REDIRECT)는 INVITE, OPTIONS, REGISTER 3개를 생성해야 한다."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="tier8", max_cases=500)
+        cases = list(CaseGenerator(cfg).generate())
+        code_301_methods = {c.related_method for c in cases if c.status_code == 301}
+        self.assertEqual(code_301_methods, {"INVITE", "OPTIONS", "REGISTER"})
+
+    def test_202_accepted_generates_message_only(self) -> None:
+        """202 Accepted는 MESSAGE 하나만 허용된다."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="tier7", max_cases=500)
+        cases = list(CaseGenerator(cfg).generate())
+        code_202_methods = {c.related_method for c in cases if c.status_code == 202}
+        self.assertEqual(code_202_methods, {"MESSAGE"})
+
+    def test_494_generates_register_and_invite(self) -> None:
+        """494 Security Agreement Required는 REGISTER, INVITE 2개를 생성해야 한다."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="tier9", max_cases=500)
+        cases = list(CaseGenerator(cfg).generate())
+        code_494_methods = {c.related_method for c in cases if c.status_code == 494}
+        self.assertEqual(code_494_methods, {"REGISTER", "INVITE"})
+
+    def test_total_response_cases_increased(self) -> None:
+        """scope=all 시 응답 케이스가 200개 이상이어야 한다 (이전 ~46개에서 ~360개로 증가)."""
+        cfg = CampaignConfig(target_host="127.0.0.1", scope="all", max_cases=2000)
+        cases = list(CaseGenerator(cfg).generate())
+        resp_cases = [c for c in cases if c.status_code is not None]
+        self.assertGreaterEqual(len(resp_cases), 200)
