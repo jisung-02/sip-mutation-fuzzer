@@ -11,6 +11,7 @@ from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.requests import (
     REQUEST_MODELS_BY_METHOD,
+    ByeRequest,
     CancelRequest,
     InviteRequest,
     OptionsRequest,
@@ -655,6 +656,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         assert packet.p_asserted_identity is not None
         self.assertEqual(len(packet.p_asserted_identity), 1)
         self.assertEqual(packet.p_asserted_identity[0].display_name, "Remote")
+        self.assertEqual(packet.content_disposition, "session")
+        self.assertIsNotNone(packet.content_language)
 
     def test_request_defaults_populate_optional_headers_for_subscribe(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
@@ -705,6 +708,26 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.recv_info, ("g.3gpp.iari-ref",))
         assert packet.supported is not None
         self.assertIn("100rel", packet.supported)
+        self.assertIsNotNone(packet.timestamp)
+        self.assertGreater(packet.timestamp, 0)
+
+    def test_request_defaults_populate_contact_for_bye(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id="call-1",
+            local_tag="ue-tag",
+            remote_tag="remote-tag",
+            local_cseq=1,
+            remote_cseq=1,
+        )
+
+        defaults = generator._build_request_defaults(
+            RequestSpec(method=SIPMethod.BYE), context
+        )
+        packet = ByeRequest.model_validate(defaults)
+
+        self.assertIsNotNone(packet.contact)
+        self.assertEqual(len(packet.contact), 1)
 
     def test_overrides_take_precedence_over_optional_defaults(self) -> None:
         generator = SIPGenerator(GeneratorSettings())

@@ -1,3 +1,4 @@
+import time
 from copy import deepcopy
 from uuid import uuid4
 from typing import Any
@@ -89,6 +90,7 @@ class SIPGenerator:
         payload = self._build_request_defaults(spec, context)
         if spec.has_overrides:
             payload = self._apply_overrides(payload, spec.overrides)
+        self._populate_body_header_defaults(payload)
 
         # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
         return model.model_validate(payload)
@@ -109,6 +111,7 @@ class SIPGenerator:
         payload = self._build_response_defaults(spec, context)
         if spec.has_overrides:
             payload = self._apply_overrides(payload, spec.overrides)
+        self._populate_body_header_defaults(payload)
 
         # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
         return model.model_validate(payload)
@@ -199,8 +202,12 @@ class SIPGenerator:
             defaults["route"] = list(context.route_set)
 
         if spec.method in {
+            SIPMethod.BYE,
+            SIPMethod.INFO,
             SIPMethod.INVITE,
             SIPMethod.NOTIFY,
+            SIPMethod.OPTIONS,
+            SIPMethod.PRACK,
             SIPMethod.REFER,
             SIPMethod.SUBSCRIBE,
             SIPMethod.UPDATE,
@@ -264,6 +271,8 @@ class SIPGenerator:
                 defaults["content_type"] = body_model.content_type
                 defaults["content_length"] = len(defaults["body"].encode("utf-8"))
 
+        self._populate_body_header_defaults(defaults)
+
         return defaults
 
     def _infer_event_package(self, defaults: dict[str, Any]) -> str | None:
@@ -295,6 +304,7 @@ class SIPGenerator:
             ),
             "server": self.settings.user_agent,
             "content_length": 0,
+            "timestamp": round(time.time(), 3),
         }
 
         if context.route_set:
@@ -373,7 +383,23 @@ class SIPGenerator:
                 continue
             defaults[field_name] = self._build_required_response_field(field_name)
 
+        self._populate_body_header_defaults(defaults)
+
         return defaults
+
+    def _populate_body_header_defaults(self, defaults: dict[str, Any]) -> None:
+        """Set content_disposition and content_language when body is present."""
+        body = defaults.get("body")
+        if not body:
+            return
+        if defaults.get("content_length", 0) == 0:
+            defaults["content_length"] = len(body.encode("utf-8"))
+        content_type = str(defaults.get("content_type") or "")
+        defaults.setdefault(
+            "content_disposition",
+            "session" if "sdp" in content_type else "render",
+        )
+        defaults.setdefault("content_language", ("en",))
 
     def _build_required_response_field(self, field_name: str) -> Any:
         if field_name == "allow":
