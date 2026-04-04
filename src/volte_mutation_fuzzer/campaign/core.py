@@ -17,7 +17,12 @@ from volte_mutation_fuzzer.campaign.contracts import (
 )
 from volte_mutation_fuzzer.dialog.core import DialogOrchestrator
 from volte_mutation_fuzzer.dialog.scenarios import scenario_for_method
-from volte_mutation_fuzzer.generator.contracts import GeneratorSettings, RequestSpec
+from volte_mutation_fuzzer.generator.contracts import (
+    DialogContext,
+    GeneratorSettings,
+    RequestSpec,
+    ResponseSpec,
+)
 from volte_mutation_fuzzer.generator.core import SIPGenerator
 from volte_mutation_fuzzer.mutator.contracts import MutationConfig, MutatedCase
 from volte_mutation_fuzzer.mutator.core import SIPMutator
@@ -28,6 +33,7 @@ from volte_mutation_fuzzer.sender.contracts import (
     TargetEndpoint,
 )
 from volte_mutation_fuzzer.sender.core import SIPSenderReactor
+from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 
@@ -64,10 +70,41 @@ TIER_DEFINITIONS: dict[str, TierDefinition] = {
         strategies=("default",),
     ),
     "tier5": TierDefinition(
-        methods=("CANCEL", "ACK", "BYE", "UPDATE", "REFER", "INFO"),
+        methods=("CANCEL", "ACK", "BYE", "UPDATE", "REFER", "INFO", "PRACK"),
         layers=("model", "wire"),
         strategies=("default",),
         requires_dialog=True,
+    ),
+    # Response-plane tiers (Groups F-K)
+    "tier6": TierDefinition(
+        response_codes=(100, 180, 183),
+        layers=("model", "wire"),
+        strategies=("default",),
+    ),
+    "tier7": TierDefinition(
+        response_codes=(200, 202),
+        layers=("model", "wire", "byte"),
+        strategies=("default", "state_breaker"),
+    ),
+    "tier8": TierDefinition(
+        response_codes=(301, 302, 408, 480, 503),
+        layers=("model", "wire"),
+        strategies=("default",),
+    ),
+    "tier9": TierDefinition(
+        response_codes=(401, 407, 494),
+        layers=("model", "wire"),
+        strategies=("default",),
+    ),
+    "tier10": TierDefinition(
+        response_codes=(403, 404, 486, 500),
+        layers=("model", "wire"),
+        strategies=("default",),
+    ),
+    "tier11": TierDefinition(
+        response_codes=(600, 603, 604, 606),
+        layers=("model", "wire"),
+        strategies=("default",),
     ),
 }
 
@@ -97,9 +134,11 @@ class CaseGenerator:
         # Collect unique ordered combinations from all relevant tiers.
         # Key includes dialog_scenario so stateless and stateful variants of the
         # same method (e.g. CANCEL in tier3 vs tier5) are both generated.
+        # combo: (method, layer, strategy, dialog_scenario, status_code)
         seen: set[tuple[str, str, str, str | None]] = set()
-        combos: list[tuple[str, str, str, str | None]] = []
+        combos: list[tuple[str, str, str, str | None, int | None]] = []
         for tier in tiers:
+            # Request-plane cases
             for method in tier.methods:
                 dialog_scenario: str | None = None
                 if tier.requires_dialog:
@@ -118,9 +157,44 @@ class CaseGenerator:
                         key = (method, layer, strategy, dialog_scenario)
                         if key not in seen:
                             seen.add(key)
-                            combos.append((method, layer, strategy, dialog_scenario))
+                            combos.append(
+                                (method, layer, strategy, dialog_scenario, None)
+                            )
 
-        for case_id, (method, layer, strategy, dialog_scenario) in enumerate(combos):
+            # Response-plane cases
+            for code in tier.response_codes:
+                # Use tier's default related_method, but fall back to the first
+                # allowed method from the catalog if the default isn't supported.
+                defn = SIP_CATALOG.get_response(code)
+                if (
+                    defn.related_methods
+                    and SIPMethod(tier.related_method) not in defn.related_methods
+                ):
+                    related = defn.related_methods[0].value
+                else:
+                    related = tier.related_method
+                for layer in tier.layers:
+                    if layer not in config.layers:
+                        continue
+                    for strategy in tier.strategies:
+                        if strategy not in config.strategies:
+                            continue
+                        if strategy not in _SUPPORTED_STRATEGIES.get(
+                            layer, frozenset()
+                        ):
+                            continue
+                        key = (f"R{code}/{related}", layer, strategy, None)
+                        if key not in seen:
+                            seen.add(key)
+                            combos.append((related, layer, strategy, None, code))
+
+        for case_id, (
+            method,
+            layer,
+            strategy,
+            dialog_scenario,
+            status_code,
+        ) in enumerate(combos):
             if case_id >= config.max_cases:
                 break
             yield CaseSpec(
@@ -130,6 +204,8 @@ class CaseGenerator:
                 layer=layer,
                 strategy=strategy,
                 dialog_scenario=dialog_scenario,
+                status_code=status_code,
+                related_method=method if status_code is not None else None,
             )
 
 
@@ -251,7 +327,12 @@ class CampaignExecutor:
                 self._store.append(case_result)
                 self._update_summary(summary, case_result.verdict)
 
-                label = f"[{spec.case_id + 1}/{config.max_cases}] {spec.method} {spec.layer}/{spec.strategy} seed={spec.seed}"
+                target_label = (
+                    f"{spec.status_code}/{spec.related_method}"
+                    if spec.status_code is not None
+                    else spec.method
+                )
+                label = f"[{spec.case_id + 1}/{config.max_cases}] {target_label} {spec.layer}/{spec.strategy} seed={spec.seed}"
                 code_str = (
                     f" ({case_result.response_code},"
                     if case_result.response_code
@@ -312,9 +393,99 @@ class CampaignExecutor:
         return campaign
 
     def _execute_case(self, spec: CaseSpec) -> CaseResult:
+        if spec.status_code is not None:
+            return self._execute_response_case(spec)
         if spec.dialog_scenario is not None:
             return self._execute_dialog_case(spec)
         return self._execute_stateless_case(spec)
+
+    def _execute_response_case(self, spec: CaseSpec) -> CaseResult:
+        config = self._config
+        timestamp = time.time()
+        assert spec.status_code is not None
+        related = spec.related_method or "INVITE"
+
+        try:
+            context = DialogContext(
+                call_id=f"fuzz-{uuid.uuid4().hex[:12]}@{config.target_host}",
+                local_tag=uuid.uuid4().hex[:16],
+                remote_tag=uuid.uuid4().hex[:16],
+                local_cseq=1,
+            )
+            packet = self._generator.generate_response(
+                ResponseSpec(
+                    status_code=spec.status_code,
+                    related_method=SIPMethod(related),
+                ),
+                context,
+            )
+            mutated: MutatedCase = self._mutator.mutate(
+                packet,
+                MutationConfig(
+                    seed=spec.seed, strategy=spec.strategy, layer=spec.layer
+                ),
+            )
+            artifact = self._artifact_from_mutated(mutated)
+            send_result = self._sender.send_artifact(artifact, self._target)
+
+            oracle_context = OracleContext(
+                method=related,
+                timeout_threshold_ms=config.timeout_seconds * 1000,
+            )
+            process_name = config.process_name if config.check_process else None
+            verdict = self._oracle.evaluate(
+                send_result,
+                oracle_context,
+                process_name=process_name,
+                log_path=config.log_path,
+            )
+
+            mutation_ops = tuple(
+                f"{r.operator}({r.target.path})" for r in mutated.records
+            )
+            raw_response: str | None = None
+            if (
+                verdict.verdict in ("suspicious", "crash", "stack_failure")
+                and send_result.final_response
+            ):
+                raw_response = send_result.final_response.raw_text or None
+
+            return CaseResult(
+                case_id=spec.case_id,
+                seed=spec.seed,
+                method=related,
+                layer=spec.layer,
+                strategy=spec.strategy,
+                mutation_ops=mutation_ops,
+                verdict=verdict.verdict,
+                reason=verdict.reason,
+                response_code=verdict.response_code,
+                elapsed_ms=verdict.elapsed_ms,
+                process_alive=verdict.process_alive,
+                raw_response=raw_response,
+                reproduction_cmd=self._build_reproduction_cmd(spec),
+                timestamp=timestamp,
+                fuzz_status_code=spec.status_code,
+                fuzz_related_method=related,
+            )
+
+        except Exception as exc:
+            error = str(exc)
+            return CaseResult(
+                case_id=spec.case_id,
+                seed=spec.seed,
+                method=related,
+                layer=spec.layer,
+                strategy=spec.strategy,
+                verdict="unknown",
+                reason=f"response executor error: {error}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_reproduction_cmd(spec),
+                error=error,
+                timestamp=timestamp,
+                fuzz_status_code=spec.status_code,
+                fuzz_related_method=related,
+            )
 
     def _execute_stateless_case(self, spec: CaseSpec) -> CaseResult:
         config = self._config
@@ -524,6 +695,22 @@ class CampaignExecutor:
 
     def _build_reproduction_cmd(self, spec: CaseSpec) -> str:
         cfg = self._config
+        if spec.status_code is not None:
+            related = spec.related_method or "INVITE"
+            ctx_json = (
+                '{"call_id":"fuzz-repro","local_tag":"repro-tag",'
+                '"remote_tag":"repro-rtag","local_cseq":1}'
+            )
+            return (
+                f"uv run fuzzer mutate response {spec.status_code} {related}"
+                f" --context '{ctx_json}'"
+                f" --strategy {spec.strategy}"
+                f" --layer {spec.layer}"
+                f" --seed {spec.seed}"
+                f" | uv run fuzzer send packet"
+                f" --target-host {cfg.target_host}"
+                f" --target-port {cfg.target_port}"
+            )
         return (
             f"uv run fuzzer mutate request {spec.method}"
             f" --strategy {spec.strategy}"

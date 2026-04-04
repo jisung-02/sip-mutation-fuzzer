@@ -120,3 +120,35 @@ class TestInviteAckScenarioStructure:
         assert scenario is not None
         assert len(scenario.teardown_steps) == 1
         assert scenario.teardown_steps[0].method == "BYE"
+
+
+class TestInvitePrackScenarioStructure:
+    def test_prack_returns_invite_prack(self) -> None:
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        assert scenario.scenario_type == DialogScenarioType.invite_prack
+        assert scenario.fuzz_method == "PRACK"
+
+    def test_prack_setup_has_invite_only(self) -> None:
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        assert len(scenario.setup_steps) == 1
+        assert scenario.setup_steps[0].method == "INVITE"
+
+    def test_prack_invite_step_expects_1xx(self) -> None:
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        invite_step = scenario.setup_steps[0]
+        assert invite_step.expect_status_min == 100
+        assert invite_step.expect_status_max == 199
+
+    def test_prack_fuzz_step_is_fuzz_target(self) -> None:
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        assert scenario.fuzz_step.is_fuzz_target is True
+        assert scenario.fuzz_step.method == "PRACK"
+
+    def test_prack_has_no_teardown(self) -> None:
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        assert scenario.teardown_steps == ()

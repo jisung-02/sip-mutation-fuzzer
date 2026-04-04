@@ -12,6 +12,7 @@ class DialogScenarioType(StrEnum):
     invite_dialog = "invite_dialog"
     invite_cancel = "invite_cancel"
     invite_ack = "invite_ack"
+    invite_prack = "invite_prack"
 
 
 class DialogStep(BaseModel):

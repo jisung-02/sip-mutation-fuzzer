@@ -86,6 +86,28 @@ def _build_invite_ack() -> DialogScenario:
     )
 
 
+def _build_invite_prack() -> DialogScenario:
+    """INVITE→expect 1xx→[PRACK]."""
+    return DialogScenario(
+        scenario_type=DialogScenarioType.invite_prack,
+        fuzz_method="PRACK",
+        setup_steps=(
+            DialogStep(
+                method="INVITE",
+                role="send",
+                expect_status_min=100,
+                expect_status_max=199,
+            ),
+        ),
+        fuzz_step=DialogStep(
+            method="PRACK",
+            role="send",
+            is_fuzz_target=True,
+        ),
+        teardown_steps=(),
+    )
+
+
 def scenario_for_method(method: str) -> DialogScenario | None:
     """Return the dialog scenario for the given SIP method.
 
@@ -99,6 +121,8 @@ def scenario_for_method(method: str) -> DialogScenario | None:
         return _build_invite_cancel()
     if method == "ACK":
         return _build_invite_ack()
+    if method == "PRACK":
+        return _build_invite_prack()
     return None
 
 

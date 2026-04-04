@@ -216,6 +216,9 @@ def replay_command(
         method=case.method,
         layer=case.layer,
         strategy=case.strategy,
+        dialog_scenario=case.dialog_scenario,
+        status_code=case.fuzz_status_code,
+        related_method=case.fuzz_related_method,
     )
     result = executor._execute_case(spec)
     typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))

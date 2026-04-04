@@ -420,7 +420,7 @@ class Tier5CaseGeneratorTests(unittest.TestCase):
     def test_tier5_methods_are_dialog_methods(self) -> None:
         cfg = self._config(scope="tier5", max_cases=10000)
         cases = list(CaseGenerator(cfg).generate())
-        expected_methods = {"CANCEL", "ACK", "BYE", "UPDATE", "REFER", "INFO"}
+        expected_methods = {"CANCEL", "ACK", "BYE", "UPDATE", "REFER", "INFO", "PRACK"}
         methods_seen = {c.method for c in cases}
         self.assertEqual(methods_seen, expected_methods)
 
@@ -536,3 +536,146 @@ class DialogCaseExecutionTests(unittest.TestCase):
         CE._update_summary(summary, "setup_failed")
         self.assertEqual(summary.setup_failed, 1)
         self.assertEqual(summary.total, 1)
+
+
+# ---------------------------------------------------------------------------
+# Response-plane tier tests (tier6-tier11)
+# ---------------------------------------------------------------------------
+
+
+class ResponseTierCaseGeneratorTests(unittest.TestCase):
+    def _config(self, **kwargs) -> CampaignConfig:
+        defaults = dict(target_host="127.0.0.1")
+        defaults.update(kwargs)
+        return CampaignConfig(**defaults)
+
+    def test_tier6_generates_response_cases(self) -> None:
+        cfg = self._config(scope="tier6", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        codes = {c.status_code for c in cases}
+        self.assertEqual(codes, {100, 180, 183})
+
+    def test_tier7_generates_response_cases(self) -> None:
+        cfg = self._config(scope="tier7", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        codes = {c.status_code for c in cases}
+        self.assertEqual(codes, {200, 202})
+
+    def test_tier8_generates_response_cases(self) -> None:
+        cfg = self._config(scope="tier8", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        codes = {c.status_code for c in cases}
+        self.assertEqual(codes, {301, 302, 408, 480, 503})
+
+    def test_tier9_generates_response_cases(self) -> None:
+        cfg = self._config(scope="tier9", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        codes = {c.status_code for c in cases}
+        self.assertEqual(codes, {401, 407, 494})
+
+    def test_tier10_generates_response_cases(self) -> None:
+        cfg = self._config(scope="tier10", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        codes = {c.status_code for c in cases}
+        self.assertEqual(codes, {403, 404, 486, 500})
+
+    def test_tier11_generates_response_cases(self) -> None:
+        cfg = self._config(scope="tier11", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        codes = {c.status_code for c in cases}
+        self.assertEqual(codes, {600, 603, 604, 606})
+
+    def test_response_cases_have_status_code_set(self) -> None:
+        for tier in ("tier6", "tier7", "tier8", "tier9", "tier10", "tier11"):
+            cfg = self._config(scope=tier, max_cases=10000)
+            cases = list(CaseGenerator(cfg).generate())
+            for case in cases:
+                self.assertIsNotNone(
+                    case.status_code, f"{tier} case missing status_code"
+                )
+                self.assertIsNotNone(
+                    case.related_method, f"{tier} case missing related_method"
+                )
+
+    def test_response_cases_have_no_dialog_scenario(self) -> None:
+        cfg = self._config(scope="tier7", max_cases=10000)
+        cases = list(CaseGenerator(cfg).generate())
+        for case in cases:
+            self.assertIsNone(case.dialog_scenario)
+
+    def test_response_cases_are_unique(self) -> None:
+        cfg = self._config(scope="all", max_cases=100000)
+        cases = list(CaseGenerator(cfg).generate())
+        resp_cases = [c for c in cases if c.status_code is not None]
+        keys = [
+            (c.status_code, c.related_method, c.layer, c.strategy) for c in resp_cases
+        ]
+        self.assertEqual(len(keys), len(set(keys)), "Duplicate response cases found")
+
+    def test_scope_all_includes_both_request_and_response_cases(self) -> None:
+        cfg = self._config(scope="all", max_cases=100000)
+        cases = list(CaseGenerator(cfg).generate())
+        req_cases = [c for c in cases if c.status_code is None]
+        resp_cases = [c for c in cases if c.status_code is not None]
+        self.assertGreater(len(req_cases), 0, "No request-plane cases in scope=all")
+        self.assertGreater(len(resp_cases), 0, "No response-plane cases in scope=all")
+
+    def test_response_case_execution_produces_result(self) -> None:
+        """Response cases against a live UDP server produce a CaseResult."""
+        responder = UDPResponder(
+            responses=(
+                b"SIP/2.0 200 OK\r\n"
+                b"Via: SIP/2.0/UDP 127.0.0.1;branch=z9hG4bK-1\r\n"
+                b"Content-Length: 0\r\n"
+                b"\r\n",
+            )
+        )
+        responder.start()
+        self.addCleanup(responder.close)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = str(Path(tmpdir) / "campaign.jsonl")
+            cfg = CampaignConfig(
+                target_host=responder.host,
+                target_port=responder.port,
+                scope="tier7",
+                layers=("model",),
+                strategies=("default",),
+                max_cases=2,
+                timeout_seconds=2.0,
+                cooldown_seconds=0.0,
+                check_process=False,
+                output_path=out_path,
+            )
+            executor = CampaignExecutor(cfg)
+            campaign = executor.run()
+
+            self.assertEqual(campaign.summary.total, 2)
+            store = ResultStore(Path(out_path))
+            _, results = store.read_all()
+            for r in results:
+                self.assertIsNotNone(r.fuzz_status_code)
+                self.assertIsNotNone(r.fuzz_related_method)
+
+    def test_response_reproduction_cmd_contains_mutate_response(self) -> None:
+        from volte_mutation_fuzzer.campaign.contracts import CaseSpec
+
+        spec = CaseSpec(
+            case_id=0,
+            seed=42,
+            method="INVITE",
+            layer="model",
+            strategy="default",
+            status_code=200,
+            related_method="INVITE",
+        )
+        cfg = CampaignConfig(
+            target_host="127.0.0.1",
+            target_port=5060,
+            check_process=False,
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_reproduction_cmd(spec)
+        self.assertIn("mutate response", cmd)
+        self.assertIn("200", cmd)
+        self.assertIn("INVITE", cmd)
