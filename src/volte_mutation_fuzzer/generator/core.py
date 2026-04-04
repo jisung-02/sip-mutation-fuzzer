@@ -8,6 +8,7 @@ from volte_mutation_fuzzer.generator.contracts import (
     RequestSpec,
     ResponseSpec,
 )
+from volte_mutation_fuzzer.sip.body_factory import BodyContext, BodyFactory
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import (
     AuthChallenge,
@@ -24,6 +25,7 @@ from volte_mutation_fuzzer.sip.common import (
     ViaHeader,
 )
 from volte_mutation_fuzzer.sip.requests import REQUEST_MODELS_BY_METHOD, SIPRequest
+from volte_mutation_fuzzer.sip.response_policy import get_response_policy
 from volte_mutation_fuzzer.sip.responses import RESPONSE_MODELS_BY_CODE, SIPResponse
 
 _DIALOG_PRECONDITIONS = frozenset(
@@ -65,6 +67,7 @@ class SIPGenerator:
     ) -> None:
         self.settings = settings
         self.catalog = SIP_CATALOG if catalog is None else catalog
+        self._body_factory = BodyFactory()
 
     def generate_request(
         self,
@@ -216,11 +219,6 @@ class SIPGenerator:
 
         if spec.method == SIPMethod.PUBLISH:
             defaults["event"] = self._build_event_header()
-            defaults["content_type"] = "application/pidf+xml"
-            defaults["body"] = (
-                '<?xml version="1.0"?>\r\n'
-                '<presence entity="sip:publisher@example.com"/>\r\n'
-            )
 
         if spec.method == SIPMethod.REFER:
             defaults["refer_to"] = NameAddress(
@@ -237,7 +235,27 @@ class SIPGenerator:
         ):
             defaults.setdefault("contact", [self._build_contact()])
 
+        if "body" not in (spec.overrides or {}):
+            event_pkg = spec.event_package or self._infer_event_package(defaults)
+            body_ctx = BodyContext(
+                method=spec.method,
+                event_package=event_pkg,
+                info_package=spec.info_package,
+                sms_over_ip=spec.sms_over_ip,
+            )
+            body_model = self._body_factory.create(body_ctx)
+            if body_model is not None:
+                defaults["body"] = body_model.render()
+                defaults["content_type"] = body_model.content_type
+                defaults["content_length"] = len(defaults["body"].encode("utf-8"))
+
         return defaults
+
+    def _infer_event_package(self, defaults: dict[str, Any]) -> str | None:
+        event = defaults.get("event")
+        if isinstance(event, EventHeader):
+            return event.package
+        return None
 
     def _build_response_defaults(
         self,
@@ -300,6 +318,29 @@ class SIPGenerator:
         if spec.status_code == 503:
             defaults["retry_after"] = RetryAfterHeader(seconds=120)
 
+        policy = get_response_policy(spec.related_method, spec.status_code)
+        for header_name in policy.required_headers:
+            if header_name not in defaults:
+                defaults[header_name] = self._build_required_response_field(header_name)
+        for header_name in policy.forbidden_headers:
+            defaults.pop(header_name, None)
+
+        if "body" not in (spec.overrides or {}):
+            if policy.body_forbidden:
+                defaults.pop("body", None)
+                defaults.pop("content_type", None)
+                defaults["content_length"] = 0
+            else:
+                body_ctx = BodyContext(
+                    method=spec.related_method,
+                    status_code=spec.status_code,
+                )
+                body_model = self._body_factory.create(body_ctx)
+                if body_model is not None:
+                    defaults["body"] = body_model.render()
+                    defaults["content_type"] = body_model.content_type
+                    defaults["content_length"] = len(defaults["body"].encode("utf-8"))
+
         for field_name, field in model.model_fields.items():
             if field_name in defaults or not field.is_required():
                 continue
@@ -342,6 +383,12 @@ class SIPGenerator:
 
         if field_name == "security_server":
             return ("ipsec-3gpp;q=0.1",)
+
+        if field_name == "expires":
+            return 3600
+
+        if field_name == "contact":
+            return [self._build_contact()]
 
         raise ValueError(f"unsupported required response field: {field_name}")
 

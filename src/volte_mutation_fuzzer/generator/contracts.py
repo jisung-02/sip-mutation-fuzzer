@@ -197,13 +197,18 @@ class RequestSpec(BaseModel):
     method: SIPMethod
     scenario: str | None = None
     body_kind: str | None = None
+    event_package: str | None = None
+    info_package: str | None = None
+    sms_over_ip: bool = False
     overrides: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def has_overrides(self) -> bool:
         return bool(self.overrides)
 
-    @field_validator("scenario", "body_kind", mode="before")
+    @field_validator(
+        "scenario", "body_kind", "event_package", "info_package", mode="before"
+    )
     @classmethod
     def _normalize_text(cls, value: Any) -> Any:
         if not isinstance(value, str):
@@ -229,13 +234,14 @@ class ResponseSpec(BaseModel):
     status_code: int = Field(ge=100, le=699)
     related_method: SIPMethod
     scenario: str | None = None
+    event_package: str | None = None
     overrides: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def has_overrides(self) -> bool:
         return bool(self.overrides)
 
-    @field_validator("scenario", mode="before")
+    @field_validator("scenario", "event_package", mode="before")
     @classmethod
     def _normalize_text(cls, value: Any) -> Any:
         if not isinstance(value, str):
