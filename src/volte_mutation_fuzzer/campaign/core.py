@@ -193,6 +193,7 @@ class CampaignExecutor:
         self._mutator = mutator or SIPMutator()
         self._sender = sender or SIPSenderReactor()
         self._adb_collector: object = None
+        _docker_mode = config.mode == "real-ue-direct"
         if oracle is not None:
             self._oracle = oracle
         elif config.adb_enabled:
@@ -208,11 +209,17 @@ class CampaignExecutor:
             _adb_oracle = AdbOracle(_collector, _detector)
             self._adb_collector = _collector
             log_oracle = LogOracle() if config.log_path is not None else None
-            self._oracle = OracleEngine(log_oracle=log_oracle, adb_oracle=_adb_oracle)
+            self._oracle = OracleEngine(
+                log_oracle=log_oracle,
+                adb_oracle=_adb_oracle,
+                docker_mode=_docker_mode,
+            )
         elif config.log_path is not None:
-            self._oracle = OracleEngine(log_oracle=LogOracle())
+            self._oracle = OracleEngine(
+                log_oracle=LogOracle(), docker_mode=_docker_mode
+            )
         else:
-            self._oracle = OracleEngine()
+            self._oracle = OracleEngine(docker_mode=_docker_mode)
         self._store = store or ResultStore(Path(config.output_path))
         self._target = TargetEndpoint(
             host=config.target_host,
