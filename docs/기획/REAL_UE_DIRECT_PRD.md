@@ -3,7 +3,7 @@
 ## 1. 문서 목적
 이 문서는 capstone의 `dumpipe.py` / `ue_lookup.py`에서 검증된 **P-CSCF 우회 direct-to-UE SIP delivery** 경로를 현재 저장소의 Sender/Reactor 경계 안으로 이식하기 위한 1차 구현 결정을 고정한다.
 
-이번 범위는 `real-ue-direct` 하나만 다루며, `real-ue-pcscf`는 인터페이스 이름만 유지하고 구현 범위에서 제외한다.
+이번 범위는 `real-ue-direct`만 지원하며, P-CSCF 경유 모드는 제공하지 않는다.
 
 ## 2. 이번 slice의 결정 사항
 - target mode: `real-ue-direct` only

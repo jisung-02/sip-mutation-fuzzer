@@ -31,7 +31,7 @@
 
 ## 4. 공개 인터페이스
 ### 4.1 `TargetEndpoint`
-- `mode`: `softphone | real-ue-pcscf | real-ue-direct`
+- `mode`: `softphone | real-ue-direct`
 - `host`, `port`
 - `transport`: `UDP | TCP`
 - `timeout_seconds`
