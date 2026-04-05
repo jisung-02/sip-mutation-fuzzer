@@ -333,7 +333,9 @@ class CampaignExecutor:
                 ),
             )
             artifact = self._artifact_from_mutated(mutated)
-            send_result = self._sender.send_artifact(artifact, self._target)
+            send_result = self._sender.send_artifact(
+                artifact, self._target, collect_all_responses=True
+            )
 
             context = OracleContext(
                 method=spec.related_method or spec.method,
