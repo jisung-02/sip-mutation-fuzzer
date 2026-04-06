@@ -34,3 +34,34 @@ lint-fix = "ruff check . --fix"
 type-check = "ty check"
 softphone-run = "python scripts/run_baresip.py"
 softphone-setup = "python scripts/setup_baresip.py"
+
+# === Infrastructure ===
+epc-run = "docker compose up -d"
+epc-stop = "docker compose down"
+epc-status = "docker compose ps"
+epc-logs = "docker compose logs -f"
+
+[tool.poe.tasks.epc-build]
+help = "Build docker_open5gs, docker_kamailio base images and all services"
+shell = """
+echo '[1/3] Building docker_open5gs base image...'
+docker build --force-rm -t docker_open5gs ./infrastructure/base
+echo '[2/3] Building docker_kamailio base image...'
+docker build --force-rm -t docker_kamailio ./infrastructure/ims_base
+echo '[3/3] Building all services...'
+docker compose build
+echo 'Done'
+"""
+
+[tool.poe.tasks.provision]
+help = "Provision test subscribers to Open5GS HSS (MongoDB) and PyHSS (MySQL)"
+cmd = "python scripts/provision_subscribers.py"
+
+[tool.poe.tasks.tcpdump]
+help = "Capture traffic inside a Docker container (usage: poe tcpdump <container> [protocol])"
+cmd = "python scripts/tcpdump.py ${args}"
+args = [{name = "args", positional = true, multiple = true}]
+
+[tool.poe.tasks.setup-host]
+help = "Setup Ubuntu host: kernel modules, network sysctl, SDR udev, realtime scheduling"
+cmd = "sudo ./setup_host.sh --all"
