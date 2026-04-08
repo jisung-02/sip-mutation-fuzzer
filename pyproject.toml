@@ -34,7 +34,29 @@ lint-fix = "ruff check . --fix"
 type-check = "ty check"
 softphone-run = "python scripts/run_baresip.py"
 softphone-setup = "python scripts/setup_baresip.py"
-enb-run = {shell = "cd infrastructure/srsenb && sudo srsenb enb.conf", help = "Run srsENB (USRP B200) with config from infrastructure/srsenb/"}
+enb-stop = {shell = "docker rm -f srsenb 2>/dev/null || true", help = "Stop srsENB container"}
+enb-logs = {shell = "docker logs -f srsenb", help = "Tail srsENB container logs"}
+
+[tool.poe.tasks.enb-run]
+help = "Run srsENB (USRP B210) in Docker container"
+shell = """
+docker rm -f srsenb 2>/dev/null || true
+docker run -d \
+  --name srsenb \
+  --privileged \
+  --network docker_open5gs_default \
+  --ip 172.22.0.50 \
+  -e COMPONENT_NAME=enb \
+  -e MME_IP=172.22.0.9 \
+  -e MCC=001 \
+  -e MNC=01 \
+  -e TAC=1 \
+  -v "$(pwd)/infrastructure/srsenb:/etc/srsran" \
+  -v "$(pwd)/infrastructure/srslte:/mnt/srslte" \
+  -v /dev/bus/usb:/dev/bus/usb \
+  docker_srslte:latest
+echo "srsenb started. Run 'poe enb-logs' to tail logs."
+"""
 
 # === Infrastructure ===
 epc-run = "docker compose up -d"
