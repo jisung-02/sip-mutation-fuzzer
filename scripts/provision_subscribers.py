@@ -149,9 +149,9 @@ const defaultSlice = [{{
       pcc_rule: []
     }},
     {{
-      name: "ims", type: 3,
+      name: "ims", type: 1,
       ambr: {{uplink: {{value: 1, unit: 3}}, downlink: {{value: 1, unit: 3}}}},
-      qos: {{index: 5, arp: {{priority_level: 8, pre_emption_capability: 1, pre_emption_vulnerability: 1}}}},
+      qos: {{index: 5, arp: {{priority_level: 1, pre_emption_capability: 1, pre_emption_vulnerability: 1}}}},
       pcc_rule: []
     }}
   ]
@@ -172,9 +172,9 @@ if (existing) {{
   // IMS APN 없으면 추가
   if (!slices[0].session.some(s => s && s.name === "ims")) {{
     slices[0].session.push({{
-      name: "ims", type: 3,
+      name: "ims", type: 1,
       ambr: {{uplink: {{value: 1, unit: 3}}, downlink: {{value: 1, unit: 3}}}},
-      qos: {{index: 5, arp: {{priority_level: 8, pre_emption_capability: 1, pre_emption_vulnerability: 1}}}},
+      qos: {{index: 5, arp: {{priority_level: 1, pre_emption_capability: 1, pre_emption_vulnerability: 1}}}},
       pcc_rule: []
     }});
   }}
@@ -261,14 +261,18 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
 
         # IMS Subscriber 생성 또는 업데이트
         # ifc_path 필수 — null이면 S-CSCF MAR에서 403 반환
+        scscf_peer = f"scscf.{ims_domain}"
         upsert_pyhss(
             base_url, "ims_subscriber",
             {
                 "imsi": imsi,
                 "msisdn": msisdn,
-                "msisdn_list": msisdn,
-                "scscf": scscf_uri,
+                "sh_profile": "string",
+                "scscf_peer": scscf_peer,
+                "msisdn_list": f"[{msisdn}]",
                 "ifc_path": "default_ifc.xml",
+                "scscf": scscf_uri,
+                "scscf_realm": ims_domain,
             },
             "imsi", imsi,
         )
