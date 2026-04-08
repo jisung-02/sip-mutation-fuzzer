@@ -36,6 +36,10 @@ softphone-run = "python scripts/run_baresip.py"
 softphone-setup = "python scripts/setup_baresip.py"
 enb-stop = {shell = "docker rm -f srsenb 2>/dev/null || true", help = "Stop srsENB container"}
 enb-logs = {shell = "docker logs -f srsenb", help = "Tail srsENB container logs"}
+epc-run = "docker compose up -d"
+epc-stop = "docker compose down"
+epc-status = "docker compose ps"
+epc-logs = "docker compose logs -f"
 
 [tool.poe.tasks.enb-run]
 help = "Run srsENB (USRP B210) in Docker container"
@@ -57,12 +61,6 @@ docker run -d \
   docker_srslte:latest
 echo "srsenb started. Run 'poe enb-logs' to tail logs."
 """
-
-# === Infrastructure ===
-epc-run = "docker compose up -d"
-epc-stop = "docker compose down"
-epc-status = "docker compose ps"
-epc-logs = "docker compose logs -f"
 
 [tool.poe.tasks.epc-build]
 help = "Build docker_open5gs, docker_kamailio base images and all services"
