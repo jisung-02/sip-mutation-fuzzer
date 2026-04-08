@@ -35,6 +35,10 @@ type-check = "ty check"
 softphone-run = "python scripts/run_baresip.py"
 softphone-setup = "python scripts/setup_baresip.py"
 
+[tool.poe.tasks.enb-run]
+help = "Run srsENB (USRP B200) with config from infrastructure/srsenb/"
+shell = "cd infrastructure/srsenb && sudo srsenb enb.conf"
+
 # === Infrastructure ===
 epc-run = "docker compose up -d"
 epc-stop = "docker compose down"
