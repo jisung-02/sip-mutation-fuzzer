@@ -81,8 +81,19 @@ def get_json(url: str) -> tuple[int, bytes]:
         return 0, b""
 
 
-def upsert_pyhss(base_url: str, resource: str, data: dict, lookup_key: str, lookup_val: str) -> tuple[int, dict]:
-    """PUT으로 생성 시도, 이미 존재하면 PATCH로 업데이트."""
+def upsert_pyhss(
+    base_url: str,
+    resource: str,
+    data: dict,
+    lookup_key: str,
+    lookup_val: str,
+    update_data: dict | None = None,
+) -> tuple[int, dict]:
+    """PUT으로 생성 시도, 이미 존재하면 /imsi/ 엔드포인트로 조회 후 PATCH로 업데이트.
+
+    update_data: PATCH 시 사용할 데이터 (None이면 data 사용).
+                 sqn 등 리셋하면 안 되는 필드를 제외할 때 활용.
+    """
     status, body = put_json(f"{base_url}/{resource}/", data)
     if status in (200, 201):
         try:
@@ -90,17 +101,16 @@ def upsert_pyhss(base_url: str, resource: str, data: dict, lookup_key: str, look
         except Exception:
             return status, {}
 
-    # 실패 시 기존 레코드 탐색 후 PATCH
-    list_status, list_body = get_json(f"{base_url}/{resource}/")
-    if list_status == 200:
+    # PUT 실패 시 /imsi/ 엔드포인트로 기존 레코드 조회 후 PATCH
+    get_status, get_body = get_json(f"{base_url}/{resource}/imsi/{lookup_val}")
+    if get_status == 200:
         try:
-            records = json.loads(list_body)
-            if not isinstance(records, list):
-                records = [records]
-            for record in records:
-                if str(record.get(lookup_key, "")) == str(lookup_val):
-                    rid = record.get(f"{resource}_id") or record.get("id")
-                    patch_status, patch_body = patch_json(f"{base_url}/{resource}/{rid}", data)
+            record = json.loads(get_body)
+            if isinstance(record, dict) and "Result" not in record:
+                rid = record.get(f"{resource}_id") or record.get("id")
+                if rid:
+                    patch_data = update_data if update_data is not None else data
+                    patch_status, patch_body = patch_json(f"{base_url}/{resource}/{rid}", patch_data)
                     try:
                         return patch_status, json.loads(patch_body)
                     except Exception:
@@ -169,11 +179,11 @@ if (existing) {{
     }});
   }}
 
+  // security.sqn은 리셋하지 않음 — 리셋 시 LTE AKA 인증 실패
   db.subscribers.updateOne({{imsi}}, {{$set: {{
     "security.k": ki,
     "security.opc": opc,
     "security.amf": "8000",
-    "security.sqn": {{low: 0, high: 0, unsigned: false}},
     "msisdn": [msisdn],
     "slice": slices
   }}}});
@@ -224,11 +234,12 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
         msisdn = ue["msisdn"]
         print(f"  Adding IMSI: {imsi} (MSISDN: {msisdn})")
 
-        # AUC 생성 또는 업데이트
+        # AUC 생성 또는 업데이트 (업데이트 시 sqn 리셋 금지 — IMS 인증 깨짐)
         _, auc = upsert_pyhss(
             base_url, "auc",
             {"ki": ki, "opc": opc, "amf": "8000", "sqn": 0, "imsi": imsi},
             "imsi", imsi,
+            update_data={"ki": ki, "opc": opc, "amf": "8000", "imsi": imsi},
         )
         auc_id = auc.get("auc_id", i)
 
