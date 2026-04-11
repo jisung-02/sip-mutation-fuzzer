@@ -341,10 +341,16 @@ class SIPSenderReactor:
                         )
                     ]
         else:
+            # local_host 결정: connect()로 라우팅 조회만 하고 즉시 닫음
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as _probe:
+                _probe.connect((resolved.host, resolved.port))
+                local_host, _ = _probe.getsockname()
+            # 실제 송수신 소켓: unconnected로 유지해야 A31이 다른 포트(port_ps)로
+            # 응답할 때도 recvfrom()이 받을 수 있음
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(target.timeout_seconds)
-                sock.connect((resolved.host, resolved.port))
-                local_host, local_port = sock.getsockname()
+                sock.bind((local_host, 0))
+                _, local_port = sock.getsockname()
                 observer_events.append(f"direct-local:{local_host}:{local_port}")
                 payload, normalization_events = prepare_real_ue_direct_payload(
                     artifact,
@@ -352,7 +358,7 @@ class SIPSenderReactor:
                     local_port=int(local_port),
                 )
                 observer_events.extend(normalization_events)
-                sock.send(payload)
+                sock.sendto(payload, (resolved.host, resolved.port))
                 observations = self._read_udp_observations(
                     sock,
                     collect_all_responses=collect_all_responses,
