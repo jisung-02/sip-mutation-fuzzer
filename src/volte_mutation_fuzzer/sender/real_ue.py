@@ -45,6 +45,45 @@ _CONTACT_HOSTPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
+# MSISDN → UE IP mapping for auto-resolution
+_DEFAULT_MSISDN_TO_IP: Final[dict[str, str]] = {
+    "111111": "10.20.20.8",  # Samsung A31
+    "222222": "10.20.20.9",  # Test MO softphone
+}
+
+
+def resolve_ue_ip_from_msisdn(
+    msisdn: str, *, env: dict[str, str] | None = None
+) -> str:
+    """Resolve UE IP address from MSISDN.
+
+    Args:
+        msisdn: Target MSISDN (e.g., "111111")
+        env: Environment variables for mapping overrides
+
+    Returns:
+        UE IP address (e.g., "10.20.20.8")
+
+    Raises:
+        ValueError: If MSISDN is not found in mapping table
+    """
+    if env is None:
+        env = os.environ
+
+    # Check for environment variable override: VMF_MSISDN_TO_IP_<msisdn>
+    env_key = f"VMF_MSISDN_TO_IP_{msisdn}"
+    if env_key in env:
+        return env[env_key]
+
+    # Check default mapping table
+    if msisdn in _DEFAULT_MSISDN_TO_IP:
+        return _DEFAULT_MSISDN_TO_IP[msisdn]
+
+    raise ValueError(
+        f"Unknown MSISDN {msisdn!r}. Available: {list(_DEFAULT_MSISDN_TO_IP.keys())}. "
+        f"Override with environment variable {env_key}=<ip>"
+    )
+
 
 class RealUEDirectError(RuntimeError):
     """Base error for real-ue-direct preparation failures."""

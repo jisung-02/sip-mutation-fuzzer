@@ -87,6 +87,17 @@ class TargetEndpoint(BaseModel):
                 raise ValueError(
                     "real-ue-direct requires at least one of host or msisdn"
                 )
+
+            # Auto-resolve host from msisdn if host is not provided
+            if self.host is None and self.msisdn is not None:
+                from volte_mutation_fuzzer.sender.real_ue import resolve_ue_ip_from_msisdn
+                try:
+                    resolved_ip = resolve_ue_ip_from_msisdn(self.msisdn)
+                    object.__setattr__(self, "host", resolved_ip)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Failed to auto-resolve UE IP from MSISDN {self.msisdn!r}: {exc}"
+                    ) from exc
             if self.transport not in ("UDP", "TCP"):
                 raise ValueError("real-ue-direct supports UDP or TCP")
             if self.host is not None:

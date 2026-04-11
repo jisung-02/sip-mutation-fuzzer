@@ -28,7 +28,9 @@ def _parse_response_codes(raw: str | None) -> tuple[int, ...] | None:
 
 @app.command("run")
 def run_command(
-    target_host: Annotated[str, typer.Option("--target-host", help="Target SIP host.")],
+    target_host: Annotated[
+        str | None, typer.Option("--target-host", help="Target SIP host (auto-resolved from --target-msisdn if not provided).")
+    ] = None,
     target_port: Annotated[
         int, typer.Option("--target-port", help="Target SIP port.")
     ] = 5060,
@@ -243,6 +245,15 @@ def run_command(
 
     if with_dialog is not None:
         payload["with_dialog"] = with_dialog
+
+    # Validate that either target_host or target_msisdn is provided for real-ue-direct mode
+    if mode == "real-ue-direct":
+        if target_host is None and target_msisdn is None:
+            typer.echo(
+                "Error: real-ue-direct mode requires either --target-host or --target-msisdn",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     try:
         config = CampaignConfig(**payload)

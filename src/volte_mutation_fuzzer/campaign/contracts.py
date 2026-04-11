@@ -13,7 +13,7 @@ class CampaignConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    target_host: str = Field(min_length=1)
+    target_host: str | None = Field(default=None, min_length=1)
     target_port: int = Field(default=5060, ge=1, le=65535)
     transport: str = "UDP"
     mode: str = "softphone"
@@ -83,6 +83,20 @@ class CampaignConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mt_invite_template(self) -> Self:
+        # Auto-resolve target_host from target_msisdn for real-ue-direct mode
+        if self.mode == "real-ue-direct":
+            if self.target_host is None and self.target_msisdn is None:
+                raise ValueError("real-ue-direct mode requires either target_host or target_msisdn")
+            if self.target_host is None and self.target_msisdn is not None:
+                from volte_mutation_fuzzer.sender.real_ue import resolve_ue_ip_from_msisdn
+                try:
+                    resolved_ip = resolve_ue_ip_from_msisdn(self.target_msisdn)
+                    object.__setattr__(self, "target_host", resolved_ip)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Failed to auto-resolve target_host from MSISDN {self.target_msisdn!r}: {exc}"
+                    ) from exc
+
         if self.mt_invite_template is not None:
             if self.mode != "real-ue-direct":
                 raise ValueError("mt_invite_template requires mode='real-ue-direct'")
