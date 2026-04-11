@@ -139,9 +139,12 @@ def run_command(
         str | None,
         typer.Option("--mt-invite-template", help="MT INVITE template name (e.g. 'a31') or file path."),
     ] = None,
-    bind_container: Annotated[
+    ipsec_mode: Annotated[
         str | None,
-        typer.Option("--bind-container", help="Docker container to send from (e.g. 'pcscf')."),
+        typer.Option(
+            "--ipsec-mode",
+            help="IPsec bypass strategy: 'null' (host spoofing, requires null encryption) or 'bypass' (docker exec, xfrm policy bypass).",
+        ),
     ] = None,
     preserve_via: Annotated[
         bool,
@@ -171,7 +174,7 @@ def run_command(
         int,
         typer.Option(
             "--mt-local-port",
-            help="Fixed local UDP/TCP port for MT INVITE send from container netns. Must match Via sent-by so responses come back to the same socket.",
+            help="Fixed local UDP/TCP port for MT INVITE sends. Must match Via sent-by so responses come back to the same socket and keep the high-port xfrm bypass.",
         ),
     ] = 15100,
 ) -> None:
@@ -214,14 +217,14 @@ def run_command(
         "from_msisdn": from_msisdn,
         "mt_local_port": mt_local_port,
     }
+    if ipsec_mode is not None:
+        payload["ipsec_mode"] = ipsec_mode
     if target_msisdn is not None:
         payload["target_msisdn"] = target_msisdn
     if impi is not None:
         payload["impi"] = impi
     if mt_invite_template is not None:
         payload["mt_invite_template"] = mt_invite_template
-    if bind_container is not None:
-        payload["bind_container"] = bind_container
 
     if adb_serial is not None:
         payload["adb_serial"] = adb_serial

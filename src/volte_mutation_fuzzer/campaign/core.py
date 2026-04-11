@@ -261,6 +261,7 @@ class CampaignExecutor:
             mode=config.mode,
             timeout_seconds=config.timeout_seconds,
             msisdn=config.target_msisdn,
+            source_ip=config.source_ip,
             bind_container=config.bind_container,
         )
         self._mt_template_text: str | None = (
@@ -500,8 +501,8 @@ class CampaignExecutor:
             )
 
             # 2. Build slots
-            # mt_local_port는 반드시 Via sent-by와 실제 드라이버 bind 포트 양쪽에
-            # 동일하게 적용돼야 A31이 보낸 100/180 응답을 수신할 수 있다.
+            # mt_local_port는 반드시 Via sent-by와 실제 bind 포트 양쪽에 동일하게
+            # 적용돼야 A31이 보낸 100/180 응답을 수신할 수 있다.
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
             slots = build_default_slots(
                 msisdn=config.target_msisdn,
@@ -522,10 +523,11 @@ class CampaignExecutor:
             wire_text = render_mt_invite(self._mt_template_text, slots)
 
             # 4. Fragmentation guard (plaintext UDP, host-direct only)
-            # bind_container 경로는 Docker 내부망이므로 IP fragmentation이 허용됨
+            # bypass 모드(Docker 내부망)는 IP fragmentation이 허용된다.
+            # null 모드(호스트 직접)는 실제 LTE 경로로 가므로 fragmentation 제한 필요.
             if (
                 self._target.transport.upper() == "UDP"
-                and self._target.bind_container is None
+                and config.ipsec_mode == "null"
                 and len(wire_text.encode("utf-8")) > _MT_TEMPLATE_FRAG_LIMIT
             ):
                 return CaseResult(
@@ -579,12 +581,25 @@ class CampaignExecutor:
                 )
 
             # 9. pcap + send
-            # 실제 작동하는 /tmp/send_mt_invite.py는 port_pc로 전송함.
-            # Plaintext UDP 경로라 ESP 정책 매칭이 아닌 단순 UDP 수신 포트가 port_pc.
-            # bind_port는 슬롯에 주입한 Via sent-by와 동일해야 응답 수신 가능.
-            mt_target = self._target.model_copy(
-                update={"port": port_pc, "bind_port": config.mt_local_port}
-            )
+            # 실제 송신은 port_pc로 간다. Plaintext UDP 경로라 ESP 정책 매칭이
+            # 아닌 단순 UDP 수신 포트가 port_pc다. bind_port는 슬롯에 주입한
+            # Via sent-by와 동일해야 응답 수신 가능하다.
+
+            # ipsec_mode에 따라 송신 방식 결정
+            target_update = {
+                "port": port_pc,
+                "bind_port": config.mt_local_port,
+            }
+            if config.ipsec_mode == "null":
+                # null encryption: 호스트에서 직접 source IP spoofing
+                target_update["source_ip"] = pcscf_ip
+                target_update["bind_container"] = None
+            elif config.ipsec_mode == "bypass":
+                # xfrm bypass: docker exec으로 컨테이너 netns 진입
+                target_update["source_ip"] = None
+                target_update["bind_container"] = "pcscf"
+
+            mt_target = self._target.model_copy(update=target_update)
             if config.pcap_enabled:
                 pcap_dir = Path(config.pcap_dir)
                 pcap_dir.mkdir(parents=True, exist_ok=True)
@@ -689,9 +704,11 @@ class CampaignExecutor:
             f" --target-msisdn {cfg.target_msisdn}"
             f" --impi {cfg.impi}"
             f" --mt-invite-template {cfg.mt_invite_template}"
-            f" --bind-container {cfg.bind_container}"
+            f"{f' --source-ip {cfg.source_ip}' if cfg.source_ip else ''}"
+            f"{f' --bind-container {cfg.bind_container}' if cfg.bind_container else ''}"
             f"{' --preserve-via' if cfg.preserve_via else ''}"
             f"{' --preserve-contact' if cfg.preserve_contact else ''}"
+            f" --mt-local-port {cfg.mt_local_port}"
             f" --methods INVITE"
             f" --layer {spec.layer}"
             f" --strategy {spec.strategy}"
@@ -867,8 +884,12 @@ class CampaignExecutor:
                 f" --layer {spec.layer}"
                 f" --seed {spec.seed}"
                 f" | uv run fuzzer send packet"
+                f" --mode {cfg.mode}"
                 f" --target-host {cfg.target_host}"
                 f" --target-port {cfg.target_port}"
+                f"{f' --source-ip {cfg.source_ip}' if cfg.source_ip else ''}"
+                f"{f' --bind-container {cfg.bind_container}' if cfg.bind_container else ''}"
+                f"{f' --bind-port {cfg.mt_local_port}' if cfg.mode == 'real-ue-direct' and cfg.mt_invite_template is not None else ''}"
             )
         return (
             f"uv run fuzzer mutate request {spec.method}"
@@ -876,8 +897,11 @@ class CampaignExecutor:
             f" --layer {spec.layer}"
             f" --seed {spec.seed}"
             f" | uv run fuzzer send packet"
+            f" --mode {cfg.mode}"
             f" --target-host {cfg.target_host}"
             f" --target-port {cfg.target_port}"
+            f"{f' --source-ip {cfg.source_ip}' if cfg.source_ip else ''}"
+            f"{f' --bind-container {cfg.bind_container}' if cfg.bind_container else ''}"
         )
 
     @staticmethod

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 ALL_SIP_METHODS = tuple(method.value for method in SIPMethod)
+_DEFAULT_REAL_UE_SOURCE_IP = "172.22.0.21"
 
 
 class CampaignConfig(BaseModel):
@@ -40,7 +41,7 @@ class CampaignConfig(BaseModel):
     target_msisdn: str | None = None
     impi: str | None = None
     mt_invite_template: str | None = None
-    bind_container: str | None = None
+    ipsec_mode: Literal["null", "bypass"] | None = None
     preserve_via: bool = False
     preserve_contact: bool = False
     mo_contact_host: str = "10.20.20.9"
@@ -89,8 +90,8 @@ class CampaignConfig(BaseModel):
                 raise ValueError("mt_invite_template requires target_msisdn")
             if self.impi is None:
                 raise ValueError("mt_invite_template requires impi")
-            if self.bind_container is None:
-                raise ValueError("mt_invite_template requires bind_container")
+            if self.ipsec_mode is None:
+                object.__setattr__(self, "ipsec_mode", "null")
         return self
 
 
