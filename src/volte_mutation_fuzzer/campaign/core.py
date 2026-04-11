@@ -518,9 +518,11 @@ class CampaignExecutor:
             # 3. Render template
             wire_text = render_mt_invite(self._mt_template_text, slots)
 
-            # 4. Fragmentation guard (plaintext UDP only)
+            # 4. Fragmentation guard (plaintext UDP, host-direct only)
+            # bind_container 경로는 Docker 내부망이므로 IP fragmentation이 허용됨
             if (
                 self._target.transport.upper() == "UDP"
+                and self._target.bind_container is None
                 and len(wire_text.encode("utf-8")) > _MT_TEMPLATE_FRAG_LIMIT
             ):
                 return CaseResult(
@@ -574,6 +576,9 @@ class CampaignExecutor:
                 )
 
             # 9. pcap + send
+            # 실제 작동하는 /tmp/send_mt_invite.py는 port_pc로 전송함.
+            # Plaintext UDP 경로라 ESP 정책 매칭이 아닌 단순 UDP 수신 포트가 port_pc.
+            mt_target = self._target.model_copy(update={"port": port_pc})
             if config.pcap_enabled:
                 pcap_dir = Path(config.pcap_dir)
                 pcap_dir.mkdir(parents=True, exist_ok=True)
@@ -582,7 +587,7 @@ class CampaignExecutor:
                 capture.start()
             try:
                 send_result = self._sender.send_artifact(
-                    artifact, self._target, collect_all_responses=True
+                    artifact, mt_target, collect_all_responses=True
                 )
             finally:
                 if capture is not None:

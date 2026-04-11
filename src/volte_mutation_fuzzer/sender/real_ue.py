@@ -386,26 +386,38 @@ def resolve_ue_protected_ports(
         )
         if result.returncode == 0 and result.stdout:
             lines = result.stdout.splitlines()
-            sport: int | None = None
-            dport: int | None = None
+            current_src: str | None = None
+            # UE→pcscf SA의 sport들: 하나는 port_pc, 다른 하나는 port_ps.
+            # 관례상 min = port_pc, port_ps = port_pc + 1.
+            ue_sports: list[int] = []
             for line in lines:
                 stripped = line.strip()
-                if stripped.startswith("sport"):
+                # Track SA direction: "src X dst Y" header line
+                if stripped.startswith("src ") and " dst " in stripped:
                     parts = stripped.split()
+                    if len(parts) >= 4:
+                        current_src = parts[1]
+                # "sel src .../32 dst .../32 sport N dport M" — starts with "sel"
+                if stripped.startswith("sel ") and "sport" in stripped and "dport" in stripped:
+                    parts = stripped.split()
+                    s: int | None = None
                     for idx, part in enumerate(parts):
                         if part == "sport" and idx + 1 < len(parts):
                             try:
-                                sport = int(parts[idx + 1])
+                                s = int(parts[idx + 1])
                             except ValueError:
                                 pass
-                        if part == "dport" and idx + 1 < len(parts):
-                            try:
-                                dport = int(parts[idx + 1])
-                            except ValueError:
-                                pass
-            if dport is not None and dport > 1024:
-                ps = (sport or (dport + 1))
-                return dport, ps
+                    # UE→pcscf 방향: current_src가 UE IP (10.20.20.x)
+                    if (
+                        current_src is not None
+                        and current_src.startswith("10.20.20.")
+                        and s is not None
+                        and s > 1024
+                    ):
+                        ue_sports.append(s)
+            if ue_sports:
+                port_pc = min(ue_sports)
+                return port_pc, port_pc + 1
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
