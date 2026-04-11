@@ -167,6 +167,13 @@ def run_command(
         str,
         typer.Option("--from-msisdn", help="Originating MSISDN for From/Contact in MT INVITE."),
     ] = "222222",
+    mt_local_port: Annotated[
+        int,
+        typer.Option(
+            "--mt-local-port",
+            help="Fixed local UDP/TCP port for MT INVITE send from container netns. Must match Via sent-by so responses come back to the same socket.",
+        ),
+    ] = 15100,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
     strategies = (
@@ -205,6 +212,7 @@ def run_command(
         "mo_contact_port_pc": mo_contact_port_pc,
         "mo_contact_port_ps": mo_contact_port_ps,
         "from_msisdn": from_msisdn,
+        "mt_local_port": mt_local_port,
     }
     if target_msisdn is not None:
         payload["target_msisdn"] = target_msisdn

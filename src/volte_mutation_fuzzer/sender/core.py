@@ -396,13 +396,14 @@ class SIPSenderReactor:
         assert target.bind_container is not None
         container = target.bind_container
         bind_host = self._env.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
+        bind_port = target.bind_port if target.bind_port is not None else 0
 
         observer_events.append(f"route-check:bypassed:bind-container:{container}")
 
         payload, normalization_events = prepare_real_ue_direct_payload(
             artifact,
             local_host=bind_host,
-            local_port=0,
+            local_port=bind_port,
             rewrite_via=not artifact.preserve_via,
             rewrite_contact=not artifact.preserve_contact,
         )
@@ -411,6 +412,7 @@ class SIPSenderReactor:
         container_result = send_via_container(
             container=container,
             bind_host=bind_host,
+            bind_port=bind_port,
             remote_host=resolved_host,
             remote_port=resolved_port,
             transport=target.transport,

@@ -29,11 +29,12 @@ from typing import Final, Literal
 _DRIVER_SCRIPT: Final[str] = r"""
 import socket, sys, json, base64, struct
 bind_host = sys.argv[1]
-remote_host = sys.argv[2]
-remote_port = int(sys.argv[3])
-transport = sys.argv[4].upper()
-timeout_secs = float(sys.argv[5])
-collect_all = sys.argv[6] == "1"
+bind_port = int(sys.argv[2])
+remote_host = sys.argv[3]
+remote_port = int(sys.argv[4])
+transport = sys.argv[5].upper()
+timeout_secs = float(sys.argv[6])
+collect_all = sys.argv[7] == "1"
 
 length_bytes = sys.stdin.buffer.read(4)
 if len(length_bytes) < 4:
@@ -44,8 +45,11 @@ payload = sys.stdin.buffer.read(payload_len)
 MAX_RESPONSES = 8
 
 if transport == "TCP":
-    sock = socket.create_connection((remote_host, remote_port), timeout=timeout_secs)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout_secs)
+    if bind_port > 0:
+        sock.bind((bind_host, bind_port))
+    sock.connect((remote_host, remote_port))
     sock.sendall(payload)
     chunks = []
     while True:
@@ -62,7 +66,7 @@ if transport == "TCP":
         print(json.dumps({"raw_b64": base64.b64encode(raw).decode(), "host": remote_host, "port": remote_port}), flush=True)
 else:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((bind_host, 0))
+    sock.bind((bind_host, bind_port))
     sock.settimeout(timeout_secs)
     sock.sendto(payload, (remote_host, remote_port))
     count = 0
@@ -103,6 +107,7 @@ def send_via_container(
     *,
     container: str,
     bind_host: str,
+    bind_port: int = 0,
     remote_host: str,
     remote_port: int,
     transport: Literal["UDP", "TCP"],
@@ -113,8 +118,11 @@ def send_via_container(
     """Send *payload* from inside *container*'s network namespace and collect responses.
 
     The payload is sent to ``(remote_host, remote_port)`` using *transport*.  The
-    container-side socket is bound to ``(bind_host, 0)`` so that the kernel picks the
-    correct source IP automatically.
+    container-side socket is bound to ``(bind_host, bind_port)``.  Passing
+    ``bind_port=0`` lets the kernel pick a random source port; passing a non-zero
+    value is required when the caller wants incoming responses (e.g. 100 Trying,
+    180 Ringing) to arrive back on a specific known port that matches the SIP
+    ``Via`` sent-by header value.
 
     Returns a :class:`ContainerSendResult` whose ``raw_responses`` tuples carry raw
     SIP bytes and the sender address.  The caller is responsible for converting these
@@ -133,6 +141,7 @@ def send_via_container(
         "-c",
         _DRIVER_SCRIPT,
         bind_host,
+        str(bind_port),
         remote_host,
         str(remote_port),
         transport,
@@ -143,7 +152,7 @@ def send_via_container(
     process_timeout = timeout_seconds + _MAX_DRIVER_TIMEOUT_EXTRA_S
     observer_events: list[str] = [
         f"container-send:exec:{container}",
-        f"container-send:bind:{bind_host}",
+        f"container-send:bind:{bind_host}:{bind_port}",
     ]
 
     try:

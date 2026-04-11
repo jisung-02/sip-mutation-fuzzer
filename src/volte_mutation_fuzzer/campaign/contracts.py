@@ -47,6 +47,7 @@ class CampaignConfig(BaseModel):
     mo_contact_port_pc: int = Field(default=31800, ge=1, le=65535)
     mo_contact_port_ps: int = Field(default=31100, ge=1, le=65535)
     from_msisdn: str = "222222"
+    mt_local_port: int = Field(default=15100, ge=1024, le=65535)
 
     @field_validator("methods", mode="before")
     @classmethod

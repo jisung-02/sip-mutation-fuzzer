@@ -500,6 +500,8 @@ class CampaignExecutor:
             )
 
             # 2. Build slots
+            # mt_local_port는 반드시 Via sent-by와 실제 드라이버 bind 포트 양쪽에
+            # 동일하게 적용돼야 A31이 보낸 100/180 응답을 수신할 수 있다.
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
             slots = build_default_slots(
                 msisdn=config.target_msisdn,
@@ -513,6 +515,7 @@ class CampaignExecutor:
                 seed=spec.seed,
                 from_msisdn=config.from_msisdn,
                 ue_ip=config.target_host,
+                local_port=config.mt_local_port,
             )
 
             # 3. Render template
@@ -578,7 +581,10 @@ class CampaignExecutor:
             # 9. pcap + send
             # 실제 작동하는 /tmp/send_mt_invite.py는 port_pc로 전송함.
             # Plaintext UDP 경로라 ESP 정책 매칭이 아닌 단순 UDP 수신 포트가 port_pc.
-            mt_target = self._target.model_copy(update={"port": port_pc})
+            # bind_port는 슬롯에 주입한 Via sent-by와 동일해야 응답 수신 가능.
+            mt_target = self._target.model_copy(
+                update={"port": port_pc, "bind_port": config.mt_local_port}
+            )
             if config.pcap_enabled:
                 pcap_dir = Path(config.pcap_dir)
                 pcap_dir.mkdir(parents=True, exist_ok=True)

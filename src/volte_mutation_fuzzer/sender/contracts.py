@@ -54,6 +54,7 @@ class TargetEndpoint(BaseModel):
     timeout_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
     label: str | None = None
     bind_container: str | None = Field(default=None, min_length=1)
+    bind_port: int | None = Field(default=None, ge=1, le=65535)
 
     @field_validator("host", "label", "msisdn", "bind_container", mode="before")
     @classmethod
@@ -98,6 +99,8 @@ class TargetEndpoint(BaseModel):
             raise ValueError("msisdn is only supported in real-ue-direct mode")
         if self.bind_container is not None:
             raise ValueError("bind_container is only supported in real-ue-direct mode")
+        if self.bind_port is not None:
+            raise ValueError("bind_port is only supported in real-ue-direct mode")
         if self.host is None:
             raise ValueError("host must be set")
         if self.port is None:
