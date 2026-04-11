@@ -44,6 +44,29 @@ class CampaignConfigTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             CampaignConfig(target_host="127.0.0.1", unknown="x")
 
+    def test_mt_template_defaults_ipsec_mode_for_real_ue_direct(self) -> None:
+        cfg = CampaignConfig(
+            target_host="10.20.20.8",
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+        )
+
+        self.assertEqual(cfg.ipsec_mode, "null")
+
+    def test_mt_template_accepts_explicit_ipsec_mode(self) -> None:
+        cfg = CampaignConfig(
+            target_host="10.20.20.8",
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="bypass",
+        )
+
+        self.assertEqual(cfg.ipsec_mode, "bypass")
+
 
 class CaseSpecTests(unittest.TestCase):
     def test_valid(self) -> None:

@@ -53,10 +53,19 @@ class TargetEndpoint(BaseModel):
     transport: TransportProtocol = "UDP"
     timeout_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
     label: str | None = None
+    source_ip: str | None = Field(default=None, min_length=1)
+    # Deprecated compatibility path for Docker netns sending.
     bind_container: str | None = Field(default=None, min_length=1)
     bind_port: int | None = Field(default=None, ge=1, le=65535)
 
-    @field_validator("host", "label", "msisdn", "bind_container", mode="before")
+    @field_validator(
+        "host",
+        "label",
+        "msisdn",
+        "source_ip",
+        "bind_container",
+        mode="before",
+    )
     @classmethod
     def _normalize_text(cls, value: object) -> object:
         if not isinstance(value, str):
@@ -93,10 +102,23 @@ class TargetEndpoint(BaseModel):
                     )
                 if self.port is None:
                     object.__setattr__(self, "port", 5060)
+            if self.source_ip is not None:
+                try:
+                    parsed_source = ip_address(self.source_ip)
+                except ValueError as exc:
+                    raise ValueError(
+                        "real-ue-direct source_ip must be an IPv4 address"
+                    ) from exc
+                if parsed_source.version != 4:
+                    raise ValueError(
+                        "real-ue-direct source_ip must be an IPv4 address"
+                    )
             return self
 
         if self.msisdn is not None:
             raise ValueError("msisdn is only supported in real-ue-direct mode")
+        if self.source_ip is not None:
+            raise ValueError("source_ip is only supported in real-ue-direct mode")
         if self.bind_container is not None:
             raise ValueError("bind_container is only supported in real-ue-direct mode")
         if self.bind_port is not None:

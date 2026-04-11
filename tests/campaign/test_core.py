@@ -8,6 +8,7 @@ from volte_mutation_fuzzer.campaign.contracts import (
     CampaignConfig,
     CampaignResult,
     CaseResult,
+    CaseSpec,
 )
 from volte_mutation_fuzzer.campaign.core import (
     CampaignExecutor,
@@ -371,6 +372,53 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("fuzzer mutate request", cmd)
         self.assertIn("--seed", cmd)
         self.assertIn(responder.host, cmd)
+
+    def test_reproduction_cmd_includes_ipsec_mode_for_real_ue_direct(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("OPTIONS",),
+            ipsec_mode="null",
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+            )
+        )
+
+        self.assertIn("--mode real-ue-direct", cmd)
+        self.assertIn("--ipsec-mode null", cmd)
+
+    def test_mt_template_reproduction_cmd_includes_ipsec_mode(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="bypass",
+            mt_local_port=15100,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="wire",
+            strategy="default",
+        )
+        cmd = executor._build_mt_template_reproduction_cmd(spec)
+
+        self.assertIn("--ipsec-mode bypass", cmd)
+        self.assertIn("--mt-local-port 15100", cmd)
 
     def test_unknown_verdict_prints_error_to_stderr(self) -> None:
         import io

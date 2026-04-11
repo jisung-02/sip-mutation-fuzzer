@@ -704,8 +704,7 @@ class CampaignExecutor:
             f" --target-msisdn {cfg.target_msisdn}"
             f" --impi {cfg.impi}"
             f" --mt-invite-template {cfg.mt_invite_template}"
-            f"{f' --source-ip {cfg.source_ip}' if cfg.source_ip else ''}"
-            f"{f' --bind-container {cfg.bind_container}' if cfg.bind_container else ''}"
+            f" --ipsec-mode {cfg.ipsec_mode}"
             f"{' --preserve-via' if cfg.preserve_via else ''}"
             f"{' --preserve-contact' if cfg.preserve_contact else ''}"
             f" --mt-local-port {cfg.mt_local_port}"
@@ -900,8 +899,7 @@ class CampaignExecutor:
             f" --mode {cfg.mode}"
             f" --target-host {cfg.target_host}"
             f" --target-port {cfg.target_port}"
-            f"{f' --source-ip {cfg.source_ip}' if cfg.source_ip else ''}"
-            f"{f' --bind-container {cfg.bind_container}' if cfg.bind_container else ''}"
+            f" --ipsec-mode {cfg.ipsec_mode}"
         )
 
     @staticmethod

@@ -1,5 +1,4 @@
 import re
-import socket
 import unittest
 from unittest.mock import patch
 
@@ -167,6 +166,7 @@ class SIPSenderReactorTests(unittest.TestCase):
                 for event in result.observer_events
             )
         )
+
 
     @patch(
         "volte_mutation_fuzzer.sender.core.check_route_to_target",

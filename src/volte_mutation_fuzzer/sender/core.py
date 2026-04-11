@@ -5,7 +5,6 @@ import time
 from collections.abc import Sequence
 from typing import Final
 
-from volte_mutation_fuzzer.sender.container_exec import send_via_container
 from volte_mutation_fuzzer.sender.contracts import (
     CorrelationKey,
     DeliveryOutcome,
@@ -285,8 +284,9 @@ class SIPSenderReactor:
         )
         observer_events = [*resolved.observer_events]
 
-        # bind_container path: delegate send to container network namespace
-        if target.bind_container is not None:
+        # Deprecated compatibility path: delegate send to container netns only when
+        # no explicit host-side spoofed source IP is configured.
+        if target.bind_container is not None and target.source_ip is None:
             return self._send_via_container(
                 artifact=artifact,
                 target=target,
@@ -323,6 +323,21 @@ class SIPSenderReactor:
                     observer_events=tuple(observer_events),
                     resolved_target=resolved_target,
                 )
+
+        if target.source_ip is not None:
+            if target.bind_container is not None:
+                observer_events.append(
+                    f"source-ip:preferred-over-bind-container:{target.source_ip}"
+                )
+            return self._send_with_spoofed_source(
+                artifact=artifact,
+                target=target,
+                resolved_target=resolved_target,
+                resolved_host=resolved.host,
+                resolved_port=resolved.port,
+                observer_events=observer_events,
+                collect_all_responses=collect_all_responses,
+            )
 
         observations: list[SocketObservation] = []
         payload = b""
@@ -381,6 +396,85 @@ class SIPSenderReactor:
 
         return resolved_target, payload, observations, tuple(observer_events)
 
+    def _send_with_spoofed_source(
+        self,
+        *,
+        artifact: SendArtifact,
+        target: TargetEndpoint,
+        resolved_target: TargetEndpoint,
+        resolved_host: str,
+        resolved_port: int,
+        observer_events: list[str],
+        collect_all_responses: bool,
+    ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
+        """Send from the host using an explicit source IP bind."""
+        assert target.source_ip is not None
+        bind_host = target.source_ip
+        requested_bind_port = target.bind_port if target.bind_port is not None else 0
+        observer_events.append(f"spoof-source:{bind_host}:{requested_bind_port}")
+
+        observations: list[SocketObservation] = []
+        payload = b""
+        if target.transport.upper() == "TCP":
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(target.timeout_seconds)
+
+        try:
+            sock.bind((bind_host, requested_bind_port))
+            local_host, local_port = sock.getsockname()
+            observer_events.append(f"direct-local:{local_host}:{local_port}")
+
+            payload, normalization_events = prepare_real_ue_direct_payload(
+                artifact,
+                local_host=str(local_host),
+                local_port=int(local_port),
+                rewrite_via=not artifact.preserve_via,
+                rewrite_contact=not artifact.preserve_contact,
+            )
+            observer_events.extend(normalization_events)
+
+            if target.transport.upper() == "TCP":
+                sock.connect((resolved_host, resolved_port))
+                sock.sendall(payload)
+                chunks: list[bytes] = []
+                while True:
+                    try:
+                        chunk = sock.recv(_TCP_READ_SIZE)
+                    except TimeoutError:
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                if chunks:
+                    observations = [
+                        self._parse_response(
+                            b"".join(chunks), (resolved_host, resolved_port)
+                        )
+                    ]
+            else:
+                sock.sendto(payload, (resolved_host, resolved_port))
+                observations = self._read_udp_observations(
+                    sock,
+                    collect_all_responses=collect_all_responses,
+                )
+        except OSError as exc:
+            observer_events.append(
+                f"spoof-source:failed:{bind_host}:{requested_bind_port}:{exc}"
+            )
+            raise RealUEDirectError(
+                "failed to send with spoofed source "
+                f"{bind_host}:{requested_bind_port}: {exc}. "
+                "set net.ipv4.ip_nonlocal_bind=1 when binding a non-local source IP",
+                observer_events=tuple(observer_events),
+                resolved_target=resolved_target,
+            ) from exc
+        finally:
+            sock.close()
+
+        return resolved_target, payload, observations, tuple(observer_events)
+
     def _send_via_container(
         self,
         *,
@@ -394,11 +488,14 @@ class SIPSenderReactor:
     ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
         """Send artifact from inside a Docker container network namespace."""
         assert target.bind_container is not None
+        from volte_mutation_fuzzer.sender.container_exec import send_via_container
+
         container = target.bind_container
         bind_host = self._env.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
         bind_port = target.bind_port if target.bind_port is not None else 0
 
         observer_events.append(f"route-check:bypassed:bind-container:{container}")
+        observer_events.append(f"container-send:deprecated:{container}")
 
         payload, normalization_events = prepare_real_ue_direct_payload(
             artifact,

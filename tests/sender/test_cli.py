@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from tests.sender._server import UDPResponder
+from tests.sender._server import TCPResponder, UDPResponder
 from volte_mutation_fuzzer.generator.cli import app
 from volte_mutation_fuzzer.sender.real_ue import ResolvedRealUETarget, RouteCheckResult
 
@@ -183,6 +183,7 @@ class SIPSenderCLITests(unittest.TestCase):
             payload["observer_events"],
         )
 
+
     def test_send_request_direct_mode_rejects_target_host_and_msisdn_together(
         self,
     ) -> None:
@@ -204,7 +205,19 @@ class SIPSenderCLITests(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("exactly one of host or msisdn", result.output)
 
-    def test_send_request_direct_mode_rejects_tcp(self) -> None:
+    @patch(
+        "volte_mutation_fuzzer.sender.core.check_route_to_target",
+        return_value=RouteCheckResult(True, "loopback"),
+    )
+    def test_send_request_direct_mode_allows_tcp(
+        self, _mock_route: object
+    ) -> None:
+        responder = TCPResponder(
+            response=b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"
+        )
+        responder.start()
+        self.addCleanup(responder.close)
+
         result = self.runner.invoke(
             app,
             [
@@ -214,14 +227,19 @@ class SIPSenderCLITests(unittest.TestCase):
                 "--mode",
                 "real-ue-direct",
                 "--target-host",
-                "127.0.0.1",
+                responder.host,
+                "--target-port",
+                str(responder.port),
                 "--transport",
                 "TCP",
+                "--timeout",
+                "0.5",
             ],
         )
 
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("supports UDP only", result.output)
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["outcome"], "success")
 
 
 if __name__ == "__main__":

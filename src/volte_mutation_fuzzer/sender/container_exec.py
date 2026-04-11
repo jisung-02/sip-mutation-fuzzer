@@ -1,10 +1,11 @@
-"""Send SIP payloads from within a Docker container's network namespace.
+"""Deprecated legacy sender for Docker container network namespaces.
 
-This module provides :func:`send_via_container`, which delegates UDP/TCP SIP
-transmission to a minimal Python driver that runs inside the target container via
-``docker exec -i``.  This is the required delivery path when the UE's IMS application
-layer performs source-IP white-listing against the registered P-CSCF address (e.g.
-172.22.0.21 for the Kamailio pcscf container).
+This module remains as a compatibility fallback for older ``bind_container``-based
+real-UE workflows.  The preferred path is host-side source-IP binding via
+``TargetEndpoint.source_ip`` with ``net.ipv4.ip_nonlocal_bind=1``.
+
+The legacy :func:`send_via_container` helper delegates UDP/TCP SIP transmission to a
+minimal Python driver that runs inside the target container via ``docker exec -i``.
 
 The driver script is passed as a ``-c`` argument to ``python3`` so no file needs to
 be copied into the container.  The raw SIP payload bytes are passed on stdin with a
@@ -17,7 +18,6 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import sys
 from dataclasses import dataclass
 from typing import Final, Literal
 
