@@ -70,7 +70,7 @@ class CaseGenerator:
     def __init__(self, config: CampaignConfig) -> None:
         self._config = config
 
-    def generate(self) -> Iterator[CaseSpec]:
+    def generate(self, skip_before: int = -1) -> Iterator[CaseSpec]:
         config = self._config
         seen: set[tuple[str, int | None, str | None, str, str]] = set()
         combos: list[tuple[str, int | None, str | None, str, str]] = []
@@ -130,6 +130,8 @@ class CaseGenerator:
         ) in enumerate(combos):
             if case_id >= config.max_cases:
                 break
+            if case_id <= skip_before:
+                continue
             yield CaseSpec(
                 case_id=case_id,
                 seed=config.seed_start + case_id,
@@ -172,6 +174,41 @@ class ResultStore:
     def write_footer(self, result: CampaignResult) -> None:
         payload = {"type": self._FOOTER_TYPE}
         payload.update(result.model_dump(mode="json"))
+        with self._path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def find_checkpoint(self) -> tuple[int, CampaignSummary, str, str, "CampaignConfig"] | None:
+        """Return (last_case_id, summary, campaign_id, started_at, original_config) or None."""
+        if not self._path.exists():
+            return None
+        try:
+            header, cases = self.read_all()
+        except Exception:
+            return None
+        if not cases:
+            return None
+        last_id = max(c.case_id for c in cases)
+        counts: dict[str, int] = {
+            "normal": 0,
+            "suspicious": 0,
+            "timeout": 0,
+            "crash": 0,
+            "stack_failure": 0,
+            "unknown": 0,
+        }
+        for c in cases:
+            if c.verdict in counts:
+                counts[c.verdict] += 1
+        summary = CampaignSummary(total=len(cases), **counts)
+        return last_id, summary, header.campaign_id, header.started_at, header.config
+
+    def write_resume_marker(self, resume_from_case_id: int) -> None:
+        """Append a resume_marker line without overwriting existing records."""
+        payload = {
+            "type": "resume_marker",
+            "resumed_at": datetime.now(timezone.utc).isoformat(),
+            "resume_from_case_id": resume_from_case_id,
+        }
         with self._path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -219,6 +256,16 @@ class CampaignExecutor:
         oracle: OracleEngine | None = None,
         store: ResultStore | None = None,
     ) -> None:
+        # Resume: restore original config from JSONL before initializing anything else.
+        # Only output_path and resume flag are kept from the new invocation.
+        if config.resume and store is None:
+            _tmp_store = ResultStore(Path(config.output_path))
+            _checkpoint = _tmp_store.find_checkpoint()
+            if _checkpoint is not None:
+                _, _, _, _, _original_config = _checkpoint
+                config = _original_config.model_copy(
+                    update={"resume": True, "output_path": config.output_path}
+                )
         self._config = config
         self._generator = generator or SIPGenerator(GeneratorSettings())
         self._mutator = mutator or SIPMutator()
@@ -281,9 +328,44 @@ class CampaignExecutor:
 
     def run(self) -> CampaignResult:
         config = self._config
-        campaign_id = uuid.uuid4().hex[:12]
-        started_at = datetime.now(timezone.utc).isoformat()
-        summary = CampaignSummary()
+        skip_before = -1
+
+        if config.resume:
+            checkpoint = self._store.find_checkpoint()
+            if checkpoint is not None:
+                last_id, summary, campaign_id, started_at, _ = checkpoint
+                skip_before = last_id
+                self._store.write_resume_marker(last_id + 1)
+                logger.info(
+                    "resuming campaign %s from case_id=%d",
+                    campaign_id,
+                    last_id + 1,
+                )
+            else:
+                # 파일 없거나 case 없음 → 새 캠페인처럼 시작
+                campaign_id = uuid.uuid4().hex[:12]
+                started_at = datetime.now(timezone.utc).isoformat()
+                summary = CampaignSummary()
+                _new_campaign = CampaignResult(
+                    campaign_id=campaign_id,
+                    started_at=started_at,
+                    status="running",
+                    config=config,
+                    summary=summary,
+                )
+                self._store.write_header(_new_campaign)
+        else:
+            campaign_id = uuid.uuid4().hex[:12]
+            started_at = datetime.now(timezone.utc).isoformat()
+            summary = CampaignSummary()
+            _new_campaign = CampaignResult(
+                campaign_id=campaign_id,
+                started_at=started_at,
+                status="running",
+                config=config,
+                summary=summary,
+            )
+            self._store.write_header(_new_campaign)
 
         campaign = CampaignResult(
             campaign_id=campaign_id,
@@ -292,12 +374,11 @@ class CampaignExecutor:
             config=config,
             summary=summary,
         )
-        self._store.write_header(campaign)
 
         if self._adb_collector is not None:
             self._adb_collector.start()
         try:
-            for spec in CaseGenerator(config).generate():
+            for spec in CaseGenerator(config).generate(skip_before=skip_before):
                 case_result = self._execute_case(spec)
                 self._store.append(case_result)
 

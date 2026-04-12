@@ -190,6 +190,10 @@ def run_command(
         str,
         typer.Option("--crash-analysis-output", help="Output directory for crash analysis results."),
     ] = "crash_analysis",
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Resume campaign from last checkpoint in output file."),
+    ] = False,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
     strategies = (
@@ -231,6 +235,7 @@ def run_command(
         "mt_local_port": mt_local_port,
         "crash_analysis": crash_analysis,
         "crash_analysis_output": crash_analysis_output,
+        "resume": resume,
     }
     if ipsec_mode is not None:
         payload["ipsec_mode"] = ipsec_mode
