@@ -142,13 +142,24 @@ class AdbConnector:
 
 
 class AdbLogCollector:
-    def __init__(self, config: AdbCollectorConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: AdbCollectorConfig | None = None,
+        *,
+        max_reconnect_attempts: int = 5,
+        reconnect_delay: float = 5.0,
+    ) -> None:
         self._config = config or AdbCollectorConfig()
         self._connector = AdbConnector(serial=self._config.serial)
         self._procs: dict[str, subprocess.Popen[str]] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._queue: Queue[tuple[str, str]] = Queue()
         self._running = threading.Event()
+        self._max_reconnect_attempts = max_reconnect_attempts
+        self._reconnect_delay = reconnect_delay
+        self._dead_buffers: set[str] = set()
+        self._reconnect_count: int = 0
+        self._lock = threading.Lock()
 
     def start(self, clear: bool = True) -> None:
         if clear:
@@ -185,7 +196,9 @@ class AdbLogCollector:
 
     def stop(self) -> None:
         self._running.clear()
-        for proc in self._procs.values():
+        with self._lock:
+            procs = list(self._procs.values())
+        for proc in procs:
             try:
                 proc.terminate()
                 proc.wait(timeout=3)
@@ -196,7 +209,9 @@ class AdbLogCollector:
                     pass
         for thread in self._threads.values():
             thread.join(timeout=5)
-        self._procs.clear()
+        with self._lock:
+            self._procs.clear()
+            self._dead_buffers.clear()
         self._threads.clear()
 
     def get_lines(
@@ -222,17 +237,99 @@ class AdbLogCollector:
     def is_running(self) -> bool:
         return self._running.is_set()
 
-    def _reader_loop(self, buffer_name: str, proc: subprocess.Popen[str]) -> None:
-        if proc.stdout is None:
-            return
+    @property
+    def is_healthy(self) -> bool:
+        with self._lock:
+            return self._running.is_set() and len(self._dead_buffers) == 0
 
-        try:
-            for line in proc.stdout:
+    @property
+    def dead_buffers(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._dead_buffers)
+
+    @property
+    def reconnect_count(self) -> int:
+        with self._lock:
+            return self._reconnect_count
+
+    def _reader_loop(self, buffer_name: str, proc: subprocess.Popen[str]) -> None:
+        current_proc = proc
+        consecutive_failures = 0
+
+        while self._running.is_set():
+            # Read from current subprocess
+            got_data = False
+            if current_proc.stdout is not None:
+                try:
+                    for line in current_proc.stdout:
+                        if not self._running.is_set():
+                            return
+                        self._queue.put((buffer_name, line.rstrip("\n")))
+                        got_data = True
+                    # EOF reached — adb logcat subprocess died
+                except Exception:
+                    pass
+
+            if not self._running.is_set():
+                return
+
+            # Reset failure counter only if we actually read data (healthy session)
+            if got_data:
+                consecutive_failures = 0
+
+            # Reconnect attempt
+            consecutive_failures += 1
+            if consecutive_failures > self._max_reconnect_attempts:
+                with self._lock:
+                    self._dead_buffers.add(buffer_name)
+                return
+
+            # Reap the old subprocess before spawning a new one
+            try:
+                current_proc.wait(timeout=1)
+            except Exception:
+                try:
+                    current_proc.kill()
+                except Exception:
+                    pass
+
+            # Interruptible sleep before retry
+            for _ in range(int(self._reconnect_delay * 10)):
                 if not self._running.is_set():
-                    break
-                self._queue.put((buffer_name, line.rstrip("\n")))
-        except Exception:
-            pass
+                    return
+                time.sleep(0.1)
+
+            # Re-check _running after sleep to avoid spawning during shutdown
+            if not self._running.is_set():
+                return
+
+            try:
+                cmd = self._connector._adb_cmd(
+                    "logcat",
+                    "-b",
+                    buffer_name,
+                    "-v",
+                    self._config.log_format,
+                )
+                new_proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                with self._lock:
+                    # If stop() was called while we were spawning, kill immediately
+                    if not self._running.is_set():
+                        try:
+                            new_proc.kill()
+                        except Exception:
+                            pass
+                        return
+                    self._procs[buffer_name] = new_proc
+                    self._reconnect_count += 1
+                current_proc = new_proc
+            except Exception:
+                pass
 
 
 class AdbAnomalyDetector:

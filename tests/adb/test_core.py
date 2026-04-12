@@ -199,6 +199,91 @@ class AdbLogCollectorTests(unittest.TestCase):
         self.assertEqual(collector.get_lines(), [])
 
 
+class AdbLogCollectorHealthTests(unittest.TestCase):
+    def test_healthy_when_running(self) -> None:
+        collector = AdbLogCollector()
+        collector._running.set()
+        self.assertTrue(collector.is_healthy)
+        self.assertEqual(collector.dead_buffers, frozenset())
+        self.assertEqual(collector.reconnect_count, 0)
+
+    def test_unhealthy_when_buffer_dead(self) -> None:
+        collector = AdbLogCollector()
+        collector._running.set()
+        collector._dead_buffers.add("main")
+        self.assertFalse(collector.is_healthy)
+        self.assertEqual(collector.dead_buffers, frozenset({"main"}))
+
+    def test_unhealthy_when_stopped(self) -> None:
+        collector = AdbLogCollector()
+        # _running is not set
+        self.assertFalse(collector.is_healthy)
+
+    def test_reader_loop_reconnects_on_eof(self) -> None:
+        """When adb logcat subprocess dies (EOF), _reader_loop retries."""
+        # First proc: yields 1 line then EOF
+        first_proc = _DummyPopen(lines=["line1\n"])
+        # Second proc: yields 1 line then EOF → triggers another reconnect → stop
+        second_proc = _DummyPopen(lines=["line2\n"])
+
+        collector = AdbLogCollector(
+            AdbCollectorConfig(buffers=("main",)),
+            max_reconnect_attempts=5,
+            reconnect_delay=0.1,  # Fast for test
+        )
+        collector._running.set()
+
+        popen_calls = [second_proc]
+
+        def fake_popen(*args, **kwargs):
+            if popen_calls:
+                return popen_calls.pop(0)
+            # No more procs — stop the collector to end the loop
+            collector._running.clear()
+            return _DummyPopen(lines=[])
+
+        with patch(
+            "volte_mutation_fuzzer.adb.core.subprocess.Popen",
+            side_effect=fake_popen,
+        ):
+            collector._reader_loop("main", first_proc)
+
+        # Should have read lines from both processes
+        lines = []
+        while not collector._queue.empty():
+            lines.append(collector._queue.get_nowait())
+        self.assertIn(("main", "line1"), lines)
+        self.assertIn(("main", "line2"), lines)
+        self.assertGreaterEqual(collector.reconnect_count, 1)
+
+    def test_reader_loop_marks_dead_after_max_retries(self) -> None:
+        """After max_reconnect_attempts, buffer is marked dead."""
+        collector = AdbLogCollector(
+            AdbCollectorConfig(buffers=("radio",)),
+            max_reconnect_attempts=2,
+            reconnect_delay=0.1,
+        )
+        collector._running.set()
+
+        # All Popen calls fail
+        with patch(
+            "volte_mutation_fuzzer.adb.core.subprocess.Popen",
+            side_effect=OSError("adb not found"),
+        ):
+            # First proc: immediate EOF
+            collector._reader_loop("radio", _DummyPopen(lines=[]))
+
+        self.assertIn("radio", collector.dead_buffers)
+        self.assertFalse(collector.is_healthy)
+
+    def test_stop_clears_dead_buffers(self) -> None:
+        collector = AdbLogCollector()
+        collector._running.set()
+        collector._dead_buffers.add("main")
+        collector.stop()
+        self.assertEqual(collector.dead_buffers, frozenset())
+
+
 class AdbAnomalyDetectorTests(unittest.TestCase):
     def test_detects_sigsegv(self) -> None:
         detector = AdbAnomalyDetector()

@@ -583,6 +583,30 @@ class _CollectorStub:
         return lines
 
 
+class _UnhealthyCollectorStub:
+    """Simulates an AdbLogCollector with dead buffers."""
+
+    def __init__(
+        self, lines: list[tuple[str, str]], *, dead: frozenset[str] = frozenset()
+    ) -> None:
+        self._lines = list(lines)
+        self._dead = dead
+        self.is_running = True
+
+    @property
+    def is_healthy(self) -> bool:
+        return len(self._dead) == 0
+
+    @property
+    def dead_buffers(self) -> frozenset[str]:
+        return self._dead
+
+    def get_lines(self) -> list[tuple[str, str]]:
+        lines = list(self._lines)
+        self._lines.clear()
+        return lines
+
+
 class _AdbOracleStub:
     def __init__(self, matched: bool, pattern: str | None = None) -> None:
         self._matched = matched
@@ -622,6 +646,21 @@ class AdbOracleTests(unittest.TestCase):
         )
         result = oracle.check()
         self.assertFalse(result.matched)
+
+    def test_unhealthy_collector_reports_error(self) -> None:
+        stub = _UnhealthyCollectorStub([], dead=frozenset({"main", "radio"}))
+        oracle = AdbOracle(stub, AdbAnomalyDetector())
+        result = oracle.check()
+        self.assertFalse(result.matched)
+        self.assertIsNotNone(result.error)
+        self.assertIn("disconnected", result.error)
+        self.assertIn("main", result.error)
+
+    def test_healthy_collector_no_error(self) -> None:
+        stub = _UnhealthyCollectorStub([])  # healthy by default
+        oracle = AdbOracle(stub, AdbAnomalyDetector())
+        result = oracle.check()
+        self.assertIsNone(result.error)
 
 
 class OracleEngineWithAdbTests(unittest.TestCase):

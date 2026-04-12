@@ -414,6 +414,15 @@ class AdbOracle:
         self._detector = detector
 
     def check(self) -> LogCheckResult:
+        # Check collector health and report degradation
+        error: str | None = None
+        if hasattr(self._collector, "is_healthy") and not self._collector.is_healthy:
+            dead = getattr(self._collector, "dead_buffers", frozenset())
+            if dead:
+                error = f"adb collector disconnected: buffers {','.join(sorted(dead))} dead"
+            elif hasattr(self._collector, "is_running") and not self._collector.is_running:
+                error = "adb collector stopped"
+
         lines = self._collector.get_lines()
         self._detector.feed_lines(lines)
         events = self._detector.drain_events()
@@ -427,11 +436,13 @@ class AdbOracle:
                 matched_pattern=top.matched_pattern,
                 matched_line=top.matched_line,
                 lines_scanned=len(lines),
+                error=error,
             )
         return LogCheckResult(
             log_path="adb:logcat",
             matched=False,
             lines_scanned=len(lines),
+            error=error,
         )
 
 

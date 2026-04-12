@@ -438,6 +438,19 @@ class CampaignExecutor:
                         file=sys.stderr,
                     )
 
+                # Warn if ADB collector has lost connection
+                if (
+                    self._adb_collector is not None
+                    and hasattr(self._adb_collector, "is_healthy")
+                    and not self._adb_collector.is_healthy
+                ):
+                    dead = getattr(self._adb_collector, "dead_buffers", frozenset())
+                    if dead:
+                        print(
+                            f"  [ADB WARNING] collector unhealthy — dead buffers: {','.join(sorted(dead))}",
+                            file=sys.stderr,
+                        )
+
                 if cb_threshold > 0 and consecutive_failures >= cb_threshold:
                     print(
                         f"[vmf campaign] CIRCUIT BREAKER: {consecutive_failures} consecutive"
