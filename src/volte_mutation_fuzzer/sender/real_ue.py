@@ -114,6 +114,7 @@ class UEContact:
     host: str
     port: int
     source: str
+    impi: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class ResolvedRealUETarget:
     port: int
     label: str | None
     observer_events: tuple[str, ...]
+    impi: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,7 +160,9 @@ class RealUEDirectResolver:
         except ValueError:
             self.pcscf_log_tail = _DEFAULT_PCSCF_LOG_TAIL
 
-    def resolve(self, target: TargetEndpoint) -> ResolvedRealUETarget:
+    def resolve(
+        self, target: TargetEndpoint, *, impi: str | None = None,
+    ) -> ResolvedRealUETarget:
         if target.host is not None:
             assert target.port is not None
             label = target.label or target.host
@@ -181,9 +185,13 @@ class RealUEDirectResolver:
         if contact is None:
             contact = self._lookup_via_pcscf_logs(msisdn)
         if contact is None:
+            contact = self._lookup_via_pcscf_options_ping(msisdn, impi=impi)
+        if contact is None:
+            contact = self._lookup_via_xfrm_state(msisdn)
+        if contact is None:
             raise RealUEDirectResolutionError(
                 f"real-ue-direct target msisdn {msisdn} could not be resolved via "
-                "docker Kamailio or P-CSCF log backends"
+                "docker Kamailio, P-CSCF log, or xfrm state backends"
             )
 
         final_port = resolved_port or contact.port
@@ -195,6 +203,7 @@ class RealUEDirectResolver:
             observer_events=(
                 f"resolver:{contact.source}:{msisdn}->{contact.host}:{final_port}",
             ),
+            impi=contact.impi,
         )
 
     def _lookup_via_kamctl(self, msisdn: str, *, container: str) -> UEContact | None:
@@ -310,6 +319,76 @@ class RealUEDirectResolver:
                 port=port,
                 source="pcscf-log",
             )
+        return None
+
+    def _lookup_via_pcscf_options_ping(
+        self, msisdn: str, *, impi: str | None = None,
+    ) -> UEContact | None:
+        """Parse pcscf logs for OPTIONS keepalive pings that contain IMPI→IP mapping.
+
+        Matches lines like:
+            OPTIONS to sip:001010000123512@10.20.20.2:8200 via ...
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "logs", self.pcscf_container, "--tail", str(self.pcscf_log_tail)],
+                capture_output=True, text=True, timeout=15.0, check=False,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+
+        # Pattern: OPTIONS to sip:<impi>@<ip>:<port>
+        pattern = re.compile(r"OPTIONS to sip:(\S+?)@([\d.]+):(\d+)")
+        lines = (result.stdout + result.stderr).splitlines()
+        last_seen: UEContact | None = None
+        for line in reversed(lines):
+            match = pattern.search(line)
+            if match is None:
+                continue
+            log_impi = match.group(1)
+            host = match.group(2)
+            port = int(match.group(3))
+            contact = UEContact(msisdn=msisdn, host=host, port=port, source="pcscf-options-ping", impi=log_impi)
+            # Exact IMPI match — best
+            if impi is not None and log_impi == impi:
+                return contact
+            # MSISDN substring match
+            if msisdn in log_impi or log_impi.endswith(msisdn):
+                return contact
+            # Remember most recent entry as fallback (single-UE mode)
+            if last_seen is None:
+                last_seen = contact
+        # No MSISDN/IMPI match — return most recent entry if available
+        return last_seen
+
+    def _lookup_via_xfrm_state(self, msisdn: str) -> UEContact | None:
+        """Parse xfrm state for UE IP — fallback when no MSISDN-level match is possible.
+
+        Returns the first non-P-CSCF IP found in IPsec SAs. Only useful in
+        single-UE environments.
+        """
+        pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21")
+        try:
+            result = subprocess.run(
+                ["docker", "exec", self.pcscf_container, "ip", "xfrm", "state"],
+                capture_output=True, text=True, timeout=10.0, check=False,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+
+        # Find "src <ue_ip> dst <pcscf_ip>" lines → extract UE IP + sport
+        pattern = re.compile(
+            r"sel src ([\d.]+)/\d+ dst " + re.escape(pcscf_ip) + r"/\d+ sport (\d+) dport (\d+)"
+        )
+        for match in pattern.finditer(result.stdout):
+            ue_ip = match.group(1)
+            ue_port = int(match.group(2))
+            if ue_ip != pcscf_ip:
+                return UEContact(msisdn=msisdn, host=ue_ip, port=ue_port, source="xfrm-state")
         return None
 
     def _lookup_imsi_from_pyhss(self, msisdn: str) -> str | None:

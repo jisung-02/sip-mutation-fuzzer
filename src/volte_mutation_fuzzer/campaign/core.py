@@ -684,23 +684,36 @@ class CampaignExecutor:
         config = self._config
         assert self._mt_template_text is not None
         assert config.target_msisdn is not None
-        assert config.impi is not None
 
         error: str | None = None
         capture: PcapCapture | None = None
         pcap_path_saved: str | None = None
 
         try:
-            # 1. Resolve live port_pc / port_ps (cached)
+            # 1. Resolve UE IP and IMPI dynamically
+            ue_ip = config.target_host
+            impi = config.impi
+            if ue_ip is None:
+                resolved = self._ue_resolver.resolve(self._target, impi=impi)
+                ue_ip = resolved.host
+                if impi is None and resolved.impi is not None:
+                    impi = resolved.impi
+
+            if impi is None:
+                raise ValueError(
+                    "IMPI could not be determined. Specify --impi or set VMF_IMPI"
+                )
+
+            # 2. Resolve live port_pc / port_ps (cached)
             port_pc, port_ps = self._resolve_ports_cached(config.target_msisdn)
 
-            # 2. Build slots
+            # 3. Build slots
             # mt_local_port는 반드시 Via sent-by와 실제 bind 포트 양쪽에 동일하게
             # 적용돼야 A31이 보낸 100/180 응답을 수신할 수 있다.
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
             slots = build_default_slots(
                 msisdn=config.target_msisdn,
-                impi=config.impi,
+                impi=impi,
                 pcscf_ip=pcscf_ip,
                 port_pc=port_pc,
                 port_ps=port_ps,
@@ -709,7 +722,7 @@ class CampaignExecutor:
                 mo_contact_port_ps=config.mo_contact_port_ps,
                 seed=spec.seed,
                 from_msisdn=config.from_msisdn,
-                ue_ip=config.target_host,
+                ue_ip=ue_ip,
                 local_port=config.mt_local_port,
             )
 
@@ -781,6 +794,7 @@ class CampaignExecutor:
 
             # ipsec_mode에 따라 송신 방식 결정
             target_update = {
+                "host": ue_ip,
                 "port": port_pc,
                 "bind_port": config.mt_local_port,
             }

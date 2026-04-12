@@ -1,3 +1,4 @@
+import os
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -91,27 +92,22 @@ class CampaignConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mt_invite_template(self) -> Self:
-        # Auto-resolve target_host from target_msisdn for real-ue-direct mode
+        # real-ue-direct: target_host는 None 허용 — RealUEDirectResolver가 동적 resolve
         if self.mode == "real-ue-direct":
             if self.target_host is None and self.target_msisdn is None:
                 raise ValueError("real-ue-direct mode requires either target_host or target_msisdn")
-            if self.target_host is None and self.target_msisdn is not None:
-                from volte_mutation_fuzzer.sender.real_ue import resolve_ue_ip_from_msisdn
-                try:
-                    resolved_ip = resolve_ue_ip_from_msisdn(self.target_msisdn)
-                    object.__setattr__(self, "target_host", resolved_ip)
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Failed to auto-resolve target_host from MSISDN {self.target_msisdn!r}: {exc}"
-                    ) from exc
+
+        # IMPI fallback: 환경변수 VMF_IMPI
+        if self.impi is None:
+            env_impi = os.environ.get("VMF_IMPI")
+            if env_impi:
+                object.__setattr__(self, "impi", env_impi)
 
         if self.mt_invite_template is not None:
             if self.mode != "real-ue-direct":
                 raise ValueError("mt_invite_template requires mode='real-ue-direct'")
             if self.target_msisdn is None:
                 raise ValueError("mt_invite_template requires target_msisdn")
-            if self.impi is None:
-                raise ValueError("mt_invite_template requires impi")
             if self.ipsec_mode is None:
                 object.__setattr__(self, "ipsec_mode", "null")
 
