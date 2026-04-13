@@ -84,12 +84,8 @@ class CaseGenerator:
         seen: set[tuple[str, int | None, str | None, str, str]] = set()
         combos: list[tuple[str, int | None, str | None, str, str]] = []
 
-        # Template mode: inject identity-baseline case as case 0, drop model layer
+        # Template mode: drop model layer (3GPP wire text used directly)
         template_active = config.mt_invite_template is not None
-        if template_active:
-            identity_key = ("INVITE", None, None, "wire", "identity")
-            seen.add(identity_key)
-            combos.append(identity_key)
 
         effective_layers = (
             tuple(lyr for lyr in config.layers if lyr != "model")
@@ -601,11 +597,10 @@ class CampaignExecutor:
         pcap_path_saved: str | None = None
 
         try:
-            # MT INVITE template path (real-ue-direct with replay template)
+            # MT template path (real-ue-direct with 3GPP format)
             if (
                 self._mt_template_text is not None
                 and spec.response_code is None
-                and spec.method == "INVITE"
             ):
                 return self._execute_mt_template_case(spec, timestamp)
 
@@ -856,27 +851,40 @@ class CampaignExecutor:
             # 2. Resolve live port_pc / port_ps (cached)
             port_pc, port_ps = self._resolve_ports_cached(config.target_msisdn)
 
-            # 3. Build slots
-            # mt_local_port는 반드시 Via sent-by와 실제 bind 포트 양쪽에 동일하게
-            # 적용돼야 A31이 보낸 100/180 응답을 수신할 수 있다.
+            # 3. Build wire text
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
-            slots = build_default_slots(
-                msisdn=config.target_msisdn,
-                impi=impi,
-                pcscf_ip=pcscf_ip,
-                port_pc=port_pc,
-                port_ps=port_ps,
-                mo_contact_host=config.mo_contact_host,
-                mo_contact_port_pc=config.mo_contact_port_pc,
-                mo_contact_port_ps=config.mo_contact_port_ps,
-                seed=spec.seed,
-                from_msisdn=config.from_msisdn,
-                ue_ip=ue_ip,
-                local_port=config.mt_local_port,
-            )
 
-            # 3. Render template
-            wire_text = render_mt_invite(self._mt_template_text, slots)
+            if spec.method == "INVITE":
+                # INVITE uses the proven file-based template
+                slots = build_default_slots(
+                    msisdn=config.target_msisdn,
+                    impi=impi,
+                    pcscf_ip=pcscf_ip,
+                    port_pc=port_pc,
+                    port_ps=port_ps,
+                    mo_contact_host=config.mo_contact_host,
+                    mo_contact_port_pc=config.mo_contact_port_pc,
+                    mo_contact_port_ps=config.mo_contact_port_ps,
+                    seed=spec.seed,
+                    from_msisdn=config.from_msisdn,
+                    ue_ip=ue_ip,
+                    local_port=config.mt_local_port,
+                )
+                wire_text = render_mt_invite(self._mt_template_text, slots)
+            else:
+                # All other methods use the generic 3GPP builder
+                from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
+                wire_text = build_mt_packet(
+                    method=spec.method,
+                    impi=impi,
+                    msisdn=config.target_msisdn,
+                    ue_ip=ue_ip,
+                    port_pc=port_pc,
+                    port_ps=port_ps,
+                    seed=spec.seed,
+                    local_port=config.mt_local_port,
+                    from_msisdn=config.from_msisdn,
+                )
 
             # 4. Fragmentation guard (plaintext UDP, host-direct only)
             # bypass 모드(Docker 내부망)는 IP fragmentation이 허용된다.
