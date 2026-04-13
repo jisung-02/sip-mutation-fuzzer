@@ -52,5 +52,23 @@ class PcapCapture:
 
         output_path = Path(self._output_path)
         if output_path.exists() and output_path.stat().st_size > 0:
+            self._export_txt(output_path)
             return self._output_path
         return None
+
+    @staticmethod
+    def _export_txt(pcap_path: Path) -> None:
+        """Export pcap to human-readable txt using tshark."""
+        txt_path = pcap_path.with_suffix(".txt")
+        try:
+            result = subprocess.run(
+                ["tshark", "-r", str(pcap_path), "-V"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout:
+                txt_path.write_text(result.stdout, encoding="utf-8")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            # tshark not installed or timeout — skip silently
+            pass
