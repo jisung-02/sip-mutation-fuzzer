@@ -88,8 +88,8 @@ def run_command(
         ),
     ] = "baresip",
     no_process_check: Annotated[
-        bool, typer.Option("--no-process-check", help="Disable process liveness check.")
-    ] = False,
+        bool | None, typer.Option("--no-process-check", help="Disable process liveness check. Auto-disabled for real-ue-direct mode.")
+    ] = None,
     transport: Annotated[
         str, typer.Option("--transport", help="Transport protocol (UDP/TCP).")
     ] = "UDP",
@@ -105,8 +105,8 @@ def run_command(
         ),
     ] = None,
     adb: Annotated[
-        bool, typer.Option("--adb/--no-adb", help="Enable ADB logcat monitoring.")
-    ] = False,
+        bool | None, typer.Option("--adb/--no-adb", help="Enable ADB logcat monitoring. Auto-enabled for real-ue-direct mode.")
+    ] = None,
     adb_serial: Annotated[
         str | None, typer.Option("--adb-serial", help="ADB device serial.")
     ] = None,
@@ -115,12 +115,12 @@ def run_command(
         typer.Option("--adb-buffers", help="Comma-separated logcat buffers."),
     ] = None,
     pcap: Annotated[
-        bool,
+        bool | None,
         typer.Option(
             "--pcap/--no-pcap",
-            help="Enable per-case pcap capture via sudo tcpdump.",
+            help="Enable per-case pcap capture via sudo tcpdump. Auto-enabled for real-ue-direct mode.",
         ),
-    ] = False,
+    ] = None,
     pcap_dir: Annotated[
         str,
         typer.Option("--pcap-dir", help="Directory to store .pcap files."),
@@ -224,10 +224,7 @@ def run_command(
         "seed_start": seed_start,
         "output_path": output,
         "process_name": process_name,
-        "check_process": not no_process_check,
         "log_path": log_path,
-        "adb_enabled": adb,
-        "pcap_enabled": pcap,
         "pcap_dir": pcap_dir,
         "pcap_interface": pcap_interface,
         "preserve_via": preserve_via,
@@ -242,6 +239,14 @@ def run_command(
         "resume": resume,
         "circuit_breaker_threshold": circuit_breaker,
     }
+    # Only set these when explicitly specified by user (None = auto-decide in model_validator)
+    if adb is not None:
+        payload["adb_enabled"] = adb
+    if pcap is not None:
+        payload["pcap_enabled"] = pcap
+    if no_process_check is not None:
+        payload["check_process"] = not no_process_check
+
     if ipsec_mode is not None:
         payload["ipsec_mode"] = ipsec_mode
     if target_msisdn is not None:

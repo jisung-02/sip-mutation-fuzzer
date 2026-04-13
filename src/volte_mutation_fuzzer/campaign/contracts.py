@@ -31,12 +31,12 @@ class CampaignConfig(BaseModel):
     crash_analysis: bool = False
     crash_analysis_output: str = Field(default="crash_analysis", min_length=1)
     process_name: str = Field(default="baresip", min_length=1)
-    check_process: bool = True
+    check_process: bool | None = None
     log_path: str | None = None
-    adb_enabled: bool = False
+    adb_enabled: bool | None = None
     adb_serial: str | None = None
     adb_buffers: tuple[str, ...] = ("main", "system", "radio", "crash")
-    pcap_enabled: bool = False
+    pcap_enabled: bool | None = None
     pcap_dir: str = "results/pcap"
     pcap_interface: str = "any"
 
@@ -58,6 +58,7 @@ class CampaignConfig(BaseModel):
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None
     bind_container: str | None = None
+
 
     @field_validator("methods", mode="before")
     @classmethod
@@ -88,6 +89,32 @@ class CampaignConfig(BaseModel):
     def _default_methods(self) -> Self:
         if not self.methods and not self.response_codes:
             object.__setattr__(self, "methods", ALL_SIP_METHODS)
+        return self
+
+    @model_validator(mode="after")
+    def _apply_oracle_defaults(self) -> Self:
+        """오라클 기본값을 모드에 따라 자동 설정한다.
+
+        None(미지정)인 필드만 덮어쓴다. 사용자가 명시적으로 True/False를
+        지정한 경우에는 그 값을 존중한다.
+        """
+        if self.mode == "real-ue-direct":
+            if self.check_process is None:
+                object.__setattr__(self, "check_process", False)
+            if self.adb_enabled is None:
+                object.__setattr__(self, "adb_enabled", True)
+            if self.pcap_enabled is None:
+                object.__setattr__(self, "pcap_enabled", True)
+            if self.pcap_interface == "any":
+                object.__setattr__(self, "pcap_interface", "br-volte")
+        else:
+            # softphone 모드: 기존 기본값 유지
+            if self.check_process is None:
+                object.__setattr__(self, "check_process", True)
+            if self.adb_enabled is None:
+                object.__setattr__(self, "adb_enabled", False)
+            if self.pcap_enabled is None:
+                object.__setattr__(self, "pcap_enabled", False)
         return self
 
     @model_validator(mode="after")

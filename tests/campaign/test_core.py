@@ -243,6 +243,8 @@ class CampaignExecutorTests(unittest.TestCase):
             timeout_seconds=1.0,
             cooldown_seconds=0.0,
             check_process=False,
+            adb_enabled=False,
+            pcap_enabled=False,
         )
         defaults.update(kwargs)
         return CampaignConfig(**defaults)
@@ -557,6 +559,8 @@ class SACircuitBreakerTests(unittest.TestCase):
                 timeout_seconds=0.2,
                 cooldown_seconds=0.0,
                 check_process=False,
+                adb_enabled=False,
+                pcap_enabled=False,
                 circuit_breaker_threshold=6,
                 output_path=out_path,
             )
