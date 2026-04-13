@@ -451,7 +451,7 @@ class CampaignExecutorTests(unittest.TestCase):
                     executor.run()
                 output = stderr_buf.getvalue()
 
-        self.assertIn("[ERROR]", output)
+        self.assertIn("ERROR", output)
         self.assertIn("test error", output)
 
     def test_run_invokes_realtime_crash_analysis_and_final_report(self) -> None:

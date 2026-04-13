@@ -44,6 +44,7 @@ from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver, check_ips
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
+from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
 
 _DEFAULT_PCSCF_IP: str = "172.22.0.21"
 _MT_TEMPLATE_FRAG_LIMIT: int = 65535  # bytes; raised — Docker bridge IP reassembly works fine in practice
@@ -379,6 +380,14 @@ class CampaignExecutor:
             summary=summary,
         )
 
+        reporter = ConsoleProgressReporter(
+            total_cases=config.max_cases,
+            campaign_id=campaign_id,
+            adb_enabled=bool(config.adb_enabled),
+            pcap_enabled=bool(config.pcap_enabled),
+            pcap_interface=config.pcap_interface,
+        )
+
         if self._adb_collector is not None:
             self._adb_collector.start()
         consecutive_failures = 0
@@ -433,77 +442,33 @@ class CampaignExecutor:
 
                 self._update_summary(summary, case_result.verdict)
 
-                target_label = spec.method
-                if spec.response_code is not None:
-                    related_method = spec.related_method or spec.method
-                    target_label = f"{spec.response_code}/{related_method}"
-                label = (
-                    f"[{spec.case_id + 1}/{config.max_cases}] "
-                    f"{target_label} {spec.layer}/{spec.strategy} seed={spec.seed}"
-                )
-                code_str = (
-                    f" ({case_result.response_code},"
-                    if case_result.response_code
-                    else " ("
-                )
-                print(
-                    f"{label} → {case_result.verdict}{code_str} {case_result.elapsed_ms:.0f}ms)",
-                    file=sys.stderr,
-                )
-
-                if case_result.verdict == "crash":
-                    print(
-                        f"  [CRASH] reproduction: {case_result.reproduction_cmd}",
-                        file=sys.stderr,
-                    )
-                if case_result.verdict == "stack_failure":
-                    print(
-                        f"  [STACK_FAILURE] {case_result.reason}",
-                        file=sys.stderr,
-                    )
-                    print(
-                        f"  [STACK_FAILURE] reproduction: {case_result.reproduction_cmd}",
-                        file=sys.stderr,
-                    )
-                if case_result.verdict == "unknown":
-                    print(
-                        f"  [ERROR] {case_result.reason}",
-                        file=sys.stderr,
-                    )
-                if case_result.verdict == "infra_failure":
-                    print(
-                        f"  [INFRA FAILURE] {case_result.reason}",
-                        file=sys.stderr,
-                    )
-
-                # Warn if ADB collector has lost connection
+                # Console progress reporting
+                adb_healthy: bool | None = None
                 if (
                     self._adb_collector is not None
                     and hasattr(self._adb_collector, "is_healthy")
-                    and not self._adb_collector.is_healthy
                 ):
-                    dead = getattr(self._adb_collector, "dead_buffers", frozenset())
-                    if dead:
-                        print(
-                            f"  [ADB WARNING] collector unhealthy — dead buffers: {','.join(sorted(dead))}",
-                            file=sys.stderr,
-                        )
+                    adb_healthy = self._adb_collector.is_healthy
+                    if not adb_healthy:
+                        dead = getattr(self._adb_collector, "dead_buffers", frozenset())
+                        if dead:
+                            reporter.on_adb_warning(dead)
+
+                reporter.on_case_complete(
+                    spec, case_result, summary, adb_healthy=adb_healthy
+                )
 
                 # SA expiry → immediate abort
                 if sa_checked_dead:
-                    print(
-                        "[vmf campaign] CIRCUIT BREAKER: IPsec SA expired — "
-                        "aborting campaign. Re-register the UE and restart.",
-                        file=sys.stderr,
+                    reporter.on_circuit_breaker(
+                        "IPsec SA expired — re-register the UE and restart."
                     )
                     logger.error("circuit breaker tripped: IPsec SA expired")
                     break
 
                 if cb_threshold > 0 and consecutive_failures >= cb_threshold:
-                    print(
-                        f"[vmf campaign] CIRCUIT BREAKER: {consecutive_failures} consecutive"
-                        f" timeout/unknown verdicts — aborting campaign",
-                        file=sys.stderr,
+                    reporter.on_circuit_breaker(
+                        f"{consecutive_failures} consecutive timeout/unknown verdicts"
                     )
                     logger.error(
                         "circuit breaker tripped after %d consecutive failures",
@@ -523,6 +488,7 @@ class CampaignExecutor:
                 }
             )
             self._store.write_footer(campaign)
+            reporter.finalize(summary, "aborted")
             return campaign
         finally:
             if self._adb_collector is not None:
@@ -544,6 +510,7 @@ class CampaignExecutor:
             }
         )
         self._store.write_footer(campaign)
+        reporter.finalize(summary, final_status)
         return campaign
 
     def _execute_case(self, spec: CaseSpec) -> CaseResult:
