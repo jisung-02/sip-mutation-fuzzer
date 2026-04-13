@@ -110,13 +110,20 @@ _CRLF_DELIMITER = b"\r\n"
 
 _MODEL_EXCLUDED_FIELDS: frozenset[str] = frozenset(
     {
+        # Protocol constants
         "sip_version",
         "method",
         "status_code",
+        # Body (handled separately)
         "content_length",
         "body",
         "extension_headers",
         "content_type",
+        # Routing-critical: mutating these prevents packet delivery or response receipt
+        "request_uri",      # Changed = packet won't reach UE
+        "via",              # Changed = can't receive response (180 etc)
+        "call_id",          # Changed = BYE/CANCEL dialog matching breaks
+        "cseq",             # Changed = transaction matching breaks
     }
 )
 
