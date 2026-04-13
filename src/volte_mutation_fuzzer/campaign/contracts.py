@@ -130,9 +130,12 @@ class CampaignConfig(BaseModel):
             if env_impi:
                 object.__setattr__(self, "impi", env_impi)
 
-        # --mt flag: auto-set mt_invite_template to default 3GPP template
+        # --mt flag: auto-set mt_invite_template and preserve flags
         if self.mt and self.mt_invite_template is None:
             object.__setattr__(self, "mt_invite_template", "a31")
+        if self.mt:
+            object.__setattr__(self, "preserve_via", True)
+            object.__setattr__(self, "preserve_contact", True)
 
         if self.mt_invite_template is not None:
             if self.mode != "real-ue-direct":

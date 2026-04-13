@@ -278,18 +278,27 @@ def request_command(
         from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver
 
         resolver = RealUEDirectResolver()
-        resolved = resolver.resolve(target_msisdn or "", target_host, target_port)
+        tmp_target = _build_target(
+            host=target_host,
+            port=target_port,
+            msisdn=target_msisdn,
+            transport=transport,
+            mode=mode,
+            timeout_seconds=timeout,
+            label=label,
+        )
+        resolved = resolver.resolve(tmp_target, impi=impi)
 
         port_pc, port_ps = resolver.resolve_protected_ports(target_msisdn or "")
 
-        env_impi = impi or os.environ.get("VMF_IMPI")
-        if not env_impi:
-            raise typer.BadParameter("--mt requires --impi or VMF_IMPI env var")
+        resolved_impi = impi or resolved.impi or os.environ.get("VMF_IMPI")
+        if not resolved_impi:
+            raise typer.BadParameter("IMPI could not be resolved. Provide --impi or set VMF_IMPI.")
 
         template_text = load_mt_invite_template("a31")
         slots = build_default_slots(
             msisdn=target_msisdn or "",
-            impi=env_impi,
+            impi=resolved_impi,
             pcscf_ip=os.environ.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21"),
             port_pc=port_pc,
             port_ps=port_ps,
@@ -302,8 +311,8 @@ def request_command(
         wire_text = render_mt_invite(template_text, slots)
         artifact = SendArtifact.from_wire_text(wire_text)
         artifact = artifact.model_copy(update={
-            "preserve_via": preserve_via,
-            "preserve_contact": preserve_contact,
+            "preserve_via": True,
+            "preserve_contact": True,
         })
 
         target = _build_target(
