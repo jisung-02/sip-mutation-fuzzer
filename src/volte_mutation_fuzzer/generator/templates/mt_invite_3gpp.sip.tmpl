@@ -1,0 +1,59 @@
+INVITE sip:{{impi}}@{{ue_ip}}:{{request_uri_port_pc}};alias={{ue_ip}}~{{request_uri_port_ps}}~1 SIP/2.0
+Via: SIP/2.0/UDP {{pcscf_ip}}:{{local_port}};branch={{branch}}
+Max-Forwards: 66
+Record-Route: <sip:mo@{{pcscf_ip}}:{{pcscf_mt_port}};lr=on;ftag={{from_tag}};rm=8;did=643.7a11>
+Record-Route: <sip:mo@{{scscf_ip}}:{{scscf_port}};transport=tcp;r2=on;lr=on;ftag={{from_tag}};did=643.3382>
+Record-Route: <sip:mo@{{scscf_ip}}:{{scscf_port}};r2=on;lr=on;ftag={{from_tag}};did=643.3382>
+From: <sip:{{from_msisdn}}@{{ims_domain}}>;tag={{from_tag}}
+To: "{{to_msisdn}}"<tel:{{to_msisdn}};phone-context={{ims_domain}}>
+Call-ID: {{call_id}}
+CSeq: 1 INVITE
+Contact: <sip:{{from_msisdn}}@{{mo_contact_host}}:{{mo_contact_port_pc}};alias={{mo_contact_host}}~{{mo_contact_port_ps}}~1>;+sip.instance="<urn:gsma:imei:{{mo_imei}}>";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";audio;video;+g.3gpp.mid-call;+g.3gpp.srvcc-alerting;+g.3gpp.ps2cs-srvcc-orig-pre-alerting
+Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"
+P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={{cell_id}}
+P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel
+P-Early-Media: supported
+Supported: 100rel,histinfo,join,norefersub,precondition,replaces,timer,sec-agree
+Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK,NOTIFY,MESSAGE,REFER
+Accept: application/sdp,application/3gpp-ims+xml
+Session-Expires: 1800
+Min-SE: 90
+User-Agent: IM-client/OMA1.0 HW-Rto/V1.0
+P-Charging-Vector: icid-value={{icid}};icid-generated-at={{pcscf_ip}}
+P-Visited-Network-ID: {{ims_domain}}
+P-Asserted-Identity: <sip:{{from_msisdn}}@{{ims_domain}}>
+Content-Type: application/sdp
+Content-Length: {{content_length}}
+
+v=0
+o=rue 3251 3251 IN IP4 {{sdp_owner_ip}}
+s=-
+b=AS:41
+b=RR:1537
+b=RS:512
+t=0 0
+m=audio {{sdp_audio_port}} RTP/AVP 107 106 105 104 101 102
+c=IN IP4 {{sdp_owner_ip}}
+b=AS:41
+b=RR:1537
+b=RS:512
+a=rtpmap:107 AMR-WB/16000
+a=fmtp:107 mode-change-capability=2;max-red=0
+a=rtpmap:106 AMR-WB/16000
+a=fmtp:106 octet-align=1;mode-change-capability=2;max-red=0
+a=rtpmap:105 AMR/8000
+a=fmtp:105 mode-change-capability=2;max-red=0
+a=rtpmap:104 AMR/8000
+a=fmtp:104 octet-align=1;mode-change-capability=2;max-red=0
+a=rtpmap:101 telephone-event/16000
+a=fmtp:101 0-15
+a=rtpmap:102 telephone-event/8000
+a=fmtp:102 0-15
+a=curr:qos local none
+a=curr:qos remote none
+a=des:qos mandatory local sendrecv
+a=des:qos optional remote sendrecv
+a=sendrecv
+a=rtcp:{{sdp_rtcp_port}}
+a=ptime:20
+a=maxptime:240

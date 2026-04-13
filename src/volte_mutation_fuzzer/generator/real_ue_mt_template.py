@@ -9,7 +9,7 @@ defaults matching the open5gs test network.
 
 Usage::
 
-    template_text = load_mt_invite_template("a31")
+    template_text = load_mt_invite_template("3gpp")
     slots = build_default_slots(
         msisdn="222222",
         impi="001010000123512",
@@ -80,7 +80,7 @@ class MTInviteSlots:
     icid: str
 
 
-def load_mt_invite_template(name: str = "a31") -> str:
+def load_mt_invite_template(name: str = "3gpp") -> str:
     """Return the raw template text for the named MT INVITE shape.
 
     *name* is either a bundled template identifier (e.g. ``"a31"``) or an

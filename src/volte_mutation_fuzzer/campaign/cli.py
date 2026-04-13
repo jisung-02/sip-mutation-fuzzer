@@ -139,7 +139,7 @@ def run_command(
     ] = False,
     mt_invite_template: Annotated[
         str | None,
-        typer.Option("--mt-invite-template", help="MT INVITE template name (e.g. 'a31') or file path. --mt uses default template."),
+        typer.Option("--mt-invite-template", help="MT INVITE template name (e.g. '3gpp') or file path. --mt uses default template."),
     ] = None,
     ipsec_mode: Annotated[
         str | None,

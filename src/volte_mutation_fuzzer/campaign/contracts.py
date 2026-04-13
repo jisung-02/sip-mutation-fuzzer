@@ -132,7 +132,7 @@ class CampaignConfig(BaseModel):
 
         # --mt flag: auto-set mt_invite_template and preserve flags
         if self.mt and self.mt_invite_template is None:
-            object.__setattr__(self, "mt_invite_template", "a31")
+            object.__setattr__(self, "mt_invite_template", "3gpp")
         if self.mt:
             object.__setattr__(self, "preserve_via", True)
             object.__setattr__(self, "preserve_contact", True)
