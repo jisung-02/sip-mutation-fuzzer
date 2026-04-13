@@ -966,7 +966,13 @@ class CampaignExecutor:
                 pcap_dir = self._pcap_dir
                 pcap_dir.mkdir(parents=True, exist_ok=True)
                 pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
-                capture = PcapCapture(pcap_path, interface=config.pcap_interface)
+                # MT packets use dynamic ports (port_pc/mt_local_port), not 5060
+                pcap_filter = f"host {ue_ip}"
+                capture = PcapCapture(
+                    pcap_path,
+                    interface=config.pcap_interface,
+                    filter_expr=pcap_filter,
+                )
                 capture.start()
             try:
                 send_result = self._sender.send_artifact(
@@ -976,15 +982,16 @@ class CampaignExecutor:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
 
-            # 9b. Reliable CANCEL teardown
-            teardown_events = self._teardown_invite(
-                wire_text, mt_target, send_result, config
-            )
-            for te in teardown_events:
-                logger.info("case %s: %s", spec.case_id, te)
+            # 9b. Reliable CANCEL teardown (INVITE only)
+            if is_invite:
+                teardown_events = self._teardown_invite(
+                    wire_text, mt_target, send_result, config
+                )
+                for te in teardown_events:
+                    logger.info("case %s: %s", spec.case_id, te)
 
-            # 9c. Wait for device to return to IDLE call state
-            if self._call_state_checker is not None:
+            # 9c. Wait for device to return to IDLE call state (INVITE only)
+            if is_invite and self._call_state_checker is not None:
                 idle_events = self._call_state_checker.wait_for_idle()
                 for ie in idle_events:
                     logger.info("case %s: %s", spec.case_id, ie)
