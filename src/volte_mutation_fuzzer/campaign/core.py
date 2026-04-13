@@ -45,6 +45,7 @@ from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
+from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
 
 _DEFAULT_PCSCF_IP: str = "172.22.0.21"
 _MT_TEMPLATE_FRAG_LIMIT: int = 65535  # bytes; raised — Docker bridge IP reassembly works fine in practice
@@ -331,6 +332,11 @@ class CampaignExecutor:
             source_name=config.output_path,
         )
 
+        # Initialize evidence collector
+        self._evidence = EvidenceCollector(
+            base_dir=Path(config.output_path).parent,
+        )
+
     def run(self) -> CampaignResult:
         config = self._config
         skip_before = -1
@@ -545,6 +551,7 @@ class CampaignExecutor:
                 ),
             )
             artifact = self._artifact_from_mutated(mutated)
+            sent_payload: str | bytes | None = artifact.wire_text or artifact.packet_bytes
             if config.pcap_enabled:
                 pcap_dir = Path(config.pcap_dir)
                 pcap_dir.mkdir(parents=True, exist_ok=True)
@@ -571,16 +578,17 @@ class CampaignExecutor:
                 log_path=config.log_path,
                 process_check_interval=10,
             )
+            adb_snapshot_dir: str | None = None
             if verdict.verdict in ("crash", "stack_failure") and config.adb_enabled:
                 try:
                     from volte_mutation_fuzzer.adb.core import AdbConnector
 
-                    output_dir = str(
+                    adb_snapshot_dir = str(
                         Path(config.output_path).parent
                         / "adb_snapshots"
                         / f"case_{spec.case_id}"
                     )
-                    AdbConnector(serial=config.adb_serial).take_snapshot(output_dir)
+                    AdbConnector(serial=config.adb_serial).take_snapshot(adb_snapshot_dir)
                 except Exception as exc:
                     logger.warning(
                         "failed to capture adb snapshot for case %s: %s",
@@ -598,7 +606,7 @@ class CampaignExecutor:
             ):
                 raw_response = send_result.final_response.raw_text or None
 
-            return CaseResult(
+            case_result = CaseResult(
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
@@ -618,6 +626,15 @@ class CampaignExecutor:
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
             )
+
+            self._evidence.collect(
+                case_result,
+                sent_payload=sent_payload,
+                pcap_path=pcap_path_saved,
+                adb_snapshot_dir=adb_snapshot_dir,
+            )
+
+            return case_result
 
         except Exception as exc:
             error = str(exc)
@@ -753,6 +770,7 @@ class CampaignExecutor:
                     preserve_via=config.preserve_via,
                     preserve_contact=config.preserve_contact,
                 )
+            sent_payload: str | bytes | None = artifact.wire_text or artifact.packet_bytes
 
             # 9. pcap + send
             # 실제 송신은 port_pc로 간다. Plaintext UDP 경로라 ESP 정책 매칭이
@@ -818,16 +836,17 @@ class CampaignExecutor:
             )
 
             # 11. ADB snapshot on crash/stack_failure
+            adb_snapshot_dir: str | None = None
             if verdict.verdict in ("crash", "stack_failure") and config.adb_enabled:
                 try:
                     from volte_mutation_fuzzer.adb.core import AdbConnector
 
-                    output_dir = str(
+                    adb_snapshot_dir = str(
                         Path(config.output_path).parent
                         / "adb_snapshots"
                         / f"case_{spec.case_id}"
                     )
-                    AdbConnector(serial=config.adb_serial).take_snapshot(output_dir)
+                    AdbConnector(serial=config.adb_serial).take_snapshot(adb_snapshot_dir)
                 except Exception as exc:
                     logger.warning(
                         "failed to capture adb snapshot for case %s: %s",
@@ -845,7 +864,7 @@ class CampaignExecutor:
             ):
                 raw_response = send_result.final_response.raw_text or None
 
-            return CaseResult(
+            case_result = CaseResult(
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
@@ -865,6 +884,15 @@ class CampaignExecutor:
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
             )
+
+            self._evidence.collect(
+                case_result,
+                sent_payload=sent_payload,
+                pcap_path=pcap_path_saved,
+                adb_snapshot_dir=adb_snapshot_dir,
+            )
+
+            return case_result
 
         except Exception as exc:
             error = str(exc)
