@@ -629,7 +629,7 @@ class CampaignExecutor:
                 capture.start()
             try:
                 send_result = self._sender.send_artifact(
-                    artifact, self._target, collect_all_responses=True
+                    artifact, self._target, collect_all_responses=(spec.method == "INVITE")
                 )
             finally:
                 if capture is not None:
@@ -970,7 +970,7 @@ class CampaignExecutor:
                 capture.start()
             try:
                 send_result = self._sender.send_artifact(
-                    artifact, mt_target, collect_all_responses=True
+                    artifact, mt_target, collect_all_responses=is_invite
                 )
             finally:
                 if capture is not None:
