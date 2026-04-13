@@ -111,7 +111,7 @@ echo '=== [3/3] Verify ==='
 echo '--- sysctl ---'
 sysctl net.ipv4.ip_forward net.ipv4.conf.all.rp_filter net.ipv4.ip_nonlocal_bind
 echo '--- routes ---'
-ip route | grep -E '10\.(10|20)\.20\.'
+ip route | grep -E '10\\.(10|20)\\.20\\.'
 echo ''
 echo 'Done.'
 """

@@ -818,6 +818,24 @@ class CampaignExecutor:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
 
+            # 9b. Send CANCEL to tear down the INVITE session
+            try:
+                cancel_text = wire_text.replace(
+                    "INVITE sip:", "CANCEL sip:"
+                ).replace(
+                    "CSeq: 1 INVITE", "CSeq: 1 CANCEL"
+                )
+                cancel_artifact = SendArtifact(
+                    wire_text=cancel_text,
+                    preserve_via=config.preserve_via,
+                    preserve_contact=config.preserve_contact,
+                )
+                self._sender.send_artifact(
+                    cancel_artifact, mt_target, collect_all_responses=False
+                )
+            except Exception:
+                pass  # best-effort CANCEL
+
             # 10. Oracle
             context = OracleContext(
                 method=spec.method,
