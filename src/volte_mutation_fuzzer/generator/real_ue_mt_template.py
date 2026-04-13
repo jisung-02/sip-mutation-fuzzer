@@ -1,15 +1,18 @@
 """MT-INVITE wire-text template loader and renderer for real-UE-direct campaigns.
 
 The template file (generator/templates/mt_invite_a31.sip.tmpl) contains the full
-3GPP-compliant MT INVITE that a real Samsung A31 UE accepts, with {{slot}} placeholders
-for fields that vary per-call or per-session (port_pc, Call-ID, From-tag, etc.).
+3GPP-compliant MT INVITE that a real UE accepts, with {{slot}} placeholders
+for fields that vary per-call, per-session, or per-network environment.
+
+All network-specific values are sourced from environment variables with sensible
+defaults matching the open5gs test network.
 
 Usage::
 
     template_text = load_mt_invite_template("a31")
     slots = build_default_slots(
-        msisdn="111111",
-        impi="001010000123511",
+        msisdn="222222",
+        impi="001010000123512",
         pcscf_ip="172.22.0.21",
         port_pc=8000,
         port_ps=8001,
@@ -40,20 +43,37 @@ _ICID_HEX_LEN: Final[int] = 32
 class MTInviteSlots:
     """All substitution values for one MT INVITE render."""
 
+    # --- Target UE (dynamic, resolved per-session) ---
     impi: str
     to_msisdn: str
-    from_msisdn: str
     ue_ip: str
-    pcscf_ip: str
     request_uri_port_pc: int
     request_uri_port_ps: int
+
+    # --- Caller (MO) identity ---
+    from_msisdn: str
     mo_contact_host: str
     mo_contact_port_pc: int
     mo_contact_port_ps: int
+    mo_imei: str
+
+    # --- Network environment (from .env) ---
+    ims_domain: str
+    pcscf_ip: str
+    scscf_ip: str
+    scscf_port: int
+    pcscf_mt_port: int
+    cell_id: str
+
+    # --- Media (SDP) ---
     sdp_owner_ip: str
     sdp_audio_port: int
     sdp_rtcp_port: int
+
+    # --- Transport ---
     local_port: int
+
+    # --- Per-call identifiers (seed-based) ---
     call_id: str
     from_tag: str
     branch: str
@@ -83,20 +103,32 @@ def render_mt_invite(template_text: str, slots: MTInviteSlots) -> str:
     Raises ``ValueError`` if any ``{{...}}`` placeholder remains after substitution.
     """
     mapping: dict[str, str] = {
+        # Target UE
         "impi": slots.impi,
         "to_msisdn": slots.to_msisdn,
-        "from_msisdn": slots.from_msisdn,
         "ue_ip": slots.ue_ip,
-        "pcscf_ip": slots.pcscf_ip,
         "request_uri_port_pc": str(slots.request_uri_port_pc),
         "request_uri_port_ps": str(slots.request_uri_port_ps),
+        # Caller (MO)
+        "from_msisdn": slots.from_msisdn,
         "mo_contact_host": slots.mo_contact_host,
         "mo_contact_port_pc": str(slots.mo_contact_port_pc),
         "mo_contact_port_ps": str(slots.mo_contact_port_ps),
+        "mo_imei": slots.mo_imei,
+        # Network environment
+        "ims_domain": slots.ims_domain,
+        "pcscf_ip": slots.pcscf_ip,
+        "scscf_ip": slots.scscf_ip,
+        "scscf_port": str(slots.scscf_port),
+        "pcscf_mt_port": str(slots.pcscf_mt_port),
+        "cell_id": slots.cell_id,
+        # Media (SDP)
         "sdp_owner_ip": slots.sdp_owner_ip,
         "sdp_audio_port": str(slots.sdp_audio_port),
         "sdp_rtcp_port": str(slots.sdp_rtcp_port),
+        # Transport
         "local_port": str(slots.local_port),
+        # Per-call identifiers
         "call_id": slots.call_id,
         "from_tag": slots.from_tag,
         "branch": slots.branch,
@@ -152,13 +184,38 @@ def build_default_slots(
 ) -> MTInviteSlots:
     """Build ``MTInviteSlots`` with deterministic per-seed call identifiers.
 
-    Call-ID, From-tag, branch, and ICID are derived from *seed* so that
-    replaying the same seed reproduces the same packet shape.
+    Network-specific values are sourced from environment variables:
+
+    ======================= ================================= =========================================
+    Environment variable    Default                           Description
+    ======================= ================================= =========================================
+    VMF_IMS_DOMAIN          ims.mnc001.mcc001.3gppnetwork.org IMS home domain (PLMN-based)
+    VMF_SCSCF_IP            172.22.0.20                       S-CSCF IP address
+    VMF_SCSCF_PORT          6060                              S-CSCF SIP port
+    VMF_PCSCF_MT_PORT       6101                              P-CSCF MT Record-Route port
+    VMF_CELL_ID             0010100010019B01                  Cell ID (MCC+MNC+LAC+CellID)
+    VMF_MO_IMEI             86838903-875492-0                 MO-side IMEI (TAC-Serial-Check)
+    VMF_SDP_OWNER_IP        172.22.0.16                       RTP media source IP
+    VMF_SDP_AUDIO_PORT      49196                             RTP audio port
+    ======================= ================================= =========================================
     """
     source = env if env is not None else dict(os.environ)
-    sdp_owner_ip = source.get("VMF_REAL_UE_SDP_OWNER_IP", "172.22.0.16")
-    sdp_audio_port = int(source.get("VMF_REAL_UE_SDP_AUDIO_PORT", "49196"))
 
+    # Network environment
+    ims_domain = source.get("VMF_IMS_DOMAIN", "ims.mnc001.mcc001.3gppnetwork.org")
+    scscf_ip = source.get("VMF_SCSCF_IP", "172.22.0.20")
+    scscf_port = int(source.get("VMF_SCSCF_PORT", "6060"))
+    pcscf_mt_port = int(source.get("VMF_PCSCF_MT_PORT", "6101"))
+    cell_id = source.get("VMF_CELL_ID", "0010100010019B01")
+
+    # MO identity
+    mo_imei = source.get("VMF_MO_IMEI", "86838903-875492-0")
+
+    # Media (SDP)
+    sdp_owner_ip = source.get("VMF_SDP_OWNER_IP", "172.22.0.16")
+    sdp_audio_port = int(source.get("VMF_SDP_AUDIO_PORT", "49196"))
+
+    # Per-call deterministic identifiers
     rng = random.Random(seed)
 
     tag_bytes = rng.getrandbits(32)
@@ -172,20 +229,32 @@ def build_default_slots(
     icid = f"{icid_bytes:032X}"
 
     return MTInviteSlots(
+        # Target UE
         impi=impi,
         to_msisdn=msisdn,
-        from_msisdn=from_msisdn,
         ue_ip=ue_ip,
-        pcscf_ip=pcscf_ip,
         request_uri_port_pc=port_pc,
         request_uri_port_ps=port_ps,
+        # Caller (MO)
+        from_msisdn=from_msisdn,
         mo_contact_host=mo_contact_host,
         mo_contact_port_pc=mo_contact_port_pc,
         mo_contact_port_ps=mo_contact_port_ps,
+        mo_imei=mo_imei,
+        # Network environment
+        ims_domain=ims_domain,
+        pcscf_ip=pcscf_ip,
+        scscf_ip=scscf_ip,
+        scscf_port=scscf_port,
+        pcscf_mt_port=pcscf_mt_port,
+        cell_id=cell_id,
+        # Media (SDP)
         sdp_owner_ip=sdp_owner_ip,
         sdp_audio_port=sdp_audio_port,
         sdp_rtcp_port=sdp_audio_port + 1,
+        # Transport
         local_port=local_port,
+        # Per-call identifiers
         call_id=call_id,
         from_tag=from_tag,
         branch=branch,

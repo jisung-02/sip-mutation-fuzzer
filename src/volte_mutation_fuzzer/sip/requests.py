@@ -54,6 +54,14 @@ class SIPRequest(SIPPacketBase):
     organization: str | None = None
     priority: str | None = None
     user_agent: str | None = None
+    # 3GPP IMS headers
+    p_visited_network_id: str | None = None
+    p_access_network_info: str | None = None
+    p_preferred_service: str | None = None
+    p_early_media: str | None = None
+    p_charging_vector: str | None = None
+    accept_contact: str | None = None
+    p_asserted_identity: tuple[NameAddress, ...] | None = None
     content_type: str | None = None
     content_disposition: str | None = None
     content_encoding: tuple[str, ...] | None = None
@@ -110,7 +118,6 @@ class InviteRequest(SIPRequest):
     session_expires: int | None = Field(default=None, ge=0)
     min_se: int | None = Field(default=None, ge=0)
     privacy: tuple[str, ...] | None = None
-    p_asserted_identity: tuple[NameAddress, ...] | None = None
 
 
 class MessageRequest(SIPRequest):

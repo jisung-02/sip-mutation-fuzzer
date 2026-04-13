@@ -246,30 +246,38 @@ class SIPGenerator:
         ):
             defaults.setdefault("contact", [self._build_contact()])
 
-        optional = get_request_optional_defaults(spec.method)
-        for key, value in optional.items():
-            defaults.setdefault(key, value)
+        is_real_ue = self.settings.mode == "real-ue-direct"
 
-        if spec.method == SIPMethod.INVITE:
-            defaults.setdefault(
-                "p_asserted_identity", (self._build_from_name_address(),)
-            )
-        if spec.method == SIPMethod.REFER:
-            defaults.setdefault("referred_by", self._build_from_name_address())
+        if is_real_ue:
+            # 3GPP IMS defaults — replaces softphone optional headers and SDP
+            self._apply_3gpp_defaults(defaults, spec)
+        else:
+            # Softphone-only optional headers
+            optional = get_request_optional_defaults(spec.method)
+            for key, value in optional.items():
+                defaults.setdefault(key, value)
 
-        if "body" not in (spec.overrides or {}):
-            event_pkg = spec.event_package or self._infer_event_package(defaults)
-            body_ctx = BodyContext(
-                method=spec.method,
-                event_package=event_pkg,
-                info_package=spec.info_package,
-                sms_over_ip=spec.sms_over_ip,
-            )
-            body_model = self._body_factory.create(body_ctx)
-            if body_model is not None:
-                defaults["body"] = body_model.render()
-                defaults["content_type"] = body_model.content_type
-                defaults["content_length"] = len(defaults["body"].encode("utf-8"))
+            if spec.method == SIPMethod.INVITE:
+                defaults.setdefault(
+                    "p_asserted_identity", (self._build_from_name_address(),)
+                )
+            if spec.method == SIPMethod.REFER:
+                defaults.setdefault("referred_by", self._build_from_name_address())
+
+            # Softphone body (body_factory)
+            if "body" not in (spec.overrides or {}):
+                event_pkg = spec.event_package or self._infer_event_package(defaults)
+                body_ctx = BodyContext(
+                    method=spec.method,
+                    event_package=event_pkg,
+                    info_package=spec.info_package,
+                    sms_over_ip=spec.sms_over_ip,
+                )
+                body_model = self._body_factory.create(body_ctx)
+                if body_model is not None:
+                    defaults["body"] = body_model.render()
+                    defaults["content_type"] = body_model.content_type
+                    defaults["content_length"] = len(defaults["body"].encode("utf-8"))
 
         self._populate_body_header_defaults(defaults)
 
@@ -640,4 +648,166 @@ class SIPGenerator:
                 host=self.settings.from_host,
                 port=self.settings.from_port,
             ),
+        )
+
+    # ------------------------------------------------------------------
+    # 3GPP IMS defaults (real-ue-direct mode)
+    # ------------------------------------------------------------------
+
+    def _apply_3gpp_defaults(
+        self, defaults: dict[str, Any], spec: RequestSpec
+    ) -> None:
+        """Inject 3GPP IMS-standard headers sourced from .env settings.
+
+        These headers make the packet acceptable to real VoLTE UEs that
+        validate 3GPP-compliant message format.  All values come from
+        ``GeneratorSettings`` which reads ``VMF_*`` environment variables.
+        """
+        s = self.settings
+        domain = s.ims_domain
+
+        # --- Common 3GPP headers (all methods) ---
+        defaults["max_forwards"] = 66  # IMS core reduces from 70
+
+        defaults.setdefault("p_asserted_identity", (
+            NameAddress(
+                uri=SIPURI(
+                    user=s.from_user,
+                    host=domain,
+                ),
+            ),
+        ))
+
+        defaults.setdefault("p_visited_network_id", domain)
+
+        defaults.setdefault("p_access_network_info",
+            f"3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={s.cell_id}"
+        )
+
+        # --- INVITE-specific 3GPP headers ---
+        if spec.method == SIPMethod.INVITE:
+            self._apply_3gpp_invite_defaults(defaults)
+
+        # --- MESSAGE-specific ---
+        if spec.method == SIPMethod.MESSAGE:
+            defaults.setdefault("p_preferred_service",
+                "urn:urn-7:3gpp-service.ims.icsi.mmtel")
+
+    def _apply_3gpp_invite_defaults(self, defaults: dict[str, Any]) -> None:
+        """INVITE-specific 3GPP IMS headers and SDP."""
+        s = self.settings
+        domain = s.ims_domain
+        pcscf_ip = s.via_host  # P-CSCF IP = Via host
+
+        # Record-Route (P-CSCF + S-CSCF x2)
+        from_tag = ""
+        from_na = defaults.get("from_")
+        if isinstance(from_na, NameAddress) and from_na.parameters:
+            from_tag = from_na.parameters.get("tag", "")
+
+        defaults.setdefault("record_route", [
+            NameAddress(uri=SIPURI(
+                user="mo", host=pcscf_ip, port=s.pcscf_mt_port,
+                parameters={"lr": "on", "ftag": from_tag, "rm": "8", "did": "643.7a11"},
+            )),
+            NameAddress(uri=SIPURI(
+                user="mo", host=s.scscf_ip, port=s.scscf_port,
+                parameters={"transport": "tcp", "r2": "on", "lr": "on",
+                             "ftag": from_tag, "did": "643.3382"},
+            )),
+            NameAddress(uri=SIPURI(
+                user="mo", host=s.scscf_ip, port=s.scscf_port,
+                parameters={"r2": "on", "lr": "on",
+                             "ftag": from_tag, "did": "643.3382"},
+            )),
+        ])
+
+        # Contact with 3GPP feature tags
+        contact_uri = SIPURI(
+            user=s.from_user,
+            host=s.contact_host or s.from_host,
+            port=s.contact_port or s.from_port,
+        )
+        defaults["contact"] = [NameAddress(
+            uri=contact_uri,
+            parameters={
+                "+sip.instance": f'"<urn:gsma:imei:{s.mo_imei}>"',
+                "+g.3gpp.icsi-ref": '"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"',
+                "audio": None,
+                "video": None,
+                "+g.3gpp.mid-call": None,
+                "+g.3gpp.srvcc-alerting": None,
+                "+g.3gpp.ps2cs-srvcc-orig-pre-alerting": None,
+            },
+        )]
+
+        # Accept-Contact
+        defaults.setdefault("accept_contact",
+            '*;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"')
+
+        # P-* headers
+        defaults.setdefault("p_preferred_service",
+            "urn:urn-7:3gpp-service.ims.icsi.mmtel")
+        defaults.setdefault("p_early_media", "supported")
+        defaults.setdefault("p_charging_vector",
+            f"icid-value={uuid4().hex[:32].upper()};icid-generated-at={pcscf_ip}")
+
+        # Supported / Allow / Accept
+        defaults.setdefault("supported",
+            ("100rel", "histinfo", "join", "norefersub",
+             "precondition", "replaces", "timer", "sec-agree"))
+        defaults.setdefault("allow", tuple(SIPMethod))
+        defaults.setdefault("accept",
+            ("application/sdp", "application/3gpp-ims+xml"))
+
+        # Session timer
+        defaults.setdefault("session_expires", 1800)
+        defaults.setdefault("min_se", 90)
+
+        # SDP body with AMR-WB/AMR codecs and QoS preconditions
+        if "body" not in defaults:
+            sdp = self._build_volte_sdp()
+            defaults["body"] = sdp
+            defaults["content_type"] = "application/sdp"
+            defaults["content_length"] = len(sdp.encode("utf-8"))
+
+    def _build_volte_sdp(self) -> str:
+        """Build a 3GPP-compliant VoLTE SDP with AMR-WB/AMR and QoS preconditions."""
+        s = self.settings
+        ip = s.sdp_owner_ip
+        port = s.sdp_audio_port
+        rtcp = port + 1
+        return (
+            "v=0\r\n"
+            f"o=rue 3251 3251 IN IP4 {ip}\r\n"
+            "s=-\r\n"
+            "b=AS:41\r\n"
+            "b=RR:1537\r\n"
+            "b=RS:512\r\n"
+            "t=0 0\r\n"
+            f"m=audio {port} RTP/AVP 107 106 105 104 101 102\r\n"
+            f"c=IN IP4 {ip}\r\n"
+            "b=AS:41\r\n"
+            "b=RR:1537\r\n"
+            "b=RS:512\r\n"
+            "a=rtpmap:107 AMR-WB/16000\r\n"
+            "a=fmtp:107 mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:106 AMR-WB/16000\r\n"
+            "a=fmtp:106 octet-align=1;mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:105 AMR/8000\r\n"
+            "a=fmtp:105 mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:104 AMR/8000\r\n"
+            "a=fmtp:104 octet-align=1;mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:101 telephone-event/16000\r\n"
+            "a=fmtp:101 0-15\r\n"
+            "a=rtpmap:102 telephone-event/8000\r\n"
+            "a=fmtp:102 0-15\r\n"
+            "a=curr:qos local none\r\n"
+            "a=curr:qos remote none\r\n"
+            "a=des:qos mandatory local sendrecv\r\n"
+            "a=des:qos optional remote sendrecv\r\n"
+            "a=sendrecv\r\n"
+            f"a=rtcp:{rtcp}\r\n"
+            "a=ptime:20\r\n"
+            "a=maxptime:240\r\n"
         )

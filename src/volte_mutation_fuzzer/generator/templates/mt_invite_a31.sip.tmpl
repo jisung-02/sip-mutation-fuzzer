@@ -1,16 +1,16 @@
 INVITE sip:{{impi}}@{{ue_ip}}:{{request_uri_port_pc}};alias={{ue_ip}}~{{request_uri_port_ps}}~1 SIP/2.0
 Via: SIP/2.0/UDP {{pcscf_ip}}:{{local_port}};branch={{branch}}
 Max-Forwards: 66
-Record-Route: <sip:mo@{{pcscf_ip}}:6101;lr=on;ftag={{from_tag}};rm=8;did=643.7a11>
-Record-Route: <sip:mo@172.22.0.20:6060;transport=tcp;r2=on;lr=on;ftag={{from_tag}};did=643.3382>
-Record-Route: <sip:mo@172.22.0.20:6060;r2=on;lr=on;ftag={{from_tag}};did=643.3382>
-From: <sip:{{from_msisdn}}@ims.mnc001.mcc001.3gppnetwork.org>;tag={{from_tag}}
-To: "{{to_msisdn}}"<tel:{{to_msisdn}};phone-context=ims.mnc001.mcc001.3gppnetwork.org>
+Record-Route: <sip:mo@{{pcscf_ip}}:{{pcscf_mt_port}};lr=on;ftag={{from_tag}};rm=8;did=643.7a11>
+Record-Route: <sip:mo@{{scscf_ip}}:{{scscf_port}};transport=tcp;r2=on;lr=on;ftag={{from_tag}};did=643.3382>
+Record-Route: <sip:mo@{{scscf_ip}}:{{scscf_port}};r2=on;lr=on;ftag={{from_tag}};did=643.3382>
+From: <sip:{{from_msisdn}}@{{ims_domain}}>;tag={{from_tag}}
+To: "{{to_msisdn}}"<tel:{{to_msisdn}};phone-context={{ims_domain}}>
 Call-ID: {{call_id}}
 CSeq: 1 INVITE
-Contact: <sip:{{from_msisdn}}@{{mo_contact_host}}:{{mo_contact_port_pc}};alias={{mo_contact_host}}~{{mo_contact_port_ps}}~1>;+sip.instance="<urn:gsma:imei:86838903-875492-0>";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";audio;video;+g.3gpp.mid-call;+g.3gpp.srvcc-alerting;+g.3gpp.ps2cs-srvcc-orig-pre-alerting
+Contact: <sip:{{from_msisdn}}@{{mo_contact_host}}:{{mo_contact_port_pc}};alias={{mo_contact_host}}~{{mo_contact_port_ps}}~1>;+sip.instance="<urn:gsma:imei:{{mo_imei}}>";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";audio;video;+g.3gpp.mid-call;+g.3gpp.srvcc-alerting;+g.3gpp.ps2cs-srvcc-orig-pre-alerting
 Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"
-P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=0010100010019B01
+P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={{cell_id}}
 P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel
 P-Early-Media: supported
 Supported: 100rel,histinfo,join,norefersub,precondition,replaces,timer,sec-agree
@@ -20,8 +20,8 @@ Session-Expires: 1800
 Min-SE: 90
 User-Agent: IM-client/OMA1.0 HW-Rto/V1.0
 P-Charging-Vector: icid-value={{icid}};icid-generated-at={{pcscf_ip}}
-P-Visited-Network-ID: ims.mnc001.mcc001.3gppnetwork.org
-P-Asserted-Identity: <sip:{{from_msisdn}}@ims.mnc001.mcc001.3gppnetwork.org>
+P-Visited-Network-ID: {{ims_domain}}
+P-Asserted-Identity: <sip:{{from_msisdn}}@{{ims_domain}}>
 Content-Type: application/sdp
 Content-Length: {{content_length}}
 

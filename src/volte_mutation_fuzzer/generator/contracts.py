@@ -21,8 +21,22 @@ class GeneratorSettings(BaseModel):
             "to_port",
             "request_uri_port",
             "contact_port",
+            "scscf_port",
+            "pcscf_mt_port",
+            "sdp_audio_port",
         }
     )
+    # Alternate env prefixes for 3GPP fields (VMF_ without GENERATOR_)
+    _ALT_ENV_MAP: ClassVar[dict[str, str]] = {
+        "ims_domain": "VMF_IMS_DOMAIN",
+        "scscf_ip": "VMF_SCSCF_IP",
+        "scscf_port": "VMF_SCSCF_PORT",
+        "pcscf_mt_port": "VMF_PCSCF_MT_PORT",
+        "cell_id": "VMF_CELL_ID",
+        "mo_imei": "VMF_MO_IMEI",
+        "sdp_owner_ip": "VMF_SDP_OWNER_IP",
+        "sdp_audio_port": "VMF_SDP_AUDIO_PORT",
+    }
 
     target_ue_name: str = Field(default="UE", min_length=1)
     via_host: str = Field(default="proxy.example.com", min_length=1)
@@ -49,6 +63,19 @@ class GeneratorSettings(BaseModel):
     contact_host: str | None = None
     contact_port: int | None = Field(default=None, ge=1, le=65535)
 
+    # Mode: "softphone" or "real-ue-direct"
+    mode: str = Field(default="softphone", min_length=1)
+
+    # 3GPP IMS network environment (for real-ue-direct mode)
+    ims_domain: str = Field(default="ims.mnc001.mcc001.3gppnetwork.org", min_length=1)
+    scscf_ip: str = Field(default="172.22.0.20", min_length=1)
+    scscf_port: int = Field(default=6060, ge=1, le=65535)
+    pcscf_mt_port: int = Field(default=6101, ge=1, le=65535)
+    cell_id: str = Field(default="0010100010019B01", min_length=1)
+    mo_imei: str = Field(default="86838903-875492-0", min_length=1)
+    sdp_owner_ip: str = Field(default="172.22.0.16", min_length=1)
+    sdp_audio_port: int = Field(default=49196, ge=1, le=65535)
+
     @classmethod
     def from_env(
         cls,
@@ -65,6 +92,9 @@ class GeneratorSettings(BaseModel):
         for field_name in cls.model_fields:
             env_key = f"{env_prefix}{field_name}".upper()
             raw_value = source.get(env_key)
+            # Fallback: check alternate env key (e.g. VMF_IMS_DOMAIN for ims_domain)
+            if raw_value is None and field_name in cls._ALT_ENV_MAP:
+                raw_value = source.get(cls._ALT_ENV_MAP[field_name])
             if raw_value is None:
                 continue
             payload[field_name] = cls._parse_env_value(field_name, raw_value)
