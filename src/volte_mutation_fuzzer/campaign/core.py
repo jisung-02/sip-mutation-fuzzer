@@ -366,6 +366,15 @@ class CampaignExecutor:
             base_dir=self._campaign_dir,
         )
 
+        # Call state checker for INVITE teardown verification
+        self._call_state_checker: "CallStateChecker | None" = None
+        if config.adb_enabled and config.mt_invite_template is not None:
+            from volte_mutation_fuzzer.adb.call_state import CallStateChecker
+
+            self._call_state_checker = CallStateChecker(
+                serial=config.adb_serial,
+            )
+
     @staticmethod
     def _generate_dir_name() -> str:
         return f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -949,6 +958,12 @@ class CampaignExecutor:
             )
             for te in teardown_events:
                 logger.info("case %s: %s", spec.case_id, te)
+
+            # 9c. Wait for device to return to IDLE call state
+            if self._call_state_checker is not None:
+                idle_events = self._call_state_checker.wait_for_idle()
+                for ie in idle_events:
+                    logger.info("case %s: %s", spec.case_id, ie)
 
             # 10. Oracle
             context = OracleContext(
