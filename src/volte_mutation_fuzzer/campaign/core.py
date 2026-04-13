@@ -46,6 +46,7 @@ from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
 from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
+from volte_mutation_fuzzer.campaign.report import HtmlReportGenerator
 
 _DEFAULT_PCSCF_IP: str = "172.22.0.21"
 _MT_TEMPLATE_FRAG_LIMIT: int = 65535  # bytes; raised — Docker bridge IP reassembly works fine in practice
@@ -495,6 +496,10 @@ class CampaignExecutor:
             )
             self._store.write_footer(campaign)
             reporter.finalize(summary, "aborted")
+            try:
+                HtmlReportGenerator(Path(config.output_path)).generate()
+            except Exception:
+                pass
             return campaign
         finally:
             if self._adb_collector is not None:
@@ -517,6 +522,14 @@ class CampaignExecutor:
         )
         self._store.write_footer(campaign)
         reporter.finalize(summary, final_status)
+
+        # Generate HTML report
+        try:
+            report_path = HtmlReportGenerator(Path(config.output_path)).generate()
+            print(f"[vmf campaign] report: {report_path}", file=sys.stderr)
+        except Exception as exc:
+            logger.warning("failed to generate HTML report: %s", exc)
+
         return campaign
 
     def _execute_case(self, spec: CaseSpec) -> CaseResult:

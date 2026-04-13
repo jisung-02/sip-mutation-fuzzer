@@ -332,8 +332,23 @@ def report_command(
             help="Filter by verdict(s). Comma-separated (e.g. suspicious,crash).",
         ),
     ] = None,
+    html: Annotated[
+        bool,
+        typer.Option("--html", help="Generate standalone HTML report."),
+    ] = False,
 ) -> None:
     """Display campaign results summary."""
+    if html:
+        from volte_mutation_fuzzer.campaign.report import HtmlReportGenerator
+
+        try:
+            report_path = HtmlReportGenerator(Path(path)).generate()
+            typer.echo(f"HTML report generated: {report_path}")
+        except Exception as exc:
+            typer.echo(f"Error generating HTML report: {exc}", err=True)
+            raise typer.Exit(code=1)
+        return
+
     store = ResultStore(Path(path))
     try:
         header, cases = store.read_all()
