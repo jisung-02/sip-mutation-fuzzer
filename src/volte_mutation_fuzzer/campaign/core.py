@@ -1102,7 +1102,7 @@ class CampaignExecutor:
             f"{' --preserve-via' if cfg.preserve_via else ''}"
             f"{' --preserve-contact' if cfg.preserve_contact else ''}"
             f" --mt-local-port {cfg.mt_local_port}"
-            f" --methods INVITE"
+            f" --methods {spec.method}"
             f" --layer {spec.layer}"
             f" --strategy {spec.strategy}"
             f" --seed-start {spec.seed}"
