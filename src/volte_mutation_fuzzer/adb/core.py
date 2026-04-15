@@ -2,7 +2,6 @@ import subprocess
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Empty, Queue
 
@@ -13,12 +12,6 @@ from volte_mutation_fuzzer.adb.contracts import (
     AdbSnapshotResult,
 )
 from volte_mutation_fuzzer.adb.patterns import ANOMALY_PATTERNS, AnomalyPattern
-
-# Upper bound on concurrent adb shell/logcat sessions spawned by
-# ``AdbConnector.take_snapshot``.  Chosen so the slowest single call
-# (typically ``dumpsys meminfo``) dominates instead of the serial sum.
-# Tune here if a specific device/adbd combination shows contention.
-_SNAPSHOT_MAX_WORKERS: int = 8
 
 
 class AdbConnector:
@@ -84,101 +77,54 @@ class AdbConnector:
         cmd = self._adb_cmd("shell", *args)
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
-    def get_device_time(self) -> str | None:
-        """Return device wall clock as 'MM-DD HH:MM:SS.mmm' (logcat -T format)."""
-        # ``adb shell`` concatenates argv with spaces before handing it to the
-        # device-side ``sh``, which then word-splits the result.  Passing the
-        # format string as a separate argv entry therefore makes ``date`` only
-        # receive ``+%m-%d`` and truncates the timestamp.  Embed the quotes so
-        # the remote shell re-assembles the full format spec as one token.
-        try:
-            result = self.run_shell(
-                'date "+%m-%d %H:%M:%S.%3N"', timeout=5
-            )
-        except Exception:
-            return None
-        if result.returncode != 0:
-            return None
-        value = result.stdout.strip()
-        return value or None
-
     def take_snapshot(
-        self,
-        output_dir: str,
-        *,
-        bugreport: bool = False,
-        logcat_since: str | None = None,
+        self, output_dir: str, *, bugreport: bool = False
     ) -> AdbSnapshotResult:
         """Capture meminfo + dmesg (and optionally bugreport) to output_dir."""
         base_dir = Path(output_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
-        errors_lock = threading.Lock()
+        meminfo_path: str | None = None
+        dmesg_path: str | None = None
         bugreport_path: str | None = None
 
-        def _record_error(message: str) -> None:
-            with errors_lock:
-                errors.append(message)
-
-        def _write_shell_output(filename: str, args: tuple[str, ...], timeout: int) -> str | None:
+        def _write_shell_output(filename: str, *args: str, timeout: int) -> str | None:
             path = base_dir / filename
             try:
                 result = self.run_shell(*args, timeout=timeout)
             except Exception as exc:
-                _record_error(f"{' '.join(args)} failed: {exc}")
+                errors.append(f"{' '.join(args)} failed: {exc}")
                 return None
 
             if result.returncode != 0:
                 message = (
                     result.stderr.strip() or result.stdout.strip() or "unknown error"
                 )
-                _record_error(f"{' '.join(args)} failed: {message}")
+                errors.append(f"{' '.join(args)} failed: {message}")
                 return None
 
             path.write_text(result.stdout, encoding="utf-8")
             return str(path)
 
-        # --- Phase 1: IMS/telephony specific (before logcat anchor) ---
-        # Run before capturing the logcat anchor so the anchor reflects a
-        # device-side timestamp that is as close as possible to the logcat
-        # dump itself — matches the serial-era ordering and keeps overlap
-        # between consecutive snapshots bounded.
-        with ThreadPoolExecutor(max_workers=_SNAPSHOT_MAX_WORKERS) as pool:
-            fut_telephony = pool.submit(
-                _write_shell_output, "telephony.txt",
-                ("dumpsys", "telephony.registry"), 30,
-            )
-            fut_ims = pool.submit(
-                _write_shell_output, "ims.txt", ("dumpsys", "ims"), 30,
-            )
-            fut_netstat = pool.submit(
-                _write_shell_output, "netstat.txt", ("netstat", "-tlnup"), 10,
-            )
-            telephony_path = fut_telephony.result()
-            ims_path = fut_ims.result()
-            netstat_path = fut_netstat.result()
-
-        # --- Logcat: per-buffer + combined ---
-        # When logcat_since is provided, limit the dump to lines since that
-        # device-side timestamp via `-T`.  This avoids each per-case snapshot
-        # re-dumping the full ring buffer (which would otherwise overlap
-        # heavily across cases).
-        #
-        # Capture the next anchor *before* the logcat dump so logs arriving
-        # during the dump→anchor-read window aren't lost.  Result: a small
-        # (sub-second) overlap between consecutive snapshots — the trade-
-        # off we accept to guarantee no gaps.
-        logcat_next_since = self.get_device_time()
-        logcat_buffers = ("main", "system", "radio", "crash")
-        since_args: tuple[str, ...] = (
-            ("-T", logcat_since) if logcat_since else ()
+        # --- IMS/telephony specific ---
+        telephony_path = _write_shell_output(
+            "telephony.txt", "dumpsys", "telephony.registry", timeout=30
+        )
+        ims_path = _write_shell_output(
+            "ims.txt", "dumpsys", "ims", timeout=30
+        )
+        netstat_path = _write_shell_output(
+            "netstat.txt", "netstat", "-tlnup", timeout=10
         )
 
-        def _dump_logcat_buffer(buf: str) -> None:
+        # --- Logcat: per-buffer + combined ---
+        logcat_path: str | None = None
+        logcat_buffers = ("main", "system", "radio", "crash")
+        for buf in logcat_buffers:
             try:
                 buf_file = base_dir / f"logcat_{buf}.txt"
                 result = subprocess.run(
-                    self._adb_cmd("logcat", "-d", "-b", buf, *since_args),
+                    self._adb_cmd("logcat", "-d", "-b", buf),
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -186,60 +132,27 @@ class AdbConnector:
                 if result.returncode == 0 and result.stdout:
                     buf_file.write_text(result.stdout, encoding="utf-8")
             except Exception as exc:
-                _record_error(f"logcat -b {buf} failed: {exc}")
+                errors.append(f"logcat -b {buf} failed: {exc}")
 
-        def _dump_logcat_combined() -> str | None:
-            # A single logcat call with repeated ``-b`` flags merges every
-            # buffer time-ordered on the device side.  The comma-separated form
-            # (``-b main,system,radio,crash``) was rejected by some OEM adbd
-            # builds — the repeated-flag form is supported by logcat since
-            # Android 5 and keeps chronological ordering that a local concat of
-            # per-buffer files cannot reproduce.
-            try:
-                logcat_file = base_dir / "logcat_all.txt"
-                buffer_args: list[str] = []
-                for buf in logcat_buffers:
-                    buffer_args.extend(("-b", buf))
-                result = subprocess.run(
-                    self._adb_cmd("logcat", "-d", *buffer_args, *since_args),
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode == 0 and result.stdout:
-                    logcat_file.write_text(result.stdout, encoding="utf-8")
-                    return str(logcat_file)
-                if result.returncode != 0:
-                    stderr_snippet = (result.stderr or "").strip()[:200]
-                    _record_error(
-                        f"logcat_all.txt skipped rc={result.returncode} "
-                        f"stderr={stderr_snippet!r}"
-                    )
-            except Exception as exc:
-                _record_error(f"logcat_all.txt failed: {exc}")
-            return None
-
-        # --- Phase 2: logcat + general system (after anchor) ---
-        # All independent read-only queries against adbd run concurrently,
-        # so the snapshot converges on the slowest single call (typically
-        # ``dumpsys meminfo``) rather than their sum.
-        with ThreadPoolExecutor(max_workers=_SNAPSHOT_MAX_WORKERS) as pool:
-            fut_meminfo = pool.submit(
-                _write_shell_output, "meminfo.txt", ("dumpsys", "meminfo"), 60,
+        try:
+            logcat_file = base_dir / "logcat_all.txt"
+            result = subprocess.run(
+                self._adb_cmd("logcat", "-d", "-b", ",".join(logcat_buffers)),
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
-            fut_dmesg = pool.submit(
-                _write_shell_output, "dmesg.txt", ("dmesg",), 60,
-            )
-            fut_buffers = [
-                pool.submit(_dump_logcat_buffer, buf) for buf in logcat_buffers
-            ]
-            fut_combined = pool.submit(_dump_logcat_combined)
+            if result.returncode == 0 and result.stdout:
+                logcat_file.write_text(result.stdout, encoding="utf-8")
+                logcat_path = str(logcat_file)
+        except Exception as exc:
+            errors.append(f"logcat dump failed: {exc}")
 
-            meminfo_path = fut_meminfo.result()
-            dmesg_path = fut_dmesg.result()
-            for fut in fut_buffers:
-                fut.result()
-            logcat_path = fut_combined.result()
+        # --- General system ---
+        meminfo_path = _write_shell_output(
+            "meminfo.txt", "dumpsys", "meminfo", timeout=60
+        )
+        dmesg_path = _write_shell_output("dmesg.txt", "dmesg", timeout=60)
 
         if bugreport:
             path = base_dir / "bugreport.txt"
@@ -268,7 +181,6 @@ class AdbConnector:
             dmesg_path=dmesg_path,
             bugreport_path=bugreport_path,
             logcat_path=logcat_path,
-            logcat_next_since=logcat_next_since,
             telephony_path=telephony_path,
             ims_path=ims_path,
             netstat_path=netstat_path,

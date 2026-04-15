@@ -44,7 +44,6 @@ class AdbSnapshotResult(BaseModel):
     dmesg_path: str | None = None
     bugreport_path: str | None = None
     logcat_path: str | None = None
-    logcat_next_since: str | None = None
     telephony_path: str | None = None
     ims_path: str | None = None
     netstat_path: str | None = None
