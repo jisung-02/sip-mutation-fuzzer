@@ -1053,10 +1053,14 @@ class CampaignExecutor:
                 "port": port_pc,
                 "bind_port": config.mt_local_port,
             }
-            if config.ipsec_mode in ("null", "bypass"):
-                # Both modes: send from pcscf container netns
+            if config.ipsec_mode in ("null", "bypass", "ipsec"):
+                # All three modes: send from pcscf container netns
                 target_update["source_ip"] = None
                 target_update["bind_container"] = "pcscf"
+                if config.ipsec_mode == "ipsec":
+                    # Signal to sender: wrap sendto with a temporary XFRM policy so
+                    # the kernel encrypts via P-CSCF's existing ESP SA.
+                    target_update["esp_wrap"] = True
 
             mt_target = self._target.model_copy(update=target_update)
             if config.pcap_enabled:

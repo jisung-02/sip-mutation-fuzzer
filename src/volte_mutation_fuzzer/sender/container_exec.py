@@ -27,7 +27,7 @@ from typing import Final, Literal
 # Reads stdin: 4-byte big-endian payload length, then raw payload bytes.
 # Writes stdout: one JSON object per SIP response received.
 _DRIVER_SCRIPT: Final[str] = r"""
-import socket, sys, json, base64, struct
+import socket, sys, json, base64, struct, subprocess, re, atexit
 bind_host = sys.argv[1]
 bind_port = int(sys.argv[2])
 remote_host = sys.argv[3]
@@ -35,6 +35,7 @@ remote_port = int(sys.argv[4])
 transport = sys.argv[5].upper()
 timeout_secs = float(sys.argv[6])
 collect_all = sys.argv[7] == "1"
+esp_wrap = len(sys.argv) > 8 and sys.argv[8] == "1"
 
 length_bytes = sys.stdin.buffer.read(4)
 if len(length_bytes) < 4:
@@ -44,11 +45,72 @@ payload = sys.stdin.buffer.read(payload_len)
 
 MAX_RESPONSES = 8
 
+
+def _find_outbound_reqid(src, dst):
+    # Parse `ip xfrm state` to find an outbound SA src -> dst and return its reqid.
+    # Picks the highest-priority (most recently added) matching SA.
+    try:
+        out = subprocess.check_output(["ip", "xfrm", "state"], text=True, timeout=5)
+    except Exception as exc:
+        print(json.dumps({"esp_wrap_error": "xfrm_state_read: " + str(exc)}), flush=True, file=sys.stderr)
+        return None
+    blocks = re.split(r"\nsrc ", "\n" + out)
+    best = None
+    for blk in blocks:
+        if not blk.strip():
+            continue
+        first = blk.splitlines()[0]
+        m = re.match(r"(\S+)\s+dst\s+(\S+)", first)
+        if not m:
+            continue
+        if m.group(1) != src or m.group(2) != dst:
+            continue
+        r = re.search(r"reqid\s+(\d+)", blk)
+        if r:
+            best = int(r.group(1))
+    return best
+
+
+def _policy_add(src, dst, sport, dport, reqid):
+    subprocess.run(
+        [
+            "ip", "xfrm", "policy", "add",
+            "src", src, "dst", dst,
+            "sport", str(sport), "dport", str(dport),
+            "dir", "out", "priority", "1000",
+            "tmpl", "src", src, "dst", dst,
+            "proto", "esp", "reqid", str(reqid), "mode", "transport",
+        ],
+        check=True, timeout=5,
+    )
+
+
+def _policy_del(src, dst, sport, dport):
+    subprocess.run(
+        [
+            "ip", "xfrm", "policy", "delete",
+            "src", src, "dst", dst,
+            "sport", str(sport), "dport", str(dport),
+            "dir", "out",
+        ],
+        check=False, timeout=5,
+    )
+
+
 if transport == "TCP":
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout_secs)
     if bind_port > 0:
         sock.bind((bind_host, bind_port))
+    actual_bind_port = sock.getsockname()[1]
+    if esp_wrap:
+        reqid = _find_outbound_reqid(bind_host, remote_host)
+        if reqid is not None:
+            _policy_add(bind_host, remote_host, actual_bind_port, remote_port, reqid)
+            atexit.register(_policy_del, bind_host, remote_host, actual_bind_port, remote_port)
+            print(json.dumps({"esp_wrap": "installed", "reqid": reqid, "sport": actual_bind_port}), flush=True)
+        else:
+            print(json.dumps({"esp_wrap_error": "no outbound SA found"}), flush=True, file=sys.stderr)
     sock.connect((remote_host, remote_port))
     sock.sendall(payload)
     chunks = []
@@ -67,6 +129,15 @@ if transport == "TCP":
 else:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((bind_host, bind_port))
+    actual_bind_port = sock.getsockname()[1]
+    if esp_wrap:
+        reqid = _find_outbound_reqid(bind_host, remote_host)
+        if reqid is not None:
+            _policy_add(bind_host, remote_host, actual_bind_port, remote_port, reqid)
+            atexit.register(_policy_del, bind_host, remote_host, actual_bind_port, remote_port)
+            print(json.dumps({"esp_wrap": "installed", "reqid": reqid, "sport": actual_bind_port}), flush=True)
+        else:
+            print(json.dumps({"esp_wrap_error": "no outbound SA found"}), flush=True, file=sys.stderr)
     sock.settimeout(timeout_secs)
     sock.sendto(payload, (remote_host, remote_port))
     count = 0
@@ -114,6 +185,7 @@ def send_via_container(
     payload: bytes,
     timeout_seconds: float,
     collect_all_responses: bool,
+    esp_wrap: bool = False,
 ) -> ContainerSendResult:
     """Send *payload* from inside *container*'s network namespace and collect responses.
 
@@ -147,6 +219,7 @@ def send_via_container(
         transport,
         str(timeout_seconds),
         "1" if collect_all_responses else "0",
+        "1" if esp_wrap else "0",
     ]
 
     process_timeout = timeout_seconds + _MAX_DRIVER_TIMEOUT_EXTRA_S
@@ -189,11 +262,22 @@ def send_via_container(
             continue
         try:
             obj = json.loads(line)
-            raw = base64.b64decode(obj["raw_b64"])
-            addr = (str(obj["host"]), int(obj["port"]))
-            raw_responses.append((raw, addr))
-        except (ValueError, KeyError):
+        except ValueError:
             observer_events.append(f"container-send:malformed-line:{line[:80]}")
+            continue
+        if "raw_b64" in obj:
+            try:
+                raw = base64.b64decode(obj["raw_b64"])
+                addr = (str(obj["host"]), int(obj["port"]))
+                raw_responses.append((raw, addr))
+            except (KeyError, ValueError):
+                observer_events.append(f"container-send:malformed-line:{line[:80]}")
+        elif "esp_wrap" in obj:
+            observer_events.append(
+                f"container-send:esp-wrap:reqid={obj.get('reqid')}:sport={obj.get('sport')}"
+            )
+        else:
+            observer_events.append(f"container-send:status:{line[:80]}")
 
     observer_events.append(f"container-send:responses:{len(raw_responses)}")
 

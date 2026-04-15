@@ -57,6 +57,10 @@ class TargetEndpoint(BaseModel):
     # Deprecated compatibility path for Docker netns sending.
     bind_container: str | None = Field(default=None, min_length=1)
     bind_port: int | None = Field(default=None, ge=1, le=65535)
+    # When True the container-driver temporarily installs an outbound XFRM
+    # policy so the kernel wraps sendto() traffic in the existing P-CSCF↔UE
+    # ESP SA. Only meaningful together with bind_container.
+    esp_wrap: bool = False
 
     @field_validator(
         "host",

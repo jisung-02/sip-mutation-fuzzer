@@ -516,6 +516,7 @@ class SIPSenderReactor:
             payload=payload,
             timeout_seconds=target.timeout_seconds,
             collect_all_responses=collect_all_responses,
+            esp_wrap=target.esp_wrap,
         )
         observer_events.extend(container_result.observer_events)
 

@@ -55,7 +55,7 @@ class CampaignConfig(BaseModel):
     impi: str | None = None
     mt: bool = False
     mt_invite_template: str | None = None
-    ipsec_mode: Literal["null", "bypass"] | None = None
+    ipsec_mode: Literal["null", "bypass", "ipsec"] | None = None
     preserve_via: bool = False
     preserve_contact: bool = False
     mo_contact_host: str = "10.20.20.9"
@@ -163,6 +163,11 @@ class CampaignConfig(BaseModel):
             object.__setattr__(self, "bind_container", "pcscf")
         elif self.ipsec_mode == "bypass":
             # xfrm bypass mode: docker exec
+            object.__setattr__(self, "source_ip", None)
+            object.__setattr__(self, "bind_container", "pcscf")
+        elif self.ipsec_mode == "ipsec":
+            # kernel IPsec path: bind in pcscf netns, driver adds temporary
+            # XFRM policy so outbound packets hit the existing P-CSCF↔UE SA
             object.__setattr__(self, "source_ip", None)
             object.__setattr__(self, "bind_container", "pcscf")
 
