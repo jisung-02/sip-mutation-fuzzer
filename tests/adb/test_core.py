@@ -1,3 +1,4 @@
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -85,8 +86,8 @@ class AdbConnectorTests(unittest.TestCase):
 
 def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
     outputs = {
-        ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo"): "meminfo output\n",
-        ("adb", "-s", "SER123", "shell", "dmesg"): "dmesg output\n",
+        ("dumpsys", "meminfo"): "meminfo output\n",
+        ("dmesg",): "dmesg output\n",
     }
 
     def fake_run(
@@ -95,7 +96,12 @@ def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
         text: bool,
         timeout: int,
     ) -> _DummyCompletedProcess:
-        return _DummyCompletedProcess(stdout=outputs[tuple(cmd)])
+        # All snapshot calls go through `adb -s SER123 shell <args...>`
+        # except `adb logcat ...`.  Return per-command stdout; default
+        # to empty success for anything else so unrelated dumps don't
+        # spuriously appear in `errors`.
+        shell_args = tuple(cmd[cmd.index("shell") + 1:]) if "shell" in cmd else ()
+        return _DummyCompletedProcess(stdout=outputs.get(shell_args, ""))
 
     connector = AdbConnector(serial="SER123")
     output_dir = tmp_path / "nested" / "snapshots"
@@ -127,10 +133,12 @@ def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:
 
     assert snapshot.meminfo_path is None
     assert snapshot.dmesg_path is None
-    assert snapshot.errors == (
-        "dumpsys meminfo failed: meminfo boom",
-        "dmesg failed: permission denied",
-    )
+    # `take_snapshot` runs its dumps concurrently, so `errors` order is
+    # not guaranteed.  Verify the two failure modes we care about — the
+    # raised exception and a non-zero-return shell error — are both
+    # reported, independent of ordering.
+    assert "dumpsys meminfo failed: meminfo boom" in snapshot.errors
+    assert "dmesg failed: permission denied" in snapshot.errors
 
 
 def test_take_snapshot_creates_output_dir_for_bugreport(tmp_path: Path) -> None:
@@ -158,6 +166,119 @@ def test_take_snapshot_creates_output_dir_for_bugreport(tmp_path: Path) -> None:
         Path(snapshot.bugreport_path).read_text(encoding="utf-8")
         == "bugreport output\n"
     )
+
+
+def test_take_snapshot_runs_dumps_concurrently(tmp_path: Path) -> None:
+    # Every dump call blocks for `delay` seconds; if the ten dumps were
+    # serial the wall clock would be ~10 * delay.  Parallel execution
+    # with ``max_workers=8`` should finish in well under half that.
+    import threading as _threading
+
+    delay = 0.1
+    call_count = 0
+    counter_lock = _threading.Lock()
+    max_concurrent = 0
+    active = 0
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        nonlocal call_count, active, max_concurrent
+        with counter_lock:
+            call_count += 1
+            active += 1
+            if active > max_concurrent:
+                max_concurrent = active
+        time.sleep(delay)
+        with counter_lock:
+            active -= 1
+        return _DummyCompletedProcess(stdout="ok\n")
+
+    connector = AdbConnector()
+    with patch("subprocess.run", side_effect=fake_run):
+        t0 = time.perf_counter()
+        connector.take_snapshot(str(tmp_path / "snapshots"))
+        elapsed = time.perf_counter() - t0
+
+    # The anchor `get_device_time()` plus ten dumps gives 11 subprocess
+    # calls.  Serial execution would take ~11 * delay = 1.1s; parallel
+    # pool should stay under ~0.6s comfortably.
+    assert call_count >= 11
+    assert max_concurrent >= 2, "dump calls did not overlap in time"
+    assert elapsed < delay * 11 * 0.75, (
+        f"wall clock {elapsed:.3f}s looks serial for delay={delay}s"
+    )
+
+
+def test_take_snapshot_captures_device_time_before_logcat(tmp_path: Path) -> None:
+    # The `logcat_next_since` anchor must be captured before any `logcat`
+    # dump starts so logs arriving during the dump window are covered by
+    # the next snapshot (overlap rather than gap).  Telephony / IMS /
+    # netstat dumps may run either side of the anchor — the contract is
+    # specifically about logcat.
+    import threading as _threading
+
+    order: list[str] = []
+    order_lock = _threading.Lock()
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        with order_lock:
+            if "shell" in cmd and cmd[cmd.index("shell") + 1] == "date":
+                order.append("anchor")
+            elif "logcat" in cmd:
+                order.append("logcat")
+            else:
+                order.append("other")
+        return _DummyCompletedProcess(stdout="ok\n")
+
+    connector = AdbConnector()
+    with patch("subprocess.run", side_effect=fake_run):
+        connector.take_snapshot(str(tmp_path / "snapshots"))
+
+    assert "anchor" in order, "device time anchor was never captured"
+    assert "logcat" in order, "logcat dumps were never invoked"
+    anchor_idx = order.index("anchor")
+    first_logcat_idx = order.index("logcat")
+    assert anchor_idx < first_logcat_idx, (
+        f"anchor must precede first logcat dump, got order={order[:8]}"
+    )
+
+
+def test_take_snapshot_partial_failure_does_not_block_others(tmp_path: Path) -> None:
+    # If one dump raises, the remaining dumps must still run to
+    # completion and produce their files.  Parallel execution should not
+    # abort the pool on a single failure.
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        if cmd[-2:] == ["dumpsys", "meminfo"]:
+            raise RuntimeError("meminfo boom")
+        return _DummyCompletedProcess(stdout="ok\n")
+
+    connector = AdbConnector()
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = connector.take_snapshot(str(tmp_path / "snapshots"))
+
+    # The failing task shows up in errors…
+    assert any("meminfo" in err for err in snapshot.errors)
+    assert snapshot.meminfo_path is None
+    # …but independent tasks still produced their outputs.
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is not None
+    assert snapshot.netstat_path is not None
+    assert snapshot.dmesg_path is not None
+    assert snapshot.logcat_path is not None
 
 
 class AdbLogCollectorTests(unittest.TestCase):
