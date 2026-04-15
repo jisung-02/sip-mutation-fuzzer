@@ -534,39 +534,52 @@ class OracleEngine:
                     },
                 )
 
-        if self._adb_oracle is not None:
-            adb_result = self._adb_oracle.check()
-            if adb_result.matched:
-                return OracleVerdict(
-                    verdict="stack_failure",
-                    confidence=0.80,
-                    reason=f"ADB anomaly detected: {adb_result.matched_pattern}",
-                    response_code=verdict.response_code,
-                    elapsed_ms=verdict.elapsed_ms,
-                    details={
-                        "socket_verdict": verdict.verdict,
-                        "matched_pattern": adb_result.matched_pattern,
-                        "matched_line": adb_result.matched_line,
-                        "log_path": "adb:logcat",
-                    },
-                )
+        # Poll ADB/iOS log collectors for up to ``log_grace_seconds`` so
+        # asynchronous crashes that surface a few seconds after the SIP
+        # response (e.g. Samsung ``com.sec.imsservice`` throwing on CSeq
+        # parse ~7 s after the 200 OK) still upgrade the verdict to
+        # ``stack_failure``.  With grace=0 this collapses to the original
+        # single check behavior.
+        grace_end = time.monotonic() + max(context.log_grace_seconds, 0.0)
+        poll_every = context.log_grace_poll_seconds
+        while True:
+            if self._adb_oracle is not None:
+                adb_result = self._adb_oracle.check()
+                if adb_result.matched:
+                    return OracleVerdict(
+                        verdict="stack_failure",
+                        confidence=0.80,
+                        reason=f"ADB anomaly detected: {adb_result.matched_pattern}",
+                        response_code=verdict.response_code,
+                        elapsed_ms=verdict.elapsed_ms,
+                        details={
+                            "socket_verdict": verdict.verdict,
+                            "matched_pattern": adb_result.matched_pattern,
+                            "matched_line": adb_result.matched_line,
+                            "log_path": "adb:logcat",
+                        },
+                    )
 
-        if self._ios_oracle is not None:
-            ios_result = self._ios_oracle.check()
-            if ios_result.matched:
-                return OracleVerdict(
-                    verdict="stack_failure",
-                    confidence=0.80,
-                    reason=f"iOS anomaly detected: {ios_result.matched_pattern}",
-                    response_code=verdict.response_code,
-                    elapsed_ms=verdict.elapsed_ms,
-                    details={
-                        "socket_verdict": verdict.verdict,
-                        "matched_pattern": ios_result.matched_pattern,
-                        "matched_line": ios_result.matched_line,
-                        "log_path": "ios:syslog",
-                    },
-                )
+            if self._ios_oracle is not None:
+                ios_result = self._ios_oracle.check()
+                if ios_result.matched:
+                    return OracleVerdict(
+                        verdict="stack_failure",
+                        confidence=0.80,
+                        reason=f"iOS anomaly detected: {ios_result.matched_pattern}",
+                        response_code=verdict.response_code,
+                        elapsed_ms=verdict.elapsed_ms,
+                        details={
+                            "socket_verdict": verdict.verdict,
+                            "matched_pattern": ios_result.matched_pattern,
+                            "matched_line": ios_result.matched_line,
+                            "log_path": "ios:syslog",
+                        },
+                    )
+
+            if time.monotonic() >= grace_end:
+                break
+            time.sleep(min(poll_every, max(grace_end - time.monotonic(), 0.0)))
 
         self._evaluate_call_count += 1
 

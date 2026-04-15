@@ -65,6 +65,11 @@ class CampaignConfig(BaseModel):
     mt_local_port: int = Field(default=15100, ge=1024, le=65535)
     resume: bool = False
     circuit_breaker_threshold: int = Field(default=10, ge=0)
+    # Oracle post-response grace window (seconds) during which ADB/iOS log
+    # collectors are re-polled for delayed anomalies.  Auto-defaulted to 8s
+    # for real-ue-direct mode (covers observed ~7s late Samsung A31 IMS
+    # crashes) and 0 for softphone.  ``None`` means "pick the default".
+    oracle_log_grace_seconds: float | None = Field(default=None, ge=0.0, le=30.0)
 
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None
@@ -118,6 +123,8 @@ class CampaignConfig(BaseModel):
                 object.__setattr__(self, "pcap_enabled", True)
             if self.pcap_interface == "any":
                 object.__setattr__(self, "pcap_interface", "br-volte")
+            if self.oracle_log_grace_seconds is None:
+                object.__setattr__(self, "oracle_log_grace_seconds", 8.0)
         else:
             # softphone 모드: 기존 기본값 유지
             if self.check_process is None:
@@ -126,6 +133,8 @@ class CampaignConfig(BaseModel):
                 object.__setattr__(self, "adb_enabled", False)
             if self.pcap_enabled is None:
                 object.__setattr__(self, "pcap_enabled", False)
+            if self.oracle_log_grace_seconds is None:
+                object.__setattr__(self, "oracle_log_grace_seconds", 0.0)
         return self
 
     @model_validator(mode="after")

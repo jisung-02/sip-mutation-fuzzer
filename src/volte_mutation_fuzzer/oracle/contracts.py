@@ -21,6 +21,12 @@ class OracleContext(BaseModel):
 
     method: str = Field(min_length=1)
     timeout_threshold_ms: float = Field(default=5000.0, gt=0.0)
+    # Time window after receiving a transport response during which the
+    # oracle keeps polling ADB/iOS log collectors for delayed anomalies
+    # (e.g. asynchronous IMS service crashes that surface seconds after
+    # the 200 OK).  Zero disables the grace window.
+    log_grace_seconds: float = Field(default=0.0, ge=0.0, le=30.0)
+    log_grace_poll_seconds: float = Field(default=0.5, gt=0.0, le=5.0)
 
 
 class ProcessCheckResult(BaseModel):
