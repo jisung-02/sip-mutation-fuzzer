@@ -280,6 +280,32 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
     print("  Done\n")
 
 
+def apply_pyhss_ifc_template(project_root: Path) -> None:
+    """Ensure the committed iFC template is active in the pyhss container.
+
+    The template is bind-mounted, so the repo file is the source of truth.
+    Restart pyhss so any cached iFC rendering is discarded and the next MAR
+    re-renders from disk. Reproducibility contract: after `poe provision`,
+    S-CSCF iFC matches `infrastructure/pyhss/default_ifc.xml` exactly.
+    """
+    repo_ifc = project_root / "infrastructure" / "pyhss" / "default_ifc.xml"
+    if not repo_ifc.exists():
+        print(f"  Skip: {repo_ifc} missing")
+        return
+
+    rc, out, _ = docker_exec("pyhss", "cat", "/mnt/pyhss/default_ifc.xml")
+    if rc != 0:
+        print("  Skip: pyhss container not running")
+        return
+
+    if out != repo_ifc.read_text():
+        print("  WARNING: repo iFC differs from pyhss bind mount — check rsync to server")
+
+    print("Restarting pyhss to reload iFC template...")
+    subprocess.run(["docker", "restart", "pyhss"], check=False)
+    print("  Done — UE must re-REGISTER for new iFC to apply\n")
+
+
 def main() -> None:
     project_root = Path(__file__).parent.parent
     env_file = project_root / ".env"
@@ -321,6 +347,7 @@ def main() -> None:
 
     provision_open5gs(env, subscribers)
     provision_pyhss(env, subscribers)
+    apply_pyhss_ifc_template(project_root)
 
     print("=" * 40)
     print("Provisioning Complete!")
