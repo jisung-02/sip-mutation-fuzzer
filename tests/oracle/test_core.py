@@ -2,7 +2,6 @@ import os
 import tempfile
 import time
 import unittest
-from typing import cast
 from unittest.mock import patch
 
 from volte_mutation_fuzzer.adb.core import AdbAnomalyDetector
@@ -686,16 +685,14 @@ class OracleEngineWithAdbTests(unittest.TestCase):
         self.ctx = OracleContext(method="OPTIONS")
 
     def test_adb_oracle_triggers_stack_failure_verdict(self) -> None:
-        engine = OracleEngine(
-            adb_oracle=cast(AdbOracle, _AdbOracleStub(True, r"SIGSEGV|signal 11"))
-        )
+        engine = OracleEngine(adb_oracle=_AdbOracleStub(True, r"SIGSEGV|signal 11"))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "stack_failure")
         self.assertEqual(verdict.confidence, 0.80)
         self.assertIn("ADB anomaly detected", verdict.reason)
 
     def test_adb_oracle_no_events_falls_through_to_normal_verdict(self) -> None:
-        engine = OracleEngine(adb_oracle=cast(AdbOracle, _AdbOracleStub(False)))
+        engine = OracleEngine(adb_oracle=_AdbOracleStub(False))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "normal")
 
@@ -805,15 +802,13 @@ class OracleEngineWithIosTests(unittest.TestCase):
         self.ctx = OracleContext(method="OPTIONS")
 
     def test_ios_oracle_triggers_stack_failure_verdict(self) -> None:
-        engine = OracleEngine(
-            ios_oracle=cast(IosOracle, _IosOracleStub(True, r"EXC_BAD_ACCESS"))
-        )
+        engine = OracleEngine(ios_oracle=_IosOracleStub(True, r"EXC_BAD_ACCESS"))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "stack_failure")
         self.assertEqual(verdict.confidence, 0.80)
         self.assertIn("iOS anomaly detected", verdict.reason)
 
     def test_ios_oracle_no_events_falls_through_to_normal_verdict(self) -> None:
-        engine = OracleEngine(ios_oracle=cast(IosOracle, _IosOracleStub(False)))
+        engine = OracleEngine(ios_oracle=_IosOracleStub(False))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "normal")

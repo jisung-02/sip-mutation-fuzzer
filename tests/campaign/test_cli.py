@@ -128,38 +128,37 @@ class CampaignRunCLITests(unittest.TestCase):
             )
             return executor
 
-        with tempfile.TemporaryDirectory():
-            with patch(
-                "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
-                side_effect=_build_executor,
-            ):
-                result = self.runner.invoke(
-                    app,
-                    [
-                        "campaign",
-                        "run",
-                        "--target-host",
-                        "127.0.0.1",
-                        "--target-port",
-                        "5060",
-                        "--methods",
-                        "OPTIONS",
-                        "--layer",
-                        "model",
-                        "--strategy",
-                        "default",
-                        "--max-cases",
-                        "1",
-                        "--timeout",
-                        "0.1",
-                        "--cooldown",
-                        "0",
-                        "--no-process-check",
-                        "--output",
-                        "test_run",
-                        "--crash-analysis",
-                    ],
-                )
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--target-host",
+                    "127.0.0.1",
+                    "--target-port",
+                    "5060",
+                    "--methods",
+                    "OPTIONS",
+                    "--layer",
+                    "model",
+                    "--strategy",
+                    "default",
+                    "--max-cases",
+                    "1",
+                    "--timeout",
+                    "0.1",
+                    "--cooldown",
+                    "0",
+                    "--no-process-check",
+                    "--output",
+                    "test_run",
+                    "--crash-analysis",
+                ],
+            )
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertTrue(captured["config"].crash_analysis)
