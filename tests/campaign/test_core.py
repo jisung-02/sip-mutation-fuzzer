@@ -246,6 +246,29 @@ class ResultStoreTests(unittest.TestCase):
             self.assertEqual(header.status, "completed")
             self.assertEqual(len(cases), 1)
 
+    def test_read_all_preserves_adaptive_oracle_grace_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "campaign.jsonl"
+            store = ResultStore(path)
+            campaign = CampaignResult(
+                campaign_id="test123",
+                started_at="2026-01-01T00:00:00Z",
+                config=CampaignConfig(
+                    target_host="10.20.20.8",
+                    mode="real-ue-direct",
+                    target_msisdn="111111",
+                ),
+                status="running",
+            )
+            store.write_header(campaign)
+
+            header, _ = store.read_all()
+            self.assertIsNone(header.config.oracle_log_grace_seconds)
+            self.assertEqual(
+                header.config.oracle_log_grace_seconds_for_method("OPTIONS"),
+                1.0,
+            )
+
     def test_read_case_by_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "campaign.jsonl"

@@ -122,8 +122,6 @@ class CampaignConfig(BaseModel):
                 object.__setattr__(self, "pcap_enabled", True)
             if self.pcap_interface == "any":
                 object.__setattr__(self, "pcap_interface", "br-volte")
-            if self.oracle_log_grace_seconds is None:
-                object.__setattr__(self, "oracle_log_grace_seconds", 8.0)
         else:
             # softphone 모드: 기존 기본값 유지
             if self.check_process is None:
@@ -132,8 +130,6 @@ class CampaignConfig(BaseModel):
                 object.__setattr__(self, "adb_enabled", False)
             if self.pcap_enabled is None:
                 object.__setattr__(self, "pcap_enabled", False)
-            if self.oracle_log_grace_seconds is None:
-                object.__setattr__(self, "oracle_log_grace_seconds", 0.0)
         return self
 
     def oracle_log_grace_seconds_for_method(self, method: str) -> float:
