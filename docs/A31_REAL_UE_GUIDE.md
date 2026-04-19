@@ -150,6 +150,36 @@ uv run fuzzer campaign run \
 | **crash** | 프로세스 종료 | **잠재적 취약점!** |
 | **stack_failure** | Stack trace 발견 | **잠재적 취약점!** |
 
+### 처리 시간과 로그 수집 정책
+
+실기기 캠페인에서는 `elapsed_ms`와 실제 케이스 처리 시간이 다를 수 있다.
+
+- `elapsed_ms`: 송신 후 응답/오라클 판정까지의 네트워크 중심 시간
+- `case_wall_ms`: 한 케이스가 끝날 때까지 걸린 실제 시간
+  - 오라클 grace window
+  - ADB snapshot
+  - evidence 저장
+  - 기타 동기 post-processing
+
+`report.html`의 `Wall` 컬럼과 `campaign.jsonl`의 `case_wall_ms`를 throughput 판단 기준으로 보는 것이 맞다.
+
+real-ue-direct 모드에서는 오라클 로그 grace가 메서드별로 자동 조정된다.
+
+- `INVITE`: `8.0s`
+- `ACK`, `CANCEL`, `PRACK`, `BYE`, `UPDATE`, `REFER`, `INFO`: `2.0s`
+- 그 외 메서드: `1.0s`
+
+이 설정 때문에 non-INVITE 케이스는 wall-clock이 줄어들 수 있지만, `INVITE`는 지연 크래시 탐지를 위해 의도적으로 더 느리게 유지된다.
+
+ADB snapshot도 verdict에 따라 경량/전체로 나뉜다.
+
+- `normal`, `timeout`, `unknown`, `infra_failure`: `light`
+  - `telephony.txt`
+  - `logcat_*.txt`, `logcat_all.txt`
+- `suspicious`, `crash`, `stack_failure`: `full`
+  - 위 경량 항목 모두
+  - `ims.txt`, `netstat.txt`, `meminfo.txt`, `dmesg.txt`
+
 ### 중요 케이스 식별
 ```bash
 # suspicious/crash만 필터링

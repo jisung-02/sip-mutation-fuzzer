@@ -207,6 +207,41 @@ uv sync --reinstall
 
 ## 📊 성능 최적화
 
+### `elapsed_ms` 와 `case_wall_ms` 해석
+
+**증상**: 보고서에서 `elapsed_ms`는 낮은데 실제 캠페인은 느리게 진행됨
+
+실기기 경로에서는 두 숫자의 의미가 다르다.
+
+- `elapsed_ms`
+  - 송신과 응답/오라클 판정 중심 시간
+  - 네트워크 round-trip이나 응답 지연을 볼 때 사용
+- `case_wall_ms`
+  - 케이스가 끝날 때까지 걸린 실제 시간
+  - 오라클 grace window, ADB snapshot, evidence 저장 같은 동기 후처리까지 포함
+  - throughput 판단은 이 값을 기준으로 보는 것이 맞음
+
+특히 real-ue-direct에서는 메서드별 grace 기본값이 다르다.
+
+- `INVITE`: `8.0s`
+- `ACK`, `CANCEL`, `PRACK`, `BYE`, `UPDATE`, `REFER`, `INFO`: `2.0s`
+- 그 외 메서드: `1.0s`
+
+그래서 `INVITE`는 의도적으로 `case_wall_ms`가 더 크게 나올 수 있고, non-INVITE는 같은 환경에서도 더 빨라지는 것이 정상이다.
+
+ADB snapshot도 verdict에 따라 비용이 달라진다.
+
+- `normal`, `timeout`, `unknown`, `infra_failure`: `light`
+  - `telephony.txt` + logcat만 수집
+- `suspicious`, `crash`, `stack_failure`: `full`
+  - `ims/netstat/meminfo/dmesg`까지 추가 수집
+
+확인 순서:
+
+1. `report.html`의 `Wall` 컬럼이 높은 케이스가 어떤 메서드/ verdict 인지 본다.
+2. `INVITE`인지, `suspicious/crash/stack_failure`인지 먼저 확인한다.
+3. `elapsed_ms`는 짧고 `case_wall_ms`만 길다면, 네트워크보다 grace window / snapshot 비용일 가능성이 높다.
+
 ### 처리 속도 개선
 ```bash
 # 1. Timeout 단축
