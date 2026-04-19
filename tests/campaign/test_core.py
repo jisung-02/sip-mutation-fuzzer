@@ -387,7 +387,6 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             methods=("OPTIONS",),
             target_msisdn="111111",
             impi="001010000123511",
-            mt_invite_template="a31",
             ipsec_mode="null",
             pcap_enabled=False,
             max_cases=1,
