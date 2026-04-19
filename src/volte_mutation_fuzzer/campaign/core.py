@@ -758,7 +758,8 @@ class CampaignExecutor:
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
-                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+                # Finalize after evidence.collect() so the metric includes persistence time.
+                case_wall_ms=0.0,
             )
 
             self._evidence.collect(
@@ -768,7 +769,11 @@ class CampaignExecutor:
                 adb_snapshot_dir=adb_snapshot_dir,
             )
 
-            return case_result
+            return case_result.model_copy(
+                update={
+                    "case_wall_ms": self._case_wall_ms(case_started_monotonic)
+                }
+            )
 
         except Exception as exc:
             error = str(exc)
@@ -1143,7 +1148,8 @@ class CampaignExecutor:
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
-                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+                # Finalize after evidence.collect() so the metric includes persistence time.
+                case_wall_ms=0.0,
             )
 
             self._evidence.collect(
@@ -1153,7 +1159,11 @@ class CampaignExecutor:
                 adb_snapshot_dir=adb_snapshot_dir,
             )
 
-            return case_result
+            return case_result.model_copy(
+                update={
+                    "case_wall_ms": self._case_wall_ms(case_started_monotonic)
+                }
+            )
 
         except Exception as exc:
             error = str(exc)
