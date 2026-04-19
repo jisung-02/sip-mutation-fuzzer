@@ -105,6 +105,27 @@ class HtmlReportGeneratorTests(unittest.TestCase):
             self.assertIn("INVITE", content)
             self.assertIn("seed", content.lower())
 
+    def test_cases_table_renders_warning_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases = [
+                _make_case(
+                    0,
+                    "timeout",
+                    details={
+                        "adb_warning": {
+                            "severity": "warning",
+                            "matched_line": "IMS deregist triggered by network change",
+                        }
+                    },
+                )
+            ]
+            jsonl_path = _write_campaign(tmpdir, cases)
+            content = HtmlReportGenerator(jsonl_path).generate().read_text()
+
+            self.assertIn("Context", content)
+            self.assertIn("ADB warning", content)
+            self.assertIn("IMS deregist triggered by network change", content)
+
     def test_interesting_cases_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cases = [

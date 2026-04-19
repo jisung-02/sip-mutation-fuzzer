@@ -66,6 +66,27 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertIn("insert_header(Via)", ops)
             self.assertIn("flip_char(To)", ops)
 
+    def test_summary_includes_case_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            collector = EvidenceCollector(Path(tmpdir))
+            result = _make_result(verdict="stack_failure").model_copy(
+                update={
+                    "details": {
+                        "adb_warning": {
+                            "severity": "warning",
+                            "matched_line": "IMS deregist triggered by network change",
+                        }
+                    }
+                }
+            )
+
+            evidence_dir = collector.collect(result)
+
+            assert evidence_dir is not None
+            summary = json.loads((Path(evidence_dir) / "summary.json").read_text())
+            self.assertIn("details", summary)
+            self.assertEqual(summary["details"]["adb_warning"]["severity"], "warning")
+
     def test_collects_evidence_for_crash_verdict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             collector = EvidenceCollector(Path(tmpdir))

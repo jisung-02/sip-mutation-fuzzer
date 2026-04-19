@@ -398,6 +398,59 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(snapshot_mock.call_args.kwargs["log_since"], 100.0)
         self.assertEqual(snapshot_mock.call_args.kwargs["log_until"], 101.0)
 
+    def test_execute_case_propagates_oracle_details(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="model",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="packet",
+            bytes_sent=120,
+            outcome="timeout",
+            responses=(),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+
+        with unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="timeout",
+                reason="no response received within timeout",
+                response_code=None,
+                elapsed_ms=12.5,
+                process_alive=None,
+                details={
+                    "adb_warning": {
+                        "severity": "warning",
+                        "matched_line": "IMS deregist triggered by network change",
+                    }
+                },
+            ),
+        ):
+            result = executor._execute_case(spec)
+
+        adb_warning = result.details.get("adb_warning")
+        assert isinstance(adb_warning, dict)
+        self.assertEqual(adb_warning["severity"], "warning")
+        self.assertIn("IMS deregist", str(adb_warning["matched_line"]))
+
     def test_run_populates_normal_verdicts_on_200(self) -> None:
         responder = UDPResponder(
             responses=(
@@ -695,6 +748,83 @@ class CampaignExecutorTests(unittest.TestCase):
         executor = CampaignExecutor(cfg)
 
         self.assertEqual(executor._target.ipsec_mode, "native")
+
+    def test_init_ios_enabled_wires_ios_oracle(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+            ios_enabled=True,
+            adb_enabled=False,
+        )
+
+        executor = CampaignExecutor(cfg)
+
+        self.assertIsNotNone(executor._ios_collector)
+        self.assertIsNone(executor._adb_collector)
+        self.assertIsNotNone(executor._oracle._ios_oracle)
+
+    def test_init_wires_both_adb_and_ios_oracles_when_enabled(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+            ios_enabled=True,
+            adb_enabled=True,
+        )
+
+        executor = CampaignExecutor(cfg)
+
+        self.assertIsNotNone(executor._adb_collector)
+        self.assertIsNotNone(executor._ios_collector)
+        self.assertIsNotNone(executor._oracle._adb_oracle)
+        self.assertIsNotNone(executor._oracle._ios_oracle)
+
+    def test_run_starts_and_stops_ios_collector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                cooldown_seconds=0.0,
+                results_dir=tmpdir,
+                output_name="test",
+                ios_enabled=True,
+                adb_enabled=False,
+            )
+            executor = CampaignExecutor(cfg)
+            fake_case = CaseResult(
+                case_id=0,
+                seed=0,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+                verdict="normal",
+                reason="ok",
+                elapsed_ms=10.0,
+                reproduction_cmd="uv run fuzzer ...",
+                timestamp=1.0,
+            )
+
+            with unittest.mock.patch.object(
+                executor._ios_collector,
+                "start",
+            ) as start_mock, unittest.mock.patch.object(
+                executor._ios_collector,
+                "stop",
+            ) as stop_mock:
+                setattr(
+                    executor,
+                    "_execute_case",
+                    unittest.mock.Mock(return_value=fake_case),
+                )
+                executor.run()
+
+            start_mock.assert_called_once()
+            stop_mock.assert_called_once()
 
     def test_init_real_ue_msisdn_target_does_not_force_default_port(self) -> None:
         cfg = self._make_config(

@@ -171,6 +171,10 @@ class CaseResultTests(unittest.TestCase):
         r = self._make()
         self.assertEqual(r.mutation_ops, ())
 
+    def test_details_default_empty(self) -> None:
+        r = self._make()
+        self.assertEqual(r.details, {})
+
 
 class CampaignSummaryTests(unittest.TestCase):
     def test_defaults_all_zero(self) -> None:

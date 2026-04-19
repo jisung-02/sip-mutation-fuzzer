@@ -50,6 +50,19 @@ def _pct(count: int, total: int) -> float:
     return count * 100.0 / total
 
 
+def _context_lines(case: CaseResult) -> list[str]:
+    lines: list[str] = []
+    for key, label in (("adb_warning", "ADB warning"), ("ios_warning", "iOS warning")):
+        value = case.details.get(key)
+        if not isinstance(value, dict):
+            continue
+        text = str(value.get("matched_line") or value.get("matched_pattern") or "").strip()
+        if not text:
+            continue
+        lines.append(f"{label}: {text}")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # SVG helpers
 # ---------------------------------------------------------------------------
@@ -213,6 +226,14 @@ def _render_interesting_case(case: CaseResult, interesting_dir: Path) -> str:
     if case.mutation_ops:
         parts.append("<br><small><b>Mutations:</b> " + _esc(", ".join(case.mutation_ops)) + "</small>")
 
+    if case.details:
+        parts.append(
+            "<details><summary>Oracle Context</summary>"
+            f'<pre style="background:#f5f5f5;padding:8px;overflow-x:auto;'
+            f'font-size:11px;max-height:300px;">'
+            f"{_esc(json.dumps(case.details, ensure_ascii=False, indent=2))}</pre></details>"
+        )
+
     # Inline files from interesting/ dir
     for filename, label in [
         ("sent.sip", "Sent SIP"),
@@ -375,7 +396,17 @@ class HtmlReportGenerator:
         parts.append("</div>")
 
         parts.append('<table id="cases-table"><thead><tr>')
-        for col in ("ID", "Method", "Layer", "Strategy", "Seed", "Verdict", "Code", "ms"):
+        for col in (
+            "ID",
+            "Method",
+            "Layer",
+            "Strategy",
+            "Seed",
+            "Verdict",
+            "Code",
+            "ms",
+            "Context",
+        ):
             parts.append(f"<th>{col}</th>")
         parts.append("</tr></thead><tbody>")
 
@@ -389,6 +420,7 @@ class HtmlReportGenerator:
                 if is_interesting
                 else str(c.case_id)
             )
+            context_text = "<br>".join(_esc(line) for line in _context_lines(c))
             parts.append(
                 f'<tr class="{row_class}" style="border-left: 3px solid {color};">'
                 f"<td>{id_cell}</td>"
@@ -399,6 +431,7 @@ class HtmlReportGenerator:
                 f'<td style="color:{color};font-weight:bold;">{_esc(c.verdict)}</td>'
                 f"<td>{code_str}</td>"
                 f"<td>{c.elapsed_ms:.0f}</td>"
+                f"<td>{context_text}</td>"
                 f"</tr>"
             )
 

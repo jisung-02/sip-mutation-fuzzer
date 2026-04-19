@@ -40,7 +40,12 @@ from volte_mutation_fuzzer.mutator.contracts import (
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.mutator.editable import parse_editable_from_wire
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
-from volte_mutation_fuzzer.oracle.core import AdbOracle, LogOracle, OracleEngine
+from volte_mutation_fuzzer.oracle.core import (
+    AdbOracle,
+    IosOracle,
+    LogOracle,
+    OracleEngine,
+)
 from volte_mutation_fuzzer.sender.contracts import (
     SendArtifact,
     SendReceiveResult,
@@ -324,36 +329,53 @@ class CampaignExecutor:
         self._mutator = mutator or SIPMutator()
         self._sender = sender or SIPSenderReactor()
         self._adb_collector: Any | None = None
+        self._ios_collector: Any | None = None
         _docker_mode = config.mode == "real-ue-direct"
         if oracle is not None:
             self._oracle = oracle
-        elif config.adb_enabled:
-            from volte_mutation_fuzzer.adb.contracts import AdbCollectorConfig
-            from volte_mutation_fuzzer.adb.core import (
-                AdbAnomalyDetector,
-                AdbLogCollector,
-            )
-
-            adb_cfg = AdbCollectorConfig(
-                serial=config.adb_serial,
-                buffers=config.adb_buffers,
-            )
-            _collector = AdbLogCollector(adb_cfg)
-            _detector = AdbAnomalyDetector()
-            _adb_oracle = AdbOracle(_collector, _detector)
-            self._adb_collector = _collector
+        else:
             log_oracle = LogOracle() if config.log_path is not None else None
+            adb_oracle = None
+            ios_oracle = None
+
+            if config.adb_enabled:
+                from volte_mutation_fuzzer.adb.contracts import AdbCollectorConfig
+                from volte_mutation_fuzzer.adb.core import (
+                    AdbAnomalyDetector,
+                    AdbLogCollector,
+                )
+
+                adb_cfg = AdbCollectorConfig(
+                    serial=config.adb_serial,
+                    buffers=config.adb_buffers,
+                )
+                adb_collector = AdbLogCollector(adb_cfg)
+                adb_detector = AdbAnomalyDetector()
+                adb_oracle = AdbOracle(adb_collector, adb_detector)
+                self._adb_collector = adb_collector
+
+            if config.ios_enabled:
+                from volte_mutation_fuzzer.ios.contracts import IosCollectorConfig
+                from volte_mutation_fuzzer.ios.core import (
+                    IosAnomalyDetector,
+                    IosSyslogCollector,
+                )
+
+                ios_cfg = IosCollectorConfig(
+                    udid=config.ios_udid,
+                    filter_processes=config.ios_filter_processes,
+                )
+                ios_collector = IosSyslogCollector(ios_cfg)
+                ios_detector = IosAnomalyDetector()
+                ios_oracle = IosOracle(ios_collector, ios_detector)
+                self._ios_collector = ios_collector
+
             self._oracle = OracleEngine(
                 log_oracle=log_oracle,
-                adb_oracle=_adb_oracle,
+                adb_oracle=adb_oracle,
+                ios_oracle=ios_oracle,
                 docker_mode=_docker_mode,
             )
-        elif config.log_path is not None:
-            self._oracle = OracleEngine(
-                log_oracle=LogOracle(), docker_mode=_docker_mode
-            )
-        else:
-            self._oracle = OracleEngine(docker_mode=_docker_mode)
         self._store = store or ResultStore(self._jsonl_path)
         target_port = config.target_port
         if (
@@ -471,6 +493,8 @@ class CampaignExecutor:
 
         if self._adb_collector is not None:
             self._adb_collector.start()
+        if self._ios_collector is not None:
+            self._ios_collector.start()
         consecutive_failures = 0
         cb_threshold = config.circuit_breaker_threshold
         # SA probe triggers at half the circuit breaker threshold (min 3)
@@ -578,6 +602,8 @@ class CampaignExecutor:
         finally:
             if self._adb_collector is not None:
                 self._adb_collector.stop()
+            if self._ios_collector is not None:
+                self._ios_collector.stop()
 
             # Generate final crash analysis report
             self._finalize_crash_analysis()
@@ -711,6 +737,7 @@ class CampaignExecutor:
                 raw_response=raw_response,
                 reproduction_cmd=self._build_reproduction_cmd(spec),
                 error=error,
+                details=getattr(verdict, "details", {}) or {},
                 timestamp=timestamp,
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
@@ -1087,6 +1114,7 @@ class CampaignExecutor:
                 raw_response=raw_response,
                 reproduction_cmd=self._build_mt_template_reproduction_cmd(spec),
                 error=error,
+                details=getattr(verdict, "details", {}) or {},
                 timestamp=timestamp,
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
@@ -1274,6 +1302,7 @@ class CampaignExecutor:
             process_alive=verdict.process_alive,
             raw_response=raw_response,
             reproduction_cmd=self._build_reproduction_cmd(spec),
+            details=getattr(verdict, "details", {}) or {},
             timestamp=timestamp,
             pcap_path=pcap_path_saved,
         )

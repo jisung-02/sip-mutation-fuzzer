@@ -55,6 +55,7 @@ class EvidenceCollector:
                 "reproduction_cmd": case_result.reproduction_cmd,
                 "timestamp": case_result.timestamp,
                 "error": case_result.error,
+                "details": case_result.details,
             }
             (case_dir / "summary.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2) + "\n",

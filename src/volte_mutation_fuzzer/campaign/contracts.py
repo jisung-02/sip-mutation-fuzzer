@@ -229,6 +229,7 @@ class CaseResult(BaseModel):
     raw_response: str | None = None
     reproduction_cmd: str
     error: str | None = None
+    details: dict[str, object] = Field(default_factory=dict)
     timestamp: float
     fuzz_response_code: int | None = None
     fuzz_related_method: str | None = None
