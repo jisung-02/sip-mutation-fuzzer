@@ -74,6 +74,55 @@ class CampaignConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.ipsec_mode, "bypass")
 
+    def test_mt_template_accepts_native_ipsec_mode(self) -> None:
+        cfg = CampaignConfig(
+            target_host="10.20.20.8",
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+        )
+
+        self.assertEqual(cfg.ipsec_mode, "native")
+        self.assertEqual(cfg.bind_container, "pcscf")
+        self.assertFalse(cfg.preserve_via)
+        self.assertFalse(cfg.preserve_contact)
+
+    def test_ipsec_alias_normalizes_to_native(self) -> None:
+        cfg = CampaignConfig(
+            target_host="10.20.20.8",
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="ipsec",
+        )
+
+        self.assertEqual(cfg.ipsec_mode, "native")
+
+    def test_native_ipsec_rejects_tcp_in_real_ue_direct(self) -> None:
+        with self.assertRaises(ValidationError):
+            CampaignConfig(
+                target_host="10.20.20.8",
+                mode="real-ue-direct",
+                transport="TCP",
+                target_msisdn="111111",
+                impi="001010000123511",
+                mt_invite_template="a31",
+                ipsec_mode="native",
+            )
+
+    def test_native_ipsec_requires_target_msisdn_in_real_ue_direct(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                target_host="10.20.20.8",
+                mode="real-ue-direct",
+                ipsec_mode="native",
+            )
+
+        self.assertIn("target_msisdn", str(ctx.exception))
+
 
 class CaseSpecTests(unittest.TestCase):
     def test_valid(self) -> None:

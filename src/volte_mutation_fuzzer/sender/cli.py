@@ -127,20 +127,30 @@ def _build_target(
     mode: str,
     timeout_seconds: float,
     label: str | None,
+    ipsec_mode: str | None = None,
 ) -> TargetEndpoint:
     if mode == "real-ue-direct" and host is not None and msisdn is not None:
         raise typer.BadParameter(
             "real-ue-direct requires exactly one of host or msisdn"
         )
+    normalized_ipsec_mode = "native" if ipsec_mode == "ipsec" else ipsec_mode
+    if mode == "real-ue-direct" and normalized_ipsec_mode == "native" and msisdn is None:
+        raise typer.BadParameter(
+            "real-ue-direct native ipsec_mode requires --target-msisdn"
+        )
+    effective_port = port
+    if mode == "real-ue-direct" and host is None and msisdn is not None:
+        effective_port = None
     try:
         return TargetEndpoint(
             host=host,
-            port=port,
+            port=effective_port,
             msisdn=msisdn,
             transport=cast(TransportProtocol, transport),
             mode=cast(TargetMode, mode),
             timeout_seconds=timeout_seconds,
             label=label,
+            ipsec_mode=ipsec_mode,
         )
     except ValidationError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -176,6 +186,13 @@ def packet_command(
     ] = None,
     transport: Annotated[str, typer.Option("--transport")] = "UDP",
     mode: Annotated[str, typer.Option("--mode")] = "softphone",
+    ipsec_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--ipsec-mode",
+            help="IPsec mode: 'null', 'bypass', or 'native' (alias 'ipsec').",
+        ),
+    ] = None,
     timeout: Annotated[float, typer.Option("--timeout")] = 2.0,
     label: Annotated[str | None, typer.Option("--label")] = None,
     collect_all_responses: Annotated[
@@ -196,7 +213,10 @@ def packet_command(
         mode=mode,
         timeout_seconds=timeout,
         label=label,
+        ipsec_mode=ipsec_mode,
     )
+    if mode == "real-ue-direct" and ipsec_mode in ("null", "bypass"):
+        target = target.model_copy(update={"bind_container": "pcscf"})
     result = SIPSenderReactor().send_artifact(
         artifact,
         target,
@@ -231,6 +251,13 @@ def request_command(
     ] = None,
     transport: Annotated[str, typer.Option("--transport")] = "UDP",
     mode: Annotated[str, typer.Option("--mode")] = "softphone",
+    ipsec_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--ipsec-mode",
+            help="IPsec mode: 'null', 'bypass', or 'native' (alias 'ipsec').",
+        ),
+    ] = None,
     timeout: Annotated[float, typer.Option("--timeout")] = 2.0,
     label: Annotated[str | None, typer.Option("--label")] = None,
     scenario: Annotated[str | None, typer.Option("--scenario")] = None,
@@ -245,10 +272,6 @@ def request_command(
         bool,
         typer.Option("--mt/--no-mt", help="Use 3GPP standard MT-INVITE format."),
     ] = False,
-    ipsec_mode: Annotated[
-        str | None,
-        typer.Option("--ipsec-mode", help="IPsec bypass strategy: 'null' or 'bypass'."),
-    ] = None,
     impi: Annotated[
         str | None,
         typer.Option("--impi", help="UE IMPI for MT INVITE Request-URI."),
@@ -273,6 +296,9 @@ def request_command(
         from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
         from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver
 
+        if target_msisdn is None:
+            raise typer.BadParameter("real-ue-direct MT requires --target-msisdn")
+
         resolver = RealUEDirectResolver()
         tmp_target = _build_target(
             host=target_host,
@@ -282,6 +308,7 @@ def request_command(
             mode=mode,
             timeout_seconds=timeout,
             label=label,
+            ipsec_mode=ipsec_mode,
         )
         resolved = resolver.resolve(tmp_target, impi=impi)
         port_pc, port_ps = resolver.resolve_protected_ports(target_msisdn or "")
@@ -301,10 +328,15 @@ def request_command(
             local_port=mt_local_port,
         )
         artifact = SendArtifact.from_wire_text(wire_text)
-        artifact = artifact.model_copy(update={
-            "preserve_via": True,
-            "preserve_contact": True,
-        })
+        preserve_headers = ipsec_mode not in ("native", "ipsec")
+        artifact = artifact.model_copy(
+            update={
+                "preserve_via": preserve_via if not preserve_headers else True,
+                "preserve_contact": (
+                    preserve_contact if not preserve_headers else True
+                ),
+            }
+        )
 
         target = _build_target(
             host=None,
@@ -314,9 +346,24 @@ def request_command(
             mode=mode,
             timeout_seconds=timeout,
             label=label,
+            ipsec_mode=ipsec_mode,
         )
-        if ipsec_mode in ("null", "bypass"):
-            target = target.model_copy(update={"bind_container": "pcscf"})
+        if target.ipsec_mode == "native":
+            target = target.model_copy(
+                update={
+                    "bind_container": "pcscf",
+                    "source_ip": None,
+                    "bind_port": None,
+                }
+            )
+        elif target.ipsec_mode in ("null", "bypass"):
+            target = target.model_copy(
+                update={
+                    "bind_container": "pcscf",
+                    "source_ip": None,
+                    "bind_port": mt_local_port,
+                }
+            )
 
         result = SIPSenderReactor().send_artifact(
             artifact,
@@ -347,8 +394,9 @@ def request_command(
         mode=mode,
         timeout_seconds=timeout,
         label=label,
+        ipsec_mode=ipsec_mode,
     )
-    if ipsec_mode in ("null", "bypass"):
+    if mode == "real-ue-direct" and ipsec_mode in ("null", "bypass"):
         target = target.model_copy(update={"bind_container": "pcscf"})
 
     result = SIPSenderReactor().send_packet(
@@ -387,6 +435,13 @@ def response_command(
     ] = None,
     transport: Annotated[str, typer.Option("--transport")] = "UDP",
     mode: Annotated[str, typer.Option("--mode")] = "softphone",
+    ipsec_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--ipsec-mode",
+            help="IPsec mode: 'null', 'bypass', or 'native' (alias 'ipsec').",
+        ),
+    ] = None,
     timeout: Annotated[float, typer.Option("--timeout")] = 2.0,
     label: Annotated[str | None, typer.Option("--label")] = None,
     scenario: Annotated[str | None, typer.Option("--scenario")] = None,
@@ -420,7 +475,10 @@ def response_command(
         mode=mode,
         timeout_seconds=timeout,
         label=label,
+        ipsec_mode=ipsec_mode,
     )
+    if mode == "real-ue-direct" and ipsec_mode in ("null", "bypass"):
+        target = target.model_copy(update={"bind_container": "pcscf"})
     result = SIPSenderReactor().send_packet(
         packet,
         target,

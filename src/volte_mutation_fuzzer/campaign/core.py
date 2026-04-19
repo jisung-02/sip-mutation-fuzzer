@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -44,6 +45,7 @@ from volte_mutation_fuzzer.sender.core import SIPSenderReactor
 from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver, check_ipsec_sa_alive
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
+from volte_mutation_fuzzer.sip.render import render_packet
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
 from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
@@ -346,13 +348,21 @@ class CampaignExecutor:
         else:
             self._oracle = OracleEngine(docker_mode=_docker_mode)
         self._store = store or ResultStore(self._jsonl_path)
+        target_port = config.target_port
+        if (
+            config.mode == "real-ue-direct"
+            and config.target_host is None
+            and config.target_msisdn is not None
+        ):
+            target_port = None
         self._target = TargetEndpoint(
             host=config.target_host,
-            port=config.target_port,
+            port=target_port,
             transport=config.transport,
             mode=config.mode,
             timeout_seconds=config.timeout_seconds,
             msisdn=config.target_msisdn,
+            ipsec_mode=config.ipsec_mode,
             source_ip=config.source_ip,
             bind_container=config.bind_container,
         )
@@ -669,12 +679,9 @@ class CampaignExecutor:
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated.records
             )
-            raw_response: str | None = None
-            if (
-                verdict.verdict in ("suspicious", "crash", "stack_failure")
-                and send_result.final_response
-            ):
-                raw_response = send_result.final_response.raw_text or None
+            raw_response = self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            )
 
             case_result = CaseResult(
                 case_id=spec.case_id,
@@ -773,11 +780,13 @@ class CampaignExecutor:
             events.append("teardown:skipped:final-only")
             return events
 
-        # Build CANCEL from original (unmutated) INVITE wire text.
-        cancel_text = wire_text.replace(
-            "INVITE sip:", "CANCEL sip:"
-        ).replace(
-            "CSeq: 1 INVITE", "CSeq: 1 CANCEL"
+        # Build CANCEL from the actual INVITE wire text that was sent.
+        cancel_text = re.sub(r"^INVITE\b", "CANCEL", wire_text, count=1)
+        cancel_text = re.sub(
+            r"(?m)^(CSeq:\s*\d+)\s+INVITE\b",
+            r"\1 CANCEL",
+            cancel_text,
+            count=1,
         )
         cancel_artifact = SendArtifact(
             wire_text=cancel_text,
@@ -955,12 +964,13 @@ class CampaignExecutor:
             target_update = {
                 "host": ue_ip,
                 "port": port_pc,
-                "bind_port": config.mt_local_port,
+                "ipsec_mode": config.ipsec_mode,
+                "source_ip": None,
+                "bind_container": "pcscf",
+                "bind_port": None
+                if config.ipsec_mode == "native"
+                else config.mt_local_port,
             }
-            if config.ipsec_mode in ("null", "bypass"):
-                # Both modes: send from pcscf container netns
-                target_update["source_ip"] = None
-                target_update["bind_container"] = "pcscf"
 
             mt_target = self._target.model_copy(update=target_update)
             if config.pcap_enabled:
@@ -984,10 +994,12 @@ class CampaignExecutor:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
 
+            sent_wire_text = self._artifact_wire_text(artifact) or wire_text
+
             # 9b. Reliable CANCEL teardown (INVITE only)
             if is_invite:
                 teardown_events = self._teardown_invite(
-                    wire_text, mt_target, send_result, config
+                    sent_wire_text, mt_target, send_result, config
                 )
                 for te in teardown_events:
                     logger.info("case %s: %s", spec.case_id, te)
@@ -1035,12 +1047,9 @@ class CampaignExecutor:
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated_wire.records
             )
-            raw_response: str | None = None
-            if (
-                verdict.verdict in ("suspicious", "crash", "stack_failure")
-                and send_result.final_response
-            ):
-                raw_response = send_result.final_response.raw_text or None
+            raw_response = self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            )
 
             case_result = CaseResult(
                 case_id=spec.case_id,
@@ -1093,17 +1102,21 @@ class CampaignExecutor:
 
     def _build_mt_template_reproduction_cmd(self, spec: CaseSpec) -> str:
         cfg = self._config
-        return (
+        target_args = ""
+        if cfg.target_host is not None:
+            target_args = f" --target-host {cfg.target_host}"
+        elif cfg.target_msisdn is not None:
+            target_args = f" --target-msisdn {cfg.target_msisdn}"
+
+        reproduction_cmd = (
             f"uv run fuzzer campaign run"
             f" --mode real-ue-direct"
-            f" --target-host {cfg.target_host}"
-            f" --target-msisdn {cfg.target_msisdn}"
+            f"{target_args}"
             f" --impi {cfg.impi}"
             f" --mt-invite-template {cfg.mt_invite_template}"
             f" --ipsec-mode {cfg.ipsec_mode}"
             f"{' --preserve-via' if cfg.preserve_via else ''}"
             f"{' --preserve-contact' if cfg.preserve_contact else ''}"
-            f" --mt-local-port {cfg.mt_local_port}"
             f" --methods {spec.method}"
             f" --layer {spec.layer}"
             f" --strategy {spec.strategy}"
@@ -1111,6 +1124,30 @@ class CampaignExecutor:
             f" --max-cases 1"
             # note: port_pc/port_ps are re-queried live; may differ if UE re-registered
         )
+        if cfg.ipsec_mode != "native":
+            reproduction_cmd += f" --mt-local-port {cfg.mt_local_port}"
+        return reproduction_cmd
+
+    def _artifact_wire_text(self, artifact: SendArtifact) -> str | None:
+        if artifact.wire_text is not None:
+            return artifact.wire_text
+        if artifact.packet is not None:
+            return render_packet(artifact.packet)
+        if artifact.packet_bytes is not None:
+            return artifact.packet_bytes.decode("utf-8", errors="replace")
+        return None
+
+    def _build_replay_target_args(self) -> str:
+        cfg = self._config
+        if cfg.mode == "real-ue-direct":
+            if cfg.target_msisdn is not None:
+                return f" --target-msisdn {cfg.target_msisdn}"
+            if cfg.target_host is not None:
+                return f" --target-host {cfg.target_host}"
+            return ""
+        if cfg.target_host is not None:
+            return f" --target-host {cfg.target_host}"
+        return ""
 
     def _execute_dialog_case(
         self, spec: CaseSpec, scenario, timestamp: float
@@ -1200,12 +1237,7 @@ class CampaignExecutor:
             process_check_interval=10,
         )
 
-        raw_response: str | None = None
-        if (
-            verdict.verdict in ("suspicious", "crash", "stack_failure")
-            and send_result.final_response
-        ):
-            raw_response = send_result.final_response.raw_text or None
+        raw_response = self._raw_response_from_send_result(verdict.verdict, send_result)
 
         return CaseResult(
             case_id=spec.case_id,
@@ -1268,6 +1300,11 @@ class CampaignExecutor:
 
     def _build_reproduction_cmd(self, spec: CaseSpec) -> str:
         cfg = self._config
+        target_args = self._build_replay_target_args()
+        transport_arg = (
+            f" --transport {cfg.transport}" if cfg.transport.upper() != "UDP" else ""
+        )
+        ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
         if spec.response_code is not None:
             context = json.dumps(
                 self._synthetic_dialog_context().model_dump(mode="json"),
@@ -1282,11 +1319,10 @@ class CampaignExecutor:
                 f" --seed {spec.seed}"
                 f" | uv run fuzzer send packet"
                 f" --mode {cfg.mode}"
-                f" --target-host {cfg.target_host}"
+                f"{target_args}"
                 f" --target-port {cfg.target_port}"
-                f"{f' --source-ip {cfg.source_ip}' if cfg.source_ip else ''}"
-                f"{f' --bind-container {cfg.bind_container}' if cfg.bind_container else ''}"
-                f"{f' --bind-port {cfg.mt_local_port}' if cfg.mode == 'real-ue-direct' and cfg.mt_invite_template is not None else ''}"
+                f"{transport_arg}"
+                f"{ipsec_arg}"
             )
         return (
             f"uv run fuzzer mutate request {spec.method}"
@@ -1295,9 +1331,10 @@ class CampaignExecutor:
             f" --seed {spec.seed}"
             f" | uv run fuzzer send packet"
             f" --mode {cfg.mode}"
-            f" --target-host {cfg.target_host}"
+            f"{target_args}"
             f" --target-port {cfg.target_port}"
-            f" --ipsec-mode {cfg.ipsec_mode}"
+            f"{transport_arg}"
+            f"{ipsec_arg}"
         )
 
     @staticmethod
@@ -1318,6 +1355,18 @@ class CampaignExecutor:
                 summary.infra_failure += 1
             case _:
                 summary.unknown += 1
+
+    def _raw_response_from_send_result(
+        self, verdict: str, send_result: SendReceiveResult
+    ) -> str | None:
+        final_response = send_result.final_response
+        if final_response is None:
+            return None
+        if self._config.ipsec_mode == "native":
+            return final_response.raw_text or None
+        if verdict in ("suspicious", "crash", "stack_failure"):
+            return final_response.raw_text or None
+        return None
 
     def _analyze_case_result(self, case_result: CaseResult) -> None:
         try:

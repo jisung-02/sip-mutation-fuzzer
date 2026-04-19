@@ -170,7 +170,7 @@ def run_command(
         str | None,
         typer.Option(
             "--ipsec-mode",
-            help="IPsec bypass strategy: 'null' (host spoofing, requires null encryption) or 'bypass' (docker exec, xfrm policy bypass).",
+            help="IPsec mode: 'null' (host spoofing, requires null encryption), 'bypass' (docker exec, xfrm policy bypass), or 'native' (alias 'ipsec').",
         ),
     ] = None,
     preserve_via: Annotated[

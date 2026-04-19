@@ -55,7 +55,7 @@ class CampaignConfig(BaseModel):
     impi: str | None = None
     mt: bool = False
     mt_invite_template: str | None = None
-    ipsec_mode: Literal["null", "bypass"] | None = None
+    ipsec_mode: Literal["null", "bypass", "native", "ipsec"] | None = None
     preserve_via: bool = False
     preserve_contact: bool = False
     mo_contact_host: str = "10.20.20.9"
@@ -143,6 +143,10 @@ class CampaignConfig(BaseModel):
         if self.mode == "real-ue-direct":
             if self.target_host is None and self.target_msisdn is None:
                 raise ValueError("real-ue-direct mode requires either target_host or target_msisdn")
+            if self.ipsec_mode == "native" and self.target_msisdn is None:
+                raise ValueError(
+                    "native ipsec_mode requires target_msisdn in real-ue-direct mode"
+                )
 
         # IMPI fallback: 환경변수 VMF_IMPI
         if self.impi is None:
@@ -150,10 +154,13 @@ class CampaignConfig(BaseModel):
             if env_impi:
                 object.__setattr__(self, "impi", env_impi)
 
+        if self.ipsec_mode == "ipsec":
+            object.__setattr__(self, "ipsec_mode", "native")
+
         # --mt flag: auto-set mt_invite_template and preserve flags
         if self.mt and self.mt_invite_template is None:
             object.__setattr__(self, "mt_invite_template", "3gpp")
-        if self.mt:
+        if self.mt and self.ipsec_mode != "native":
             object.__setattr__(self, "preserve_via", True)
             object.__setattr__(self, "preserve_contact", True)
 
@@ -172,6 +179,17 @@ class CampaignConfig(BaseModel):
             object.__setattr__(self, "bind_container", "pcscf")
         elif self.ipsec_mode == "bypass":
             # xfrm bypass mode: docker exec
+            object.__setattr__(self, "source_ip", None)
+            object.__setattr__(self, "bind_container", "pcscf")
+        elif self.ipsec_mode == "native":
+            if self.mode != "real-ue-direct":
+                raise ValueError("native ipsec_mode requires mode='real-ue-direct'")
+            if str(self.transport).upper() != "UDP":
+                raise ValueError("native ipsec_mode requires transport='UDP'")
+            if self.target_msisdn is None:
+                raise ValueError(
+                    "native ipsec_mode requires target_msisdn in real-ue-direct mode"
+                )
             object.__setattr__(self, "source_ip", None)
             object.__setattr__(self, "bind_container", "pcscf")
 

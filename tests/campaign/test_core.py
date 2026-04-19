@@ -3,6 +3,7 @@ import tempfile
 import time
 import unittest
 import unittest.mock
+from types import SimpleNamespace
 from pathlib import Path
 
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
@@ -19,6 +20,7 @@ from volte_mutation_fuzzer.campaign.core import (
     _SUPPORTED_STRATEGIES,
 )
 from volte_mutation_fuzzer.sender.contracts import TargetEndpoint
+from volte_mutation_fuzzer.sender.contracts import SocketObservation, SendReceiveResult
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from tests.sender._server import UDPResponder
 
@@ -479,6 +481,57 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("--ipsec-mode bypass", cmd)
         self.assertIn("--mt-local-port 15100", cmd)
 
+    def test_reproduction_cmd_uses_msisdn_when_target_host_missing(self) -> None:
+        cfg = self._make_config(
+            None,
+            5060,
+            mode="real-ue-direct",
+            methods=("OPTIONS",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            ipsec_mode="null",
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+            )
+        )
+
+        self.assertNotIn("--target-host None", cmd)
+        self.assertIn("--target-msisdn 111111", cmd)
+
+    def test_mt_template_reproduction_cmd_uses_msisdn_when_target_host_missing(self) -> None:
+        cfg = self._make_config(
+            None,
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="bypass",
+            mt_local_port=15100,
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_mt_template_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="INVITE",
+                layer="wire",
+                strategy="default",
+            )
+        )
+
+        self.assertNotIn("--target-host None", cmd)
+        self.assertIn("--target-msisdn 111111", cmd)
+        self.assertIn("--mt-invite-template a31", cmd)
+
     def test_unknown_verdict_prints_error_to_stderr(self) -> None:
         import io
         from unittest.mock import patch as mock_patch
@@ -556,6 +609,617 @@ class CampaignExecutorTests(unittest.TestCase):
             self.assertEqual(analyze_mock.call_count, 1)
             report_mock.assert_called_once()
             self.assertTrue(Path(crash_analysis_dir).exists())
+
+    def test_init_threads_ipsec_mode_into_target_endpoint(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+        )
+
+        executor = CampaignExecutor(cfg)
+
+        self.assertEqual(executor._target.ipsec_mode, "native")
+
+    def test_init_real_ue_msisdn_target_does_not_force_default_port(self) -> None:
+        cfg = self._make_config(
+            None,
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+        )
+
+        executor = CampaignExecutor(cfg)
+
+        self.assertIsNone(executor._target.port)
+
+    def test_native_mt_template_builds_native_target_and_preserves_raw_response(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+            max_cases=1,
+            layers=("wire",),
+            strategies=("identity",),
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=7,
+            method="INVITE",
+            layer="wire",
+            strategy="identity",
+        )
+
+        invite_wire = (
+            "INVITE sip:111111@example.com SIP/2.0\r\n"
+            "CSeq: 1 INVITE\r\n"
+            "\r\n"
+        )
+        provisional = SocketObservation(
+            source="pcscf-log",
+            status_code=180,
+            reason_phrase="Ringing",
+            raw_text="SIP/2.0 180 Ringing\r\n\r\n",
+            classification="provisional",
+        )
+        cancel_ok = SendReceiveResult(
+            target=TargetEndpoint(
+                host="10.20.20.8",
+                port=5060,
+                mode="real-ue-direct",
+            ),
+            artifact_kind="wire",
+            bytes_sent=10,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=1.0,
+            send_completed_at=1.1,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_cached",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.build_default_slots",
+            return_value={},
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+            return_value=invite_wire,
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate_editable",
+            return_value=SimpleNamespace(
+                final_layer="wire",
+                wire_text=invite_wire,
+                packet_bytes=None,
+                records=(),
+            ),
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=180,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            side_effect=[
+                SendReceiveResult(
+                    target=TargetEndpoint(
+                        host="10.20.20.8",
+                        port=5060,
+                        mode="real-ue-direct",
+                        msisdn="111111",
+                        ipsec_mode="native",
+                        bind_container="pcscf",
+                    ),
+                    artifact_kind="wire",
+                    bytes_sent=100,
+                    outcome="success",
+                    responses=(provisional,),
+                    send_started_at=1.0,
+                    send_completed_at=1.1,
+                ),
+                cancel_ok,
+            ],
+        ) as send_mock:
+            result = executor._execute_mt_template_case(spec, timestamp=1234.5)
+
+        self.assertEqual(result.raw_response, "SIP/2.0 180 Ringing\r\n\r\n")
+        self.assertEqual(send_mock.call_count, 2)
+        mt_target = send_mock.call_args_list[0].args[1]
+        self.assertEqual(mt_target.ipsec_mode, "native")
+        self.assertEqual(mt_target.bind_container, "pcscf")
+        self.assertEqual(mt_target.host, "10.20.20.8")
+        self.assertEqual(mt_target.port, 8100)
+        self.assertIsNone(mt_target.bind_port)
+        self.assertIsNone(mt_target.source_ip)
+
+    def test_native_mt_template_preserves_raw_final_response(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+            max_cases=1,
+            layers=("wire",),
+            strategies=("identity",),
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=7,
+            method="INVITE",
+            layer="wire",
+            strategy="identity",
+        )
+
+        invite_wire = (
+            "INVITE sip:111111@example.com SIP/2.0\r\n"
+            "CSeq: 1 INVITE\r\n"
+            "\r\n"
+        )
+        final_response = SocketObservation(
+            source="pcscf-log",
+            status_code=200,
+            reason_phrase="OK",
+            raw_text="SIP/2.0 200 OK\r\n\r\n",
+            classification="success",
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_cached",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.build_default_slots",
+            return_value={},
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+            return_value=invite_wire,
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate_editable",
+            return_value=SimpleNamespace(
+                final_layer="wire",
+                wire_text=invite_wire,
+                packet_bytes=None,
+                records=(),
+            ),
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=SendReceiveResult(
+                target=TargetEndpoint(
+                    host="10.20.20.8",
+                    port=5060,
+                    mode="real-ue-direct",
+                    msisdn="111111",
+                    ipsec_mode="native",
+                    bind_container="pcscf",
+                ),
+                artifact_kind="wire",
+                bytes_sent=100,
+                outcome="success",
+                responses=(final_response,),
+                send_started_at=1.0,
+                send_completed_at=1.1,
+            ),
+        ):
+            result = executor._execute_mt_template_case(spec, timestamp=1234.5)
+
+        self.assertEqual(result.raw_response, "SIP/2.0 200 OK\r\n\r\n")
+
+    def test_native_mt_template_reproduction_cmd_omits_mt_local_port(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+            mt_local_port=15100,
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_mt_template_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="INVITE",
+                layer="wire",
+                strategy="default",
+            )
+        )
+
+        self.assertIn("--ipsec-mode native", cmd)
+        self.assertNotIn("--mt-local-port", cmd)
+
+    def test_non_native_raw_response_is_kept_for_evidence_verdicts(self) -> None:
+        final_response = SocketObservation(
+            source="pcscf-log",
+            status_code=500,
+            reason_phrase="Server Error",
+            raw_text="SIP/2.0 500 Server Error\r\n\r\n",
+            classification="server_error",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(
+                host="10.20.20.8",
+                port=5060,
+                mode="real-ue-direct",
+                ipsec_mode="null",
+                bind_container="pcscf",
+            ),
+            artifact_kind="wire",
+            bytes_sent=100,
+            outcome="success",
+            responses=(final_response,),
+            send_started_at=1.0,
+            send_completed_at=1.1,
+        )
+
+        for ipsec_mode in ("null", "bypass"):
+            cfg = self._make_config(
+                "10.20.20.8",
+                5060,
+                mode="real-ue-direct",
+                methods=("INVITE",),
+                ipsec_mode=ipsec_mode,
+            )
+            executor = CampaignExecutor(cfg)
+            for verdict in ("suspicious", "crash", "stack_failure"):
+                with self.subTest(ipsec_mode=ipsec_mode, verdict=verdict):
+                    self.assertEqual(
+                        executor._raw_response_from_send_result(verdict, send_result),
+                        "SIP/2.0 500 Server Error\r\n\r\n",
+                    )
+
+    def test_mt_template_teardown_uses_mutated_wire_text(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="null",
+            max_cases=1,
+            layers=("wire",),
+            strategies=("identity",),
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=7,
+            method="INVITE",
+            layer="wire",
+            strategy="identity",
+        )
+
+        original_wire = (
+            "INVITE sip:original@example.com SIP/2.0\r\n"
+            "CSeq: 1 INVITE\r\n"
+            "\r\n"
+        )
+        mutated_wire = (
+            "INVITE sip:mutated@example.com SIP/2.0\r\n"
+            "CSeq: 9 INVITE\r\n"
+            "\r\n"
+        )
+        provisional = SocketObservation(
+            source="pcscf-log",
+            status_code=180,
+            reason_phrase="Ringing",
+            raw_text="SIP/2.0 180 Ringing\r\n\r\n",
+            classification="provisional",
+        )
+        cancel_ok = SendReceiveResult(
+            target=TargetEndpoint(
+                host="10.20.20.8",
+                port=5060,
+                mode="real-ue-direct",
+                ipsec_mode="null",
+                bind_container="pcscf",
+            ),
+            artifact_kind="wire",
+            bytes_sent=10,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=1.0,
+            send_completed_at=1.1,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_cached",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.build_default_slots",
+            return_value={},
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+            return_value=original_wire,
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate_editable",
+            return_value=SimpleNamespace(
+                final_layer="wire",
+                wire_text=mutated_wire,
+                packet_bytes=None,
+                records=(),
+            ),
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=180,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            side_effect=[
+                SendReceiveResult(
+                    target=TargetEndpoint(
+                        host="10.20.20.8",
+                        port=5060,
+                        mode="real-ue-direct",
+                        ipsec_mode="null",
+                        bind_container="pcscf",
+                    ),
+                    artifact_kind="wire",
+                    bytes_sent=100,
+                    outcome="success",
+                    responses=(provisional,),
+                    send_started_at=1.0,
+                    send_completed_at=1.1,
+                ),
+                cancel_ok,
+            ],
+        ) as send_mock:
+            executor._execute_mt_template_case(spec, timestamp=1234.5)
+
+        self.assertEqual(send_mock.call_count, 2)
+        cancel_artifact = send_mock.call_args_list[1].args[0]
+        self.assertEqual(
+            cancel_artifact.wire_text,
+            "CANCEL sip:mutated@example.com SIP/2.0\r\nCSeq: 9 CANCEL\r\n\r\n",
+        )
+
+    def test_mt_template_teardown_uses_mutated_byte_payload(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="null",
+            max_cases=1,
+            layers=("wire",),
+            strategies=("identity",),
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=7,
+            method="INVITE",
+            layer="wire",
+            strategy="identity",
+        )
+
+        original_wire = (
+            "INVITE sip:original@example.com SIP/2.0\r\n"
+            "CSeq: 1 INVITE\r\n"
+            "\r\n"
+        )
+        mutated_bytes = (
+            b"INVITE sip:mutated@example.com SIP/2.0\r\n"
+            b"CSeq: 9 INVITE\r\n"
+            b"\r\n"
+        )
+        provisional = SocketObservation(
+            source="pcscf-log",
+            status_code=180,
+            reason_phrase="Ringing",
+            raw_text="SIP/2.0 180 Ringing\r\n\r\n",
+            classification="provisional",
+        )
+        cancel_ok = SendReceiveResult(
+            target=TargetEndpoint(
+                host="10.20.20.8",
+                port=5060,
+                mode="real-ue-direct",
+                ipsec_mode="null",
+                bind_container="pcscf",
+            ),
+            artifact_kind="wire",
+            bytes_sent=10,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=1.0,
+            send_completed_at=1.1,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_cached",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.build_default_slots",
+            return_value={},
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+            return_value=original_wire,
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate_editable",
+            return_value=SimpleNamespace(
+                final_layer="byte",
+                wire_text=None,
+                packet_bytes=mutated_bytes,
+                records=(),
+            ),
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=180,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            side_effect=[
+                SendReceiveResult(
+                    target=TargetEndpoint(
+                        host="10.20.20.8",
+                        port=5060,
+                        mode="real-ue-direct",
+                        ipsec_mode="null",
+                        bind_container="pcscf",
+                    ),
+                    artifact_kind="bytes",
+                    bytes_sent=100,
+                    outcome="success",
+                    responses=(provisional,),
+                    send_started_at=1.0,
+                    send_completed_at=1.1,
+                ),
+                cancel_ok,
+            ],
+        ) as send_mock:
+            executor._execute_mt_template_case(spec, timestamp=1234.5)
+
+        self.assertEqual(send_mock.call_count, 2)
+        cancel_artifact = send_mock.call_args_list[1].args[0]
+        self.assertEqual(
+            cancel_artifact.wire_text,
+            "CANCEL sip:mutated@example.com SIP/2.0\r\nCSeq: 9 CANCEL\r\n\r\n",
+        )
+
+    def test_response_reproduction_cmd_prefers_msisdn_and_cli_flags(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=(),
+            response_codes=(200,),
+            target_msisdn="111111",
+            impi="001010000123511",
+            ipsec_mode="null",
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="INVITE",
+                layer="model",
+                strategy="default",
+                response_code=200,
+                related_method="INVITE",
+            )
+        )
+
+        self.assertIn("--mode real-ue-direct", cmd)
+        self.assertIn("--target-msisdn 111111", cmd)
+        self.assertIn("--ipsec-mode null", cmd)
+        self.assertNotIn("--target-host 10.20.20.8", cmd)
+        self.assertNotIn("--bind-container", cmd)
+        self.assertNotIn("--bind-port", cmd)
+
+    def test_request_reproduction_cmd_prefers_msisdn_for_real_ue_direct(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("OPTIONS",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            ipsec_mode="null",
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+            )
+        )
+
+        self.assertIn("--mode real-ue-direct", cmd)
+        self.assertIn("--target-msisdn 111111", cmd)
+        self.assertIn("--ipsec-mode null", cmd)
+        self.assertNotIn("--target-host 10.20.20.8", cmd)
+        self.assertNotIn("--bind-container", cmd)
 
 
 class UpdateSummaryTests(unittest.TestCase):
