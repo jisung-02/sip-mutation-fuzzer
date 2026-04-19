@@ -3,7 +3,14 @@ from volte_mutation_fuzzer.adb.patterns import AnomalyPattern
 IOS_ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     AnomalyPattern(
         "EXC_BAD_ACCESS",
-        r"EXC_BAD_ACCESS",
+        r"EXC_BAD_ACCESS|Exception Type:\s*EXC_BAD_ACCESS",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "launchd_terminated_crash",
+        r"(?:com\.apple\.)?(?:CommCenter|identityservicesd|imagent).*"
+        r"terminated due to (?:crash|signal)",
         "critical",
         "fatal_signal",
     ),
@@ -21,19 +28,14 @@ IOS_ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     ),
     AnomalyPattern(
         "report_crash_saved",
-        r"ReportCrash.*Saved crash report",
-        "critical",
-        "fatal_signal",
-    ),
-    AnomalyPattern(
-        "launchd_terminated_crash",
-        r"com\.apple\.CommCenter.*terminated due to (?:crash|signal)",
+        r"ReportCrash.*(?:Saved crash report|writing .*\.ips|Saved .*\.ips)",
         "critical",
         "fatal_signal",
     ),
     AnomalyPattern(
         "jetsam_kill",
-        r"CommCenter.*jetsam|jetsam.*CommCenter",
+        r"(?:CommCenter|identityservicesd|imagent).*jetsam|"
+        r"jetsam.*(?:CommCenter|identityservicesd|imagent)",
         "critical",
         "fatal_signal",
     ),

@@ -28,6 +28,12 @@ class AnomalyPatternsTests(unittest.TestCase):
         assert pattern is not None
         self.assertEqual(pattern.name, "tombstone")
 
+    def test_heap_corruption_matches(self) -> None:
+        pattern = _match_pattern("Scudo ERROR: corrupted chunk header at 0x1234")
+        assert pattern is not None
+        self.assertEqual(pattern.name, "heap_corruption")
+        self.assertEqual(pattern.severity, "critical")
+
     def test_ims_deregistration_matches(self) -> None:
         pattern = _match_pattern("IMS stack DEREGIST reason=radio_lost")
         assert pattern is not None

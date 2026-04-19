@@ -52,6 +52,7 @@ class LogCheckResult(BaseModel):
     matched_line: str | None = None
     lines_scanned: int = 0
     error: str | None = None
+    details: dict[str, object] = Field(default_factory=dict)
 
 
 class OracleVerdict(BaseModel):

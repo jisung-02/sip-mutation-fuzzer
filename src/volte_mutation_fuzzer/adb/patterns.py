@@ -50,6 +50,12 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "fatal_signal",
     ),
     AnomalyPattern(
+        "heap_corruption",
+        r"Scudo\s+ERROR|scudo:.*corrupt|heap corruption|double free|use after free",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
         "assertion_failure",
         r"\bassertion failure\b|Assertion failed|CHECK failed|LOG\(FATAL\)",
         "critical",
@@ -116,7 +122,9 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     ),
     AnomalyPattern(
         "oem_ril_crash",
-        r"oem.*ril.*(?:crash|restart|died)|rild.*(?:died|killed|restart)|RILD.*crash",
+        r"oem.*ril.*(?:crash|restart|died)|"
+        r"(?:vendor\.)?ril-daemon.*(?:died|killed|restart)|"
+        r"rild.*(?:died|killed|restart)|RILD.*crash",
         "critical",
         "call_anomaly",
     ),

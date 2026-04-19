@@ -416,6 +416,15 @@ class AdbAnomalyDetectorTests(unittest.TestCase):
         self.assertEqual(event.severity, "critical")
         self.assertEqual(event.category, "fatal_signal")
 
+    def test_detects_vendor_ril_daemon_death(self) -> None:
+        detector = AdbAnomalyDetector()
+        event = detector.feed_line(
+            "radio", "vendor.ril-daemon died unexpectedly after restart request"
+        )
+        assert event is not None
+        self.assertEqual(event.pattern_name, "oem_ril_crash")
+        self.assertEqual(event.severity, "critical")
+
     def test_detects_ims_deregistration(self) -> None:
         detector = AdbAnomalyDetector()
         event = detector.feed_line("radio", "IMS deregist triggered by network change")

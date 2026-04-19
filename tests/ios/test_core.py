@@ -422,11 +422,46 @@ class IosAnomalyDetectorTests(unittest.TestCase):
         assert event is not None
         self.assertEqual(event.pattern_name, "EXC_CRASH_SIGABRT")
 
+    def test_detects_reportcrash_writing_ips(self) -> None:
+        detector = IosAnomalyDetector()
+        event = detector.feed_line(
+            self._line(
+                "ReportCrash writing /var/mobile/Library/Logs/CrashReporter/CommCenter-2026-04-19-123456.ips"
+            )
+        )
+        assert event is not None
+        self.assertEqual(event.pattern_name, "report_crash_saved")
+        self.assertEqual(event.severity, "critical")
+
+    def test_detects_identityservicesd_termination(self) -> None:
+        detector = IosAnomalyDetector()
+        event = detector.feed_line(
+            self._line(
+                "identityservicesd terminated due to signal 6",
+                process="identityservicesd",
+            )
+        )
+        assert event is not None
+        self.assertEqual(event.pattern_name, "launchd_terminated_crash")
+        self.assertEqual(event.severity, "critical")
+
     def test_detects_ims_deregistration(self) -> None:
         detector = IosAnomalyDetector()
         event = detector.feed_line(self._line("[IMS] deregistration triggered"))
         assert event is not None
         self.assertEqual(event.category, "ims_anomaly")
+        self.assertEqual(event.severity, "warning")
+
+    def test_promotes_commcenter_assertion_to_warning(self) -> None:
+        detector = IosAnomalyDetector()
+        event = detector.feed_line(
+            self._line(
+                "Assertion failed: radio state invariant",
+                process="CommCenter",
+            )
+        )
+        assert event is not None
+        self.assertEqual(event.pattern_name, "assertion_failed")
         self.assertEqual(event.severity, "warning")
 
     def test_no_match_returns_none(self) -> None:

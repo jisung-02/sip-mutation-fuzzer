@@ -43,6 +43,32 @@ class SupportsOracleCheck(Protocol):
     def check(self) -> LogCheckResult: ...
 
 
+def _top_warning_details(events: list[Any], log_path: str) -> dict[str, object]:
+    if not events:
+        return {}
+    top = events[0]
+    return {
+        "top_warning": {
+            "pattern_name": getattr(top, "pattern_name", None),
+            "matched_pattern": top.matched_pattern,
+            "matched_line": top.matched_line,
+            "log_path": log_path,
+            "severity": top.severity,
+            "warning_count": len(events),
+        }
+    }
+
+
+def _merge_warning_detail(
+    bucket: dict[str, object],
+    result: LogCheckResult,
+    target_key: str,
+) -> None:
+    top_warning = result.details.get("top_warning")
+    if isinstance(top_warning, dict) and target_key not in bucket:
+        bucket[target_key] = top_warning
+
+
 class SocketOracle:
     """Judges a SendReceiveResult against expected behavior for a SIP method."""
 
@@ -461,10 +487,11 @@ class AdbOracle:
         lines = self._collector.get_lines()
         self._detector.feed_lines(lines)
         events = self._detector.drain_events()
-        actionable = [e for e in events if e.severity in ("critical", "warning")]
-        if actionable:
-            critical = [e for e in actionable if e.severity == "critical"]
-            top = (critical or actionable)[0]
+        critical = [e for e in events if e.severity == "critical"]
+        warnings = [e for e in events if e.severity == "warning"]
+        details = _top_warning_details(warnings, "adb:logcat")
+        if critical:
+            top = critical[0]
             return LogCheckResult(
                 log_path="adb:logcat",
                 matched=True,
@@ -472,12 +499,14 @@ class AdbOracle:
                 matched_line=top.matched_line,
                 lines_scanned=len(lines),
                 error=error,
+                details=details,
             )
         return LogCheckResult(
             log_path="adb:logcat",
             matched=False,
             lines_scanned=len(lines),
             error=error,
+            details=details,
         )
 
 
@@ -503,10 +532,11 @@ class IosOracle:
         self._last_check_ts = now
         self._detector.feed_lines(lines)
         events = self._detector.drain_events()
-        actionable = [e for e in events if e.severity in ("critical", "warning")]
-        if actionable:
-            critical = [e for e in actionable if e.severity == "critical"]
-            top = (critical or actionable)[0]
+        critical = [e for e in events if e.severity == "critical"]
+        warnings = [e for e in events if e.severity == "warning"]
+        details = _top_warning_details(warnings, "ios:syslog")
+        if critical:
+            top = critical[0]
             return LogCheckResult(
                 log_path="ios:syslog",
                 matched=True,
@@ -514,12 +544,14 @@ class IosOracle:
                 matched_line=top.matched_line,
                 lines_scanned=len(lines),
                 error=error,
+                details=details,
             )
         return LogCheckResult(
             log_path="ios:syslog",
             matched=False,
             lines_scanned=len(lines),
             error=error,
+            details=details,
         )
 
 
@@ -553,6 +585,7 @@ class OracleEngine:
         process_check_interval: int = 0,
     ) -> OracleVerdict:
         verdict = self._socket_oracle.judge(send_result, context)
+        log_warning_details: dict[str, object] = {}
 
         if log_path is not None and self._log_oracle is not None:
             log_result, self._log_position = self._log_oracle.check(
@@ -584,6 +617,7 @@ class OracleEngine:
         while True:
             if self._adb_oracle is not None:
                 adb_result = self._adb_oracle.check()
+                _merge_warning_detail(log_warning_details, adb_result, "adb_warning")
                 if adb_result.matched:
                     return OracleVerdict(
                         verdict="stack_failure",
@@ -592,6 +626,7 @@ class OracleEngine:
                         response_code=verdict.response_code,
                         elapsed_ms=verdict.elapsed_ms,
                         details={
+                            **log_warning_details,
                             "socket_verdict": verdict.verdict,
                             "matched_pattern": adb_result.matched_pattern,
                             "matched_line": adb_result.matched_line,
@@ -601,6 +636,7 @@ class OracleEngine:
 
             if self._ios_oracle is not None:
                 ios_result = self._ios_oracle.check()
+                _merge_warning_detail(log_warning_details, ios_result, "ios_warning")
                 if ios_result.matched:
                     return OracleVerdict(
                         verdict="stack_failure",
@@ -609,6 +645,7 @@ class OracleEngine:
                         response_code=verdict.response_code,
                         elapsed_ms=verdict.elapsed_ms,
                         details={
+                            **log_warning_details,
                             "socket_verdict": verdict.verdict,
                             "matched_pattern": ios_result.matched_pattern,
                             "matched_line": ios_result.matched_line,
@@ -619,6 +656,11 @@ class OracleEngine:
             if time.monotonic() >= grace_end:
                 break
             time.sleep(min(poll_every, max(grace_end - time.monotonic(), 0.0)))
+
+        if log_warning_details:
+            verdict = verdict.model_copy(
+                update={"details": {**verdict.details, **log_warning_details}}
+            )
 
         self._evaluate_call_count += 1
 
@@ -645,6 +687,7 @@ class OracleEngine:
                 details={
                     "socket_verdict": verdict.verdict,
                     "process_error": proc.error,
+                    **verdict.details,
                 },
             )
 

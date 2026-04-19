@@ -624,9 +624,15 @@ class _UnhealthyCollectorStub:
 
 
 class _AdbOracleStub:
-    def __init__(self, matched: bool, pattern: str | None = None) -> None:
+    def __init__(
+        self,
+        matched: bool,
+        pattern: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
         self._matched = matched
         self._pattern = pattern
+        self._details = details or {}
 
     def check(self):
         from volte_mutation_fuzzer.oracle.contracts import LogCheckResult
@@ -637,6 +643,7 @@ class _AdbOracleStub:
             matched_pattern=self._pattern,
             matched_line="matched line" if self._matched else None,
             lines_scanned=1 if self._matched else 0,
+            details=self._details,
         )
 
 
@@ -662,6 +669,20 @@ class AdbOracleTests(unittest.TestCase):
         )
         result = oracle.check()
         self.assertFalse(result.matched)
+
+    def test_warning_only_is_preserved_in_details_without_match(self) -> None:
+        oracle = AdbOracle(
+            _CollectorStub([("radio", "IMS deregist triggered by network change")]),
+            AdbAnomalyDetector(),
+        )
+        result = oracle.check()
+        self.assertFalse(result.matched)
+        top_warning = result.details.get("top_warning")
+        assert isinstance(top_warning, dict)
+        self.assertIn("IMS.*(?:deregist|DEREGIST)", str(top_warning["matched_pattern"]))
+        self.assertEqual(top_warning["log_path"], "adb:logcat")
+        self.assertEqual(top_warning["severity"], "warning")
+        self.assertEqual(top_warning["warning_count"], 1)
 
     def test_unhealthy_collector_reports_error(self) -> None:
         stub = _UnhealthyCollectorStub([], dead=frozenset({"main", "radio"}))
@@ -696,11 +717,39 @@ class OracleEngineWithAdbTests(unittest.TestCase):
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "normal")
 
+    def test_adb_warning_does_not_upgrade_verdict_but_is_recorded(self) -> None:
+        engine = OracleEngine(
+            adb_oracle=_AdbOracleStub(
+                False,
+                details={
+                    "top_warning": {
+                        "matched_pattern": r"IMS.*(?:deregist|DEREGIST)",
+                        "matched_line": "IMS deregist triggered by network change",
+                        "log_path": "adb:logcat",
+                        "severity": "warning",
+                        "warning_count": 1,
+                    }
+                },
+            )
+        )
+        verdict = engine.evaluate(_make_result("timeout"), self.ctx)
+        self.assertEqual(verdict.verdict, "timeout")
+        adb_warning = verdict.details.get("adb_warning")
+        assert isinstance(adb_warning, dict)
+        self.assertEqual(adb_warning["log_path"], "adb:logcat")
+        self.assertEqual(adb_warning["severity"], "warning")
+
 
 class _IosOracleStub:
-    def __init__(self, matched: bool, pattern: str | None = None) -> None:
+    def __init__(
+        self,
+        matched: bool,
+        pattern: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
         self._matched = matched
         self._pattern = pattern
+        self._details = details or {}
 
     def check(self):
         from volte_mutation_fuzzer.oracle.contracts import LogCheckResult
@@ -711,6 +760,7 @@ class _IosOracleStub:
             matched_pattern=self._pattern,
             matched_line="matched line" if self._matched else None,
             lines_scanned=1 if self._matched else 0,
+            details=self._details,
         )
 
 
@@ -737,6 +787,20 @@ class IosOracleTests(unittest.TestCase):
         self._push(collector, "[IMS] registered on LTE", time.time())
         result = oracle.check()
         self.assertFalse(result.matched)
+
+    def test_warning_only_is_preserved_in_details_without_match(self) -> None:
+        collector = IosSyslogCollector()
+        oracle = IosOracle(collector, IosAnomalyDetector())
+        oracle._last_check_ts = 0.0
+        self._push(collector, "[IMS] deregistration triggered", time.time())
+        result = oracle.check()
+        self.assertFalse(result.matched)
+        top_warning = result.details.get("top_warning")
+        assert isinstance(top_warning, dict)
+        self.assertIn(r"\[IMS\].*deregist", str(top_warning["matched_pattern"]))
+        self.assertEqual(top_warning["log_path"], "ios:syslog")
+        self.assertEqual(top_warning["severity"], "warning")
+        self.assertEqual(top_warning["warning_count"], 1)
 
     def test_no_lines_returns_no_match(self) -> None:
         collector = IosSyslogCollector()
@@ -834,3 +898,25 @@ class OracleEngineWithIosTests(unittest.TestCase):
         engine = OracleEngine(ios_oracle=_IosOracleStub(False))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "normal")
+
+    def test_ios_warning_does_not_upgrade_verdict_but_is_recorded(self) -> None:
+        engine = OracleEngine(
+            ios_oracle=_IosOracleStub(
+                False,
+                details={
+                    "top_warning": {
+                        "matched_pattern": r"\[IMS\].*deregist",
+                        "matched_line": "[IMS] deregistration triggered",
+                        "log_path": "ios:syslog",
+                        "severity": "warning",
+                        "warning_count": 1,
+                    }
+                },
+            )
+        )
+        verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
+        self.assertEqual(verdict.verdict, "normal")
+        ios_warning = verdict.details.get("ios_warning")
+        assert isinstance(ios_warning, dict)
+        self.assertEqual(ios_warning["log_path"], "ios:syslog")
+        self.assertEqual(ios_warning["severity"], "warning")

@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Protocol, cast
 
+from volte_mutation_fuzzer.adb.contracts import AnomalySeverity
 from volte_mutation_fuzzer.ios.contracts import (
     IosAnomalyEvent,
     IosCollectorConfig,
@@ -17,6 +18,10 @@ from volte_mutation_fuzzer.ios.contracts import (
 )
 from volte_mutation_fuzzer.ios.patterns import IOS_ANOMALY_PATTERNS
 from volte_mutation_fuzzer.adb.patterns import AnomalyPattern
+
+_TELEPHONY_ASSERTION_PROCESSES = frozenset(
+    {"CommCenter", "identityservicesd", "imagent"}
+)
 
 
 # idevicesyslog line format:
@@ -418,13 +423,25 @@ class IosAnomalyDetector:
         self._lock = threading.Lock()
         self._total_lines_scanned = 0
 
+    def _effective_severity(
+        self,
+        pattern: AnomalyPattern,
+        entry: IosSyslogLine,
+    ) -> AnomalySeverity:
+        if (
+            pattern.name == "assertion_failed"
+            and entry.process in _TELEPHONY_ASSERTION_PROCESSES
+        ):
+            return "warning"
+        return pattern.severity
+
     def feed_line(self, entry: IosSyslogLine) -> IosAnomalyEvent | None:
         self._total_lines_scanned += 1
         for pattern in self._patterns:
             if pattern.compiled.search(entry.line):
                 event = IosAnomalyEvent(
                     timestamp=entry.host_ts,
-                    severity=pattern.severity,
+                    severity=self._effective_severity(pattern, entry),
                     category=pattern.category,
                     pattern_name=pattern.name,
                     matched_pattern=pattern.regex,
