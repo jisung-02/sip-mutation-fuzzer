@@ -499,6 +499,7 @@ class CampaignExecutor:
             self._adb_collector.start()
         if self._ios_collector is not None:
             self._ios_collector.start()
+        self._capture_ios_baseline()
         consecutive_failures = 0
         cb_threshold = config.circuit_breaker_threshold
         # SA probe triggers at half the circuit breaker threshold (min 3)
@@ -709,12 +710,6 @@ class CampaignExecutor:
                 log_path=config.log_path,
                 process_check_interval=10,
             )
-            adb_snapshot_dir = self._capture_adb_snapshot(
-                spec,
-                timestamp=timestamp,
-                verdict=verdict.verdict,
-            )
-
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated.records
             )
@@ -746,17 +741,12 @@ class CampaignExecutor:
                 case_wall_ms=0.0,
             )
 
-            self._evidence.collect(
+            return self._persist_case_artifacts(
+                spec,
                 case_result,
                 sent_payload=sent_payload,
-                pcap_path=pcap_path_saved,
-                adb_snapshot_dir=adb_snapshot_dir,
-            )
-
-            return case_result.model_copy(
-                update={
-                    "case_wall_ms": self._case_wall_ms(case_started_monotonic)
-                }
+                timestamp=timestamp,
+                case_started_monotonic=case_started_monotonic,
             )
 
         except Exception as exc:
@@ -1082,13 +1072,6 @@ class CampaignExecutor:
                 process_check_interval=10,
             )
 
-            # 11. ADB snapshot (profile depends on verdict)
-            adb_snapshot_dir = self._capture_adb_snapshot(
-                spec,
-                timestamp=timestamp,
-                verdict=verdict.verdict,
-            )
-
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated_wire.records
             )
@@ -1120,17 +1103,12 @@ class CampaignExecutor:
                 case_wall_ms=0.0,
             )
 
-            self._evidence.collect(
+            return self._persist_case_artifacts(
+                spec,
                 case_result,
                 sent_payload=sent_payload,
-                pcap_path=pcap_path_saved,
-                adb_snapshot_dir=adb_snapshot_dir,
-            )
-
-            return case_result.model_copy(
-                update={
-                    "case_wall_ms": self._case_wall_ms(case_started_monotonic)
-                }
+                timestamp=timestamp,
+                case_started_monotonic=case_started_monotonic,
             )
 
         except Exception as exc:
@@ -1301,7 +1279,7 @@ class CampaignExecutor:
 
         raw_response = self._raw_response_from_send_result(verdict.verdict, send_result)
 
-        return CaseResult(
+        case_result = CaseResult(
             case_id=spec.case_id,
             seed=spec.seed,
             method=spec.method,
@@ -1318,7 +1296,15 @@ class CampaignExecutor:
             details=getattr(verdict, "details", {}) or {},
             timestamp=timestamp,
             pcap_path=pcap_path_saved,
-            case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            case_wall_ms=0.0,
+        )
+
+        return self._persist_case_artifacts(
+            spec,
+            case_result,
+            sent_payload=None,
+            timestamp=timestamp,
+            case_started_monotonic=case_started_monotonic,
         )
 
     def _build_packet(self, spec: CaseSpec) -> PacketModel:
@@ -1432,6 +1418,7 @@ class CampaignExecutor:
         *,
         timestamp: float,
         verdict: str,
+        snapshot_until: float | None = None,
     ) -> str | None:
         config = self._config
         if not config.adb_enabled:
@@ -1440,7 +1427,7 @@ class CampaignExecutor:
         try:
             from volte_mutation_fuzzer.adb.core import AdbConnector
 
-            snapshot_until = time.time()
+            snapshot_until = snapshot_until if snapshot_until is not None else time.time()
             adb_snapshot_dir = str(
                 self._campaign_dir / "adb_snapshots" / f"case_{spec.case_id}"
             )
@@ -1459,6 +1446,97 @@ class CampaignExecutor:
                 exc,
             )
             return None
+
+    def _capture_ios_baseline(self) -> None:
+        config = self._config
+        if not config.ios_enabled:
+            return
+
+        try:
+            from volte_mutation_fuzzer.ios.core import IosConnector
+
+            baseline_dir = self._campaign_dir / "ios_baseline"
+            baseline_dir.mkdir(parents=True, exist_ok=True)
+            device_info_path = baseline_dir / "device_info.json"
+            if device_info_path.exists():
+                return
+
+            info = IosConnector(udid=config.ios_udid).check_device()
+            payload = info.model_dump(mode="json")
+            payload["captured_at"] = datetime.now(timezone.utc).isoformat()
+            device_info_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("failed to capture ios baseline: %s", exc)
+
+    def _capture_ios_snapshot(
+        self,
+        spec: CaseSpec,
+        *,
+        timestamp: float,
+        snapshot_until: float | None = None,
+    ) -> str | None:
+        config = self._config
+        if not config.ios_enabled or self._ios_collector is None:
+            return None
+
+        try:
+            from volte_mutation_fuzzer.ios.core import IosAnomalyDetector, IosConnector
+
+            snapshot_until = snapshot_until if snapshot_until is not None else time.time()
+            ios_snapshot_dir = str(
+                self._campaign_dir / "ios_snapshots" / f"case_{spec.case_id}"
+            )
+            IosConnector(udid=config.ios_udid).take_snapshot(
+                ios_snapshot_dir,
+                collector=self._ios_collector,
+                syslog_since=timestamp,
+                syslog_until=snapshot_until,
+                detector=IosAnomalyDetector(),
+                run_diagnostics=config.ios_run_diagnostics,
+            )
+            return ios_snapshot_dir
+        except Exception as exc:
+            logger.warning(
+                "failed to capture ios snapshot for case %s: %s",
+                spec.case_id,
+                exc,
+            )
+            return None
+
+    def _persist_case_artifacts(
+        self,
+        spec: CaseSpec,
+        case_result: CaseResult,
+        *,
+        sent_payload: str | bytes | None,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        snapshot_until = time.time()
+        adb_snapshot_dir = self._capture_adb_snapshot(
+            spec,
+            timestamp=timestamp,
+            verdict=case_result.verdict,
+            snapshot_until=snapshot_until,
+        )
+        ios_snapshot_dir = self._capture_ios_snapshot(
+            spec,
+            timestamp=timestamp,
+            snapshot_until=snapshot_until,
+        )
+        self._evidence.collect(
+            case_result,
+            sent_payload=sent_payload,
+            pcap_path=case_result.pcap_path,
+            adb_snapshot_dir=adb_snapshot_dir,
+            ios_snapshot_dir=ios_snapshot_dir,
+        )
+        return case_result.model_copy(
+            update={"case_wall_ms": self._case_wall_ms(case_started_monotonic)}
+        )
 
     def _raw_response_from_send_result(
         self, verdict: str, send_result: SendReceiveResult

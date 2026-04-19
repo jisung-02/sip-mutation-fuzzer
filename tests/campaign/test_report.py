@@ -157,6 +157,23 @@ class HtmlReportGeneratorTests(unittest.TestCase):
             self.assertIn("Sent SIP", content)
             self.assertIn("Response SIP", content)
 
+    def test_interesting_cases_section_renders_ios_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases = [_make_case(1, "stack_failure")]
+            jsonl_path = _write_campaign(tmpdir, cases)
+
+            interesting_dir = Path(tmpdir) / "interesting" / "case_000001"
+            interesting_dir.mkdir(parents=True)
+            (interesting_dir / "ios_log.txt").write_text(
+                "=== syslog.txt ===\nCommCenter fatal line\n",
+                encoding="utf-8",
+            )
+
+            content = HtmlReportGenerator(jsonl_path).generate().read_text()
+
+            self.assertIn("iOS Log", content)
+            self.assertIn("CommCenter fatal line", content)
+
     def test_contains_svg_charts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cases = [_make_case(0, "normal"), _make_case(1, "timeout")]

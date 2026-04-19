@@ -31,6 +31,7 @@ class EvidenceCollector:
         sent_payload: str | bytes | None = None,
         pcap_path: str | None = None,
         adb_snapshot_dir: str | None = None,
+        ios_snapshot_dir: str | None = None,
     ) -> str | None:
         """Collect evidence for one case. Returns the evidence directory path, or None."""
         if not self.should_collect(case_result.verdict):
@@ -94,7 +95,21 @@ class EvidenceCollector:
                 if parts:
                     adb_dest.write_text("".join(parts), encoding="utf-8")
 
-            # 6. mutation_ops.txt
+            # 6. ios_log.txt — flatten the iOS snapshot tree for quick review
+            if ios_snapshot_dir and Path(ios_snapshot_dir).is_dir():
+                ios_dest = case_dir / "ios_log.txt"
+                parts = []
+                for f in sorted(Path(ios_snapshot_dir).rglob("*")):
+                    if not f.is_file():
+                        continue
+                    rel = f.relative_to(ios_snapshot_dir)
+                    parts.append(f"=== {rel} ===\n")
+                    parts.append(f.read_text(encoding="utf-8", errors="replace"))
+                    parts.append("\n")
+                if parts:
+                    ios_dest.write_text("".join(parts), encoding="utf-8")
+
+            # 7. mutation_ops.txt
             if case_result.mutation_ops:
                 (case_dir / "mutation_ops.txt").write_text(
                     "\n".join(case_result.mutation_ops) + "\n",

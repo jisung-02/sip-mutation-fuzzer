@@ -240,6 +240,7 @@ def _render_interesting_case(case: CaseResult, interesting_dir: Path) -> str:
         ("sent.bin", "Sent (binary hex)"),
         ("response.sip", "Response SIP"),
         ("adb_log.txt", "ADB Log"),
+        ("ios_log.txt", "iOS Log"),
         ("mutation_ops.txt", "Mutation Ops"),
     ]:
         fpath = case_dir / filename

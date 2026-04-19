@@ -176,6 +176,28 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertIn("crash buffer content", adb_log)
             self.assertIn("main buffer content", adb_log)
 
+    def test_ios_snapshot_concatenated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ios_dir = Path(tmpdir) / "ios_snap"
+            (ios_dir / "crashes").mkdir(parents=True)
+            (ios_dir / "syslog.txt").write_text("commcenter line\n")
+            (ios_dir / "anomalies.json").write_text('[{"pattern":"EXC_BAD_ACCESS"}]\n')
+            (ios_dir / "crashes" / "CommCenter-2026-04-15.ips").write_text("{}\n")
+
+            collector = EvidenceCollector(Path(tmpdir))
+            result = _make_result(verdict="stack_failure", raw_response=None)
+
+            evidence_dir = collector.collect(
+                result, ios_snapshot_dir=str(ios_dir)
+            )
+            assert evidence_dir is not None
+            d = Path(evidence_dir)
+            ios_log = (d / "ios_log.txt").read_text()
+            self.assertIn("syslog.txt", ios_log)
+            self.assertIn("anomalies.json", ios_log)
+            self.assertIn("crashes/CommCenter-2026-04-15.ips", ios_log)
+            self.assertIn("commcenter line", ios_log)
+
     def test_disabled_collector_does_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             collector = EvidenceCollector(Path(tmpdir), enabled=False)

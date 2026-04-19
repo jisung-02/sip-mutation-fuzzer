@@ -22,6 +22,7 @@ from volte_mutation_fuzzer.campaign.core import (
 )
 from volte_mutation_fuzzer.sender.contracts import TargetEndpoint
 from volte_mutation_fuzzer.sender.contracts import SocketObservation, SendReceiveResult
+from volte_mutation_fuzzer.ios.contracts import IosDeviceInfo, IosSnapshotResult
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from tests.sender._server import UDPResponder
 
@@ -1396,6 +1397,203 @@ class CampaignExecutorTests(unittest.TestCase):
 
             start_mock.assert_called_once()
             stop_mock.assert_called_once()
+
+    def test_run_writes_ios_baseline_when_ios_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                cooldown_seconds=0.0,
+                results_dir=tmpdir,
+                output_name="test",
+                ios_enabled=True,
+                adb_enabled=False,
+            )
+            executor = CampaignExecutor(cfg)
+            fake_case = CaseResult(
+                case_id=0,
+                seed=0,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+                verdict="normal",
+                reason="ok",
+                elapsed_ms=10.0,
+                reproduction_cmd="uv run fuzzer ...",
+                timestamp=1.0,
+            )
+
+            with unittest.mock.patch.object(
+                executor._ios_collector,
+                "start",
+            ), unittest.mock.patch.object(
+                executor._ios_collector,
+                "stop",
+            ), unittest.mock.patch.object(
+                executor,
+                "_execute_case",
+                return_value=fake_case,
+            ), unittest.mock.patch(
+                "volte_mutation_fuzzer.ios.core.IosConnector.check_device",
+                return_value=IosDeviceInfo(
+                    udid="ABC-123",
+                    device_name="iPhone 12",
+                    product_type="iPhone13,2",
+                    product_version="17.5.1",
+                    build_version="21F90",
+                ),
+            ):
+                executor.run()
+
+            baseline_path = Path(tmpdir) / "test" / "ios_baseline" / "device_info.json"
+            self.assertTrue(baseline_path.exists())
+            body = json.loads(baseline_path.read_text(encoding="utf-8"))
+            self.assertEqual(body["udid"], "ABC-123")
+            self.assertEqual(body["device_name"], "iPhone 12")
+
+    def test_execute_case_writes_ios_snapshot_when_ios_enabled(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+            ios_enabled=True,
+            adb_enabled=False,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="model",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="packet",
+            bytes_sent=120,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+
+        with unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=12.5,
+                process_alive=True,
+                details={},
+            ),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.ios.core.IosConnector.take_snapshot",
+            return_value=IosSnapshotResult(),
+        ) as snapshot_mock, unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.time.time",
+            return_value=100.0,
+        ):
+            executor._execute_case(spec)
+
+        self.assertEqual(snapshot_mock.call_count, 1)
+        self.assertEqual(snapshot_mock.call_args.kwargs["collector"], executor._ios_collector)
+        self.assertEqual(snapshot_mock.call_args.kwargs["syslog_since"], 100.0)
+        self.assertEqual(snapshot_mock.call_args.kwargs["syslog_until"], 100.0)
+        self.assertEqual(snapshot_mock.call_args.kwargs["run_diagnostics"], False)
+
+    def test_dialog_case_collects_snapshots_and_evidence(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("BYE",),
+            max_cases=1,
+            adb_enabled=True,
+            ios_enabled=True,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="BYE",
+            layer="model",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="packet",
+            bytes_sent=120,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=500,
+                    reason_phrase="ERR",
+                    raw_text="SIP/2.0 500 ERR\r\n\r\n",
+                    classification="server_error",
+                ),
+            ),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+        fake_exchange = SimpleNamespace(
+            setup_succeeded=True,
+            fuzz_result=SimpleNamespace(send_result=send_result),
+            error=None,
+        )
+
+        with unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+            return_value=fake_exchange,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="suspicious",
+                reason="warn",
+                response_code=500,
+                elapsed_ms=100.0,
+                process_alive=True,
+                details={},
+            ),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
+            return_value=SimpleNamespace(),
+        ) as adb_snapshot_mock, unittest.mock.patch(
+            "volte_mutation_fuzzer.ios.core.IosConnector.take_snapshot",
+            return_value=IosSnapshotResult(),
+        ) as ios_snapshot_mock, unittest.mock.patch.object(
+            executor._evidence,
+            "collect",
+        ) as collect_mock, unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.time.time",
+            return_value=100.0,
+        ):
+            executor._execute_case(spec)
+
+        self.assertEqual(adb_snapshot_mock.call_count, 1)
+        self.assertEqual(ios_snapshot_mock.call_count, 1)
+        collect_mock.assert_called_once()
+        self.assertEqual(collect_mock.call_args.kwargs["adb_snapshot_dir"], str(
+            executor.campaign_dir / "adb_snapshots" / "case_0"
+        ))
+        self.assertEqual(collect_mock.call_args.kwargs["ios_snapshot_dir"], str(
+            executor.campaign_dir / "ios_snapshots" / "case_0"
+        ))
 
     def test_init_real_ue_msisdn_target_does_not_force_default_port(self) -> None:
         cfg = self._make_config(
