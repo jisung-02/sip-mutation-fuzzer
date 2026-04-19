@@ -356,6 +356,87 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
 
         self.assertEqual(result.case_wall_ms, 900.0)
 
+    def test_execute_case_uses_method_specific_oracle_grace(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("OPTIONS",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="null",
+            pcap_enabled=False,
+            max_cases=1,
+            layers=("wire",),
+            strategies=("default",),
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="wire",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(
+                host="10.20.20.8",
+                port=5060,
+                mode="real-ue-direct",
+                msisdn="111111",
+                ipsec_mode="null",
+                bind_container="pcscf",
+            ),
+            artifact_kind="wire",
+            bytes_sent=100,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=1.0,
+            send_completed_at=1.1,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_cached",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate_editable",
+            return_value=SimpleNamespace(
+                final_layer="wire",
+                wire_text="OPTIONS sip:111111@example.com SIP/2.0\r\n\r\n",
+                packet_bytes=None,
+                records=(),
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=100.0,
+                process_alive=True,
+                details={},
+            ),
+        ) as evaluate_mock:
+            executor._execute_case(spec)
+
+        context = evaluate_mock.call_args.args[1]
+        self.assertEqual(context.log_grace_seconds, 1.0)
+
     def test_execute_mt_template_case_records_wall_time_after_evidence_collection(
         self,
     ) -> None:

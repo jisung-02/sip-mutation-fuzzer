@@ -697,7 +697,9 @@ class CampaignExecutor:
             context = OracleContext(
                 method=spec.related_method or spec.method,
                 timeout_threshold_ms=config.timeout_seconds * 1000,
-                log_grace_seconds=config.oracle_log_grace_seconds or 0.0,
+                log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                    spec.related_method or spec.method
+                ),
             )
             process_name = config.process_name if config.check_process else None
             verdict = self._oracle.evaluate(
@@ -1085,7 +1087,9 @@ class CampaignExecutor:
             context = OracleContext(
                 method=spec.method,
                 timeout_threshold_ms=config.timeout_seconds * 1000,
-                log_grace_seconds=config.oracle_log_grace_seconds or 0.0,
+                log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                    spec.method
+                ),
             )
             process_name = config.process_name if config.check_process else None
             verdict = self._oracle.evaluate(
@@ -1318,7 +1322,9 @@ class CampaignExecutor:
         context = OracleContext(
             method=spec.method,
             timeout_threshold_ms=config.timeout_seconds * 1000,
-            log_grace_seconds=config.oracle_log_grace_seconds or 0.0,
+            log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                spec.method
+            ),
         )
         process_name = config.process_name if config.check_process else None
         verdict = self._oracle.evaluate(

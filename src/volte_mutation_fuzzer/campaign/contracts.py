@@ -66,15 +66,14 @@ class CampaignConfig(BaseModel):
     resume: bool = False
     circuit_breaker_threshold: int = Field(default=10, ge=0)
     # Oracle post-response grace window (seconds) during which ADB/iOS log
-    # collectors are re-polled for delayed anomalies.  Auto-defaulted to 8s
-    # for real-ue-direct mode (covers observed ~7s late Samsung A31 IMS
-    # crashes) and 0 for softphone.  ``None`` means "pick the default".
+    # collectors are re-polled for delayed anomalies. The field keeps the
+    # legacy mode default for compatibility; the helper applies the
+    # method-aware policy. ``None`` means "pick the default".
     oracle_log_grace_seconds: float | None = Field(default=None, ge=0.0, le=30.0)
 
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None
     bind_container: str | None = None
-
 
     @field_validator("methods", mode="before")
     @classmethod
@@ -136,6 +135,31 @@ class CampaignConfig(BaseModel):
             if self.oracle_log_grace_seconds is None:
                 object.__setattr__(self, "oracle_log_grace_seconds", 0.0)
         return self
+
+    def oracle_log_grace_seconds_for_method(self, method: str) -> float:
+        if (
+            "oracle_log_grace_seconds" in self.model_fields_set
+            and self.oracle_log_grace_seconds is not None
+        ):
+            return float(self.oracle_log_grace_seconds)
+
+        if self.mode != "real-ue-direct":
+            return 0.0
+
+        normalized_method = method.strip().upper()
+        if normalized_method == "INVITE":
+            return 8.0
+        if normalized_method in {
+            "ACK",
+            "CANCEL",
+            "PRACK",
+            "BYE",
+            "UPDATE",
+            "REFER",
+            "INFO",
+        }:
+            return 2.0
+        return 1.0
 
     @model_validator(mode="after")
     def _validate_mt_invite_template(self) -> Self:

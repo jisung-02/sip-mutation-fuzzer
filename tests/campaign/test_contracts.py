@@ -29,6 +29,23 @@ class CampaignConfigTests(unittest.TestCase):
         self.assertEqual(cfg.process_name, "baresip")
         self.assertTrue(cfg.check_process)
 
+    def test_oracle_log_grace_seconds_for_method_uses_real_ue_defaults(self) -> None:
+        cfg = CampaignConfig(target_host="10.20.20.8", mode="real-ue-direct")
+
+        self.assertEqual(cfg.oracle_log_grace_seconds_for_method("INVITE"), 8.0)
+        self.assertEqual(cfg.oracle_log_grace_seconds_for_method("OPTIONS"), 1.0)
+        self.assertEqual(cfg.oracle_log_grace_seconds_for_method("BYE"), 2.0)
+
+    def test_oracle_log_grace_seconds_for_method_preserves_explicit_override(self) -> None:
+        cfg = CampaignConfig(
+            target_host="10.20.20.8",
+            mode="real-ue-direct",
+            oracle_log_grace_seconds=6.5,
+        )
+
+        self.assertEqual(cfg.oracle_log_grace_seconds_for_method("INVITE"), 6.5)
+        self.assertEqual(cfg.oracle_log_grace_seconds_for_method("OPTIONS"), 6.5)
+
     def test_target_host_required(self) -> None:
         with self.assertRaises(ValidationError):
             CampaignConfig(target_host="")
