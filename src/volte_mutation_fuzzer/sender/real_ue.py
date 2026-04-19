@@ -16,6 +16,7 @@ from volte_mutation_fuzzer.sip.render import PacketModel, render_packet_bytes
 _CRLF: Final[str] = "\r\n"
 _DEFAULT_REAL_UE_IMS_SUBNET: Final[str] = "10.20.20.0/24"
 _DEFAULT_REAL_UE_UPF_IP: Final[str] = "172.22.0.8"
+_DEFAULT_REAL_UE_PCSCF_IP: Final[str] = "172.22.0.21"
 _DEFAULT_SCSCF_CONTAINER: Final[str] = "scscf"
 _DEFAULT_PCSCF_CONTAINER: Final[str] = "pcscf"
 _DEFAULT_MYSQL_CONTAINER: Final[str] = "mysql"
@@ -24,7 +25,7 @@ _DEFAULT_SCSCF_DB_PASS: Final[str] = "heslo"
 _DEFAULT_SCSCF_DB_NAME: Final[str] = "scscf"
 _DEFAULT_PCSCF_LOG_TAIL: Final[int] = 500
 _PCSCF_TERM_UE_PORT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"Term UE connection information\s*:\s*IP is [\d.]+ and Port is (\d+)"
+    r"Term UE connection information\s*:\s*IP is ([\d.]+) and Port is (\d+)"
 )
 _XFRM_DPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"proto esp\s.*?src\s+\S+\s+dst\s+([\d.]+).*?\n.*?sport\s+(\d+)\s+dport\s+(\d+)",
@@ -109,6 +110,24 @@ class RealUEDirectRouteError(RealUEDirectError):
 
 
 @dataclass(frozen=True)
+class ResolvedNativeIPsecSession:
+    ue_ip: str
+    pcscf_ip: str
+    port_map: dict[int, int]
+    observer_events: tuple[str, ...]
+
+    def pcscf_port_for(self, ue_port: int) -> int:
+        try:
+            return self.port_map[ue_port]
+        except KeyError as exc:
+            raise RealUEDirectResolutionError(
+                f"unknown UE protected port {ue_port} for native IPsec session "
+                f"({self.ue_ip} -> {self.pcscf_ip}); known ports: "
+                f"{sorted(self.port_map)}"
+            ) from exc
+
+
+@dataclass(frozen=True)
 class UEContact:
     msisdn: str
     host: str
@@ -137,6 +156,7 @@ class RealUEDirectResolver:
 
     def __init__(self, env: dict[str, str] | None = None) -> None:
         source = os.environ if env is None else env
+        self._env = source
         self.scscf_container = source.get(
             "VMF_REAL_UE_SCSCF_CONTAINER", _DEFAULT_SCSCF_CONTAINER
         )
@@ -416,12 +436,13 @@ class RealUEDirectResolver:
     def resolve_protected_ports(self, msisdn: str) -> tuple[int, int]:
         """Return ``(port_pc, port_ps)`` for the UE identified by *msisdn*.
 
-        Reads live Kamailio logs from the P-CSCF container to find the most
-        recent ``Term UE connection`` line, then derives ``port_ps = port_pc + 1``.
-        Falls back to ``ip xfrm state`` if logs are unavailable.
+        The requested MSISDN is resolved to a UE IP first, then both log-derived
+        and xfrm-derived candidates are filtered to that UE before selection.
         """
         return resolve_ue_protected_ports(
-            msisdn=msisdn, pcscf_container=self.pcscf_container
+            msisdn=msisdn,
+            pcscf_container=self.pcscf_container,
+            env=self._env,
         )
 
     def _parse_kamctl_output(self, msisdn: str, output: str) -> UEContact | None:
@@ -468,13 +489,20 @@ def resolve_ue_protected_ports(
     """Return ``(port_pc, port_ps)`` for *msisdn* by querying the P-CSCF container.
 
     Strategy:
-    1. Parse the last ``Term UE connection`` log line from the P-CSCF container.
-    2. Fallback: parse ``ip xfrm state`` output for destination port pairs.
-    3. Raise ``RealUEDirectResolutionError`` if neither succeeds.
+    1. Resolve the UE IP for *msisdn* and use it to filter candidates.
+    2. Parse the last matching ``Term UE connection`` log line from the P-CSCF container.
+    3. Fallback: parse ``ip xfrm state`` output for matching UE port pairs.
+    4. Raise ``RealUEDirectResolutionError`` if neither succeeds.
 
     ``port_ps`` is assumed to be ``port_pc + 1`` when derived from logs.
     """
-    del msisdn  # Not yet filtered by MSISDN — takes most-recent UE connection.
+    requested_ue_ip: str | None = None
+    try:
+        requested_ue_ip = resolve_ue_ip_from_msisdn(msisdn, env=env)
+    except ValueError:
+        requested_ue_ip = None
+    source = os.environ if env is None else env
+    pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_REAL_UE_PCSCF_IP)
 
     # Strategy 1: P-CSCF logs
     try:
@@ -486,10 +514,20 @@ def resolve_ue_protected_ports(
             check=False,
         )
         combined = (result.stdout or "") + (result.stderr or "")
-        matches = _PCSCF_TERM_UE_PORT_PATTERN.findall(combined)
+        matches = list(_PCSCF_TERM_UE_PORT_PATTERN.finditer(combined))
         if matches:
-            port_pc = int(matches[-1])
-            return port_pc, port_pc + 1
+            if requested_ue_ip is not None:
+                matching_ports = [
+                    int(match.group(2))
+                    for match in matches
+                    if match.group(1) == requested_ue_ip
+                ]
+                if matching_ports:
+                    port_pc = matching_ports[-1]
+                    return port_pc, port_pc + 1
+            else:
+                port_pc = int(matches[-1].group(2))
+                return port_pc, port_pc + 1
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         pass
 
@@ -505,6 +543,7 @@ def resolve_ue_protected_ports(
         if result.returncode == 0 and result.stdout:
             lines = result.stdout.splitlines()
             current_src: str | None = None
+            current_dst: str | None = None
             # UE→pcscf SA의 sport들: 하나는 port_pc, 다른 하나는 port_ps.
             # 관례상 min = port_pc, port_ps = port_pc + 1.
             ue_sports: list[int] = []
@@ -515,6 +554,7 @@ def resolve_ue_protected_ports(
                     parts = stripped.split()
                     if len(parts) >= 4:
                         current_src = parts[1]
+                        current_dst = parts[3]
                 # "sel src .../32 dst .../32 sport N dport M" — starts with "sel"
                 if stripped.startswith("sel ") and "sport" in stripped and "dport" in stripped:
                     parts = stripped.split()
@@ -528,7 +568,8 @@ def resolve_ue_protected_ports(
                     # UE→pcscf 방향: current_src가 UE IP (10.20.20.x)
                     if (
                         current_src is not None
-                        and current_src.startswith("10.20.20.")
+                        and (requested_ue_ip is None or current_src == requested_ue_ip)
+                        and (current_dst is None or current_dst == pcscf_ip)
                         and s is not None
                         and s > 1024
                     ):
@@ -542,6 +583,88 @@ def resolve_ue_protected_ports(
     raise RealUEDirectResolutionError(
         f"could not resolve protected ports for UE via container {pcscf_container!r}. "
         "Ensure the UE is registered and logs are available."
+    )
+
+
+def resolve_native_ipsec_session(
+    *,
+    ue_ip: str,
+    pcscf_container: str = _DEFAULT_PCSCF_CONTAINER,
+    env: dict[str, str] | None = None,
+) -> ResolvedNativeIPsecSession:
+    source = os.environ if env is None else env
+    pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_REAL_UE_PCSCF_IP)
+
+    try:
+        result = subprocess.run(
+            ["docker", "exec", pcscf_container, "ip", "xfrm", "state"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        raise RealUEDirectResolutionError(
+            f"native IPsec xfrm query failed for container {pcscf_container!r}: {exc}"
+        ) from exc
+
+    if result.returncode != 0:
+        error = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise RealUEDirectResolutionError(
+            f"native IPsec xfrm query failed for container {pcscf_container!r}: {error}"
+        )
+
+    stdout = result.stdout or ""
+    if not stdout.strip():
+        raise RealUEDirectResolutionError(
+            f"native IPsec xfrm query returned no output for container {pcscf_container!r}"
+        )
+
+    port_map: dict[int, int] = {}
+    current_src: str | None = None
+    current_dst: str | None = None
+
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("src ") and " dst " in line:
+            parts = line.split()
+            if len(parts) >= 4:
+                current_src = parts[1]
+                current_dst = parts[3]
+            else:
+                current_src = None
+                current_dst = None
+            continue
+        if not line.startswith("sel "):
+            continue
+        if current_src != pcscf_ip or current_dst != ue_ip:
+            continue
+
+        sport_match = re.search(r"\bsport\s+(\d+)\b", line)
+        dport_match = re.search(r"\bdport\s+(\d+)\b", line)
+        if sport_match is None or dport_match is None:
+            continue
+        sport = int(sport_match.group(1))
+        dport = int(dport_match.group(1))
+        port_map[dport] = sport
+
+    if not port_map:
+        raise RealUEDirectResolutionError(
+            f"no matching native IPsec tuples found for ue_ip={ue_ip!r} and "
+            f"pcscf_ip={pcscf_ip!r} in container {pcscf_container!r}"
+        )
+
+    observer_events = tuple(
+        f"native-ipsec:port-map:{ue_port}->{pcscf_port}"
+        for ue_port, pcscf_port in sorted(port_map.items())
+    )
+    return ResolvedNativeIPsecSession(
+        ue_ip=ue_ip,
+        pcscf_ip=pcscf_ip,
+        port_map=port_map,
+        observer_events=observer_events,
     )
 
 
@@ -862,12 +985,14 @@ __all__ = [
     "RealUEDirectResolutionError",
     "RealUEDirectResolver",
     "RealUEDirectRouteError",
+    "ResolvedNativeIPsecSession",
     "ResolvedRealUETarget",
     "RouteCheckResult",
     "UEContact",
     "check_route_to_target",
     "normalize_direct_wire_text",
     "prepare_real_ue_direct_payload",
+    "resolve_native_ipsec_session",
     "resolve_ue_protected_ports",
     "setup_route_to_target",
 ]

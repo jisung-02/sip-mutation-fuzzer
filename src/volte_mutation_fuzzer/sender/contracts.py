@@ -16,6 +16,7 @@ from volte_mutation_fuzzer.sip.render import PacketModel
 TargetMode = Literal["softphone", "real-ue-direct"]
 TransportProtocol = Literal["UDP", "TCP"]
 ArtifactKind = Literal["packet", "wire", "bytes"]
+ObservationSource = Literal["socket", "pcscf-log"]
 ObservationClass = Literal[
     "provisional",
     "success",
@@ -53,6 +54,7 @@ class TargetEndpoint(BaseModel):
     transport: TransportProtocol = "UDP"
     timeout_seconds: float = Field(default=2.0, gt=0.0, le=60.0)
     label: str | None = None
+    ipsec_mode: Literal["null", "bypass", "native", "ipsec"] | None = None
     source_ip: str | None = Field(default=None, min_length=1)
     # Deprecated compatibility path for Docker netns sending.
     bind_container: str | None = Field(default=None, min_length=1)
@@ -61,6 +63,7 @@ class TargetEndpoint(BaseModel):
     @field_validator(
         "host",
         "label",
+        "ipsec_mode",
         "msisdn",
         "source_ip",
         "bind_container",
@@ -82,10 +85,17 @@ class TargetEndpoint(BaseModel):
 
     @model_validator(mode="after")
     def _validate_target_shape(self) -> Self:
+        if self.ipsec_mode == "ipsec":
+            object.__setattr__(self, "ipsec_mode", "native")
+
         if self.mode == "real-ue-direct":
             if self.host is None and self.msisdn is None:
                 raise ValueError(
                     "real-ue-direct requires at least one of host or msisdn"
+                )
+            if self.ipsec_mode == "native" and self.msisdn is None:
+                raise ValueError(
+                    "real-ue-direct native ipsec_mode requires msisdn"
                 )
 
             # host=None 허용 — RealUEDirectResolver가 msisdn으로 동적 resolve
@@ -193,7 +203,7 @@ class SendArtifact(BaseModel):
 class SocketObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    source: Literal["socket"] = "socket"
+    source: ObservationSource = "socket"
     remote_host: str | None = None
     remote_port: int | None = Field(default=None, ge=0, le=65535)
     status_code: int | None = Field(default=None, ge=100, le=699)
@@ -251,6 +261,7 @@ __all__ = [
     "CorrelationKey",
     "DeliveryOutcome",
     "ObservationClass",
+    "ObservationSource",
     "SendArtifact",
     "SendReceiveResult",
     "SocketObservation",

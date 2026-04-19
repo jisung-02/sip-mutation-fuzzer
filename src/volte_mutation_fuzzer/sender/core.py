@@ -2,6 +2,7 @@ import os
 import re
 import socket
 import time
+from datetime import datetime, timezone
 from collections.abc import Sequence
 from typing import Final
 
@@ -14,12 +15,19 @@ from volte_mutation_fuzzer.sender.contracts import (
     SocketObservation,
     TargetEndpoint,
 )
+from volte_mutation_fuzzer.sender.ipsec_native import (
+    extract_correlation_from_artifact,
+    observe_pcscf_log_responses,
+    preflight_native_ipsec_target,
+    send_via_native_ipsec,
+)
 from volte_mutation_fuzzer.sender.real_ue import (
     RealUEDirectError,
     RealUEDirectResolver,
     RealUEDirectRouteError,
     check_route_to_target,
     prepare_real_ue_direct_payload,
+    resolve_native_ipsec_session,
     setup_route_to_target,
 )
 from volte_mutation_fuzzer.sip.render import PacketModel, render_packet_bytes
@@ -273,16 +281,33 @@ class SIPSenderReactor:
         *,
         collect_all_responses: bool,
     ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
-        resolved = RealUEDirectResolver(env=self._env).resolve(target)
+        resolver = RealUEDirectResolver(env=self._env)
+        resolved = resolver.resolve(target)
+        resolved_port = resolved.port
+        if target.ipsec_mode == "native" and target.msisdn is not None:
+            resolved_port, _resolved_ps_port = resolver.resolve_protected_ports(
+                target.msisdn
+            )
         resolved_target = target.model_copy(
             update={
                 "host": resolved.host,
-                "port": resolved.port,
+                "port": resolved_port,
                 "label": resolved.label,
             },
             deep=True,
         )
         observer_events = [*resolved.observer_events]
+
+        if target.ipsec_mode == "native":
+            return self._send_via_native_ipsec(
+                artifact=artifact,
+                target=target,
+                resolved_target=resolved_target,
+                resolved_host=resolved.host,
+                resolved_port=resolved_port,
+                observer_events=observer_events,
+                collect_all_responses=collect_all_responses,
+            )
 
         # Deprecated compatibility path: delegate send to container netns only when
         # no explicit host-side spoofed source IP is configured.
@@ -393,6 +418,97 @@ class SIPSenderReactor:
                     sock,
                     collect_all_responses=collect_all_responses,
                 )
+
+        return resolved_target, payload, observations, tuple(observer_events)
+
+    def _send_via_native_ipsec(
+        self,
+        *,
+        artifact: SendArtifact,
+        target: TargetEndpoint,
+        resolved_target: TargetEndpoint,
+        resolved_host: str,
+        resolved_port: int,
+        observer_events: list[str],
+        collect_all_responses: bool,
+    ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
+        """Send from the P-CSCF namespace using native IPsec helpers."""
+        container = target.bind_container or self._env.get(
+            "VMF_REAL_UE_PCSCF_CONTAINER", "pcscf"
+        )
+        deadline = time.monotonic() + target.timeout_seconds
+
+        try:
+            session = resolve_native_ipsec_session(
+                ue_ip=resolved_host,
+                pcscf_container=container,
+                env=self._env,
+            )
+            observer_events.extend(session.observer_events)
+
+            preflight = preflight_native_ipsec_target(
+                session=session,
+                ue_ip=resolved_host,
+                ue_port=resolved_port,
+                container=container,
+            )
+            observer_events.extend(preflight.observer_events)
+
+            payload, normalization_events = prepare_real_ue_direct_payload(
+                artifact,
+                local_host=session.pcscf_ip,
+                local_port=preflight.pcscf_port,
+                rewrite_via=not artifact.preserve_via,
+                rewrite_contact=not artifact.preserve_contact,
+            )
+            observer_events.extend(normalization_events)
+
+            correlation = extract_correlation_from_artifact(artifact)
+            if correlation.confidence == "low":
+                observer_events.append("correlation:fallback:tuple-only")
+                observer_events.append("correlation:low-confidence")
+            else:
+                observer_events.append("correlation:best-effort:artifact")
+
+            started_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            send_timeout = round(max(deadline - time.monotonic(), 0.0), 6)
+            if send_timeout <= 0.0:
+                observer_events.append("native-ipsec:send-skipped:timeout-budget-exhausted")
+                return resolved_target, payload, [], tuple(observer_events)
+            native_result = send_via_native_ipsec(
+                container=container,
+                src_ip=session.pcscf_ip,
+                src_port=preflight.pcscf_port,
+                dst_ip=resolved_host,
+                dst_port=resolved_port,
+                payload=payload,
+                timeout_seconds=send_timeout,
+            )
+            observer_events.extend(native_result.observer_events)
+
+            observe_timeout = round(max(deadline - time.monotonic(), 0.0), 6)
+            if observe_timeout <= 0.0:
+                return resolved_target, payload, [], tuple(observer_events)
+
+            observations = list(
+                observe_pcscf_log_responses(
+                    container=container,
+                    since=started_iso,
+                    ue_ip=resolved_host,
+                    ue_port=resolved_port,
+                    correlation=correlation,
+                    timeout_seconds=observe_timeout,
+                    poll_interval_seconds=min(observe_timeout, 0.25),
+                    collect_all_responses=collect_all_responses,
+                    observer_events=observer_events,
+                )
+            )
+        except RealUEDirectError as exc:
+            raise type(exc)(
+                str(exc),
+                observer_events=tuple((*observer_events, *exc.observer_events)),
+                resolved_target=resolved_target,
+            ) from exc
 
         return resolved_target, payload, observations, tuple(observer_events)
 

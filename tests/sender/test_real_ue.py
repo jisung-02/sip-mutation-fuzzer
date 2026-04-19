@@ -7,9 +7,12 @@ from volte_mutation_fuzzer.sender.real_ue import (
     IPsecSAStatus,
     RealUEDirectResolver,
     RouteCheckResult,
+    ResolvedNativeIPsecSession,
+    RealUEDirectResolutionError,
     check_ipsec_sa_alive,
     check_route_to_target,
     prepare_real_ue_direct_payload,
+    resolve_native_ipsec_session,
 )
 
 
@@ -108,6 +111,78 @@ class RealUEDirectHelperTests(unittest.TestCase):
         self.assertEqual(payload, original)
         self.assertEqual(events, ("direct-normalization:bytes-unmodified",))
 
+    def test_resolve_protected_ports_prefers_matching_msisdn_from_logs(self) -> None:
+        resolver = RealUEDirectResolver()
+
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["docker"],
+                returncode=0,
+                stdout=(
+                    "Term UE connection information : IP is 10.20.20.8 and Port is 8100\n"
+                    "Term UE connection information : IP is 10.20.20.9 and Port is 7000\n"
+                ),
+                stderr="",
+            ),
+        ) as mock_run:
+            port_pc, port_ps = resolver.resolve_protected_ports("111111")
+
+        self.assertEqual((port_pc, port_ps), (8100, 8101))
+        mock_run.assert_called_once_with(
+            ["docker", "logs", "pcscf", "--since", "5m"],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            check=False,
+        )
+
+    def test_resolve_protected_ports_prefers_matching_msisdn_from_xfrm(self) -> None:
+        resolver = RealUEDirectResolver()
+
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout=(
+                        "src 172.22.0.21 dst 10.20.20.9\n"
+                        "\tproto esp spi 0xaaaa reqid 1 mode transport\n"
+                        "\tsel src 172.22.0.21/32 dst 10.20.20.9/32 sport 5105 dport 7000\n"
+                        "src 10.20.20.9 dst 172.22.0.21\n"
+                        "\tproto esp spi 0xbbbb reqid 2 mode transport\n"
+                        "\tsel src 10.20.20.9/32 dst 172.22.0.21/32 sport 7000 dport 5105\n"
+                        "src 172.22.0.21 dst 10.20.20.8\n"
+                        "\tproto esp spi 0xcccc reqid 3 mode transport\n"
+                        "\tsel src 172.22.0.21/32 dst 10.20.20.8/32 sport 5103 dport 8100\n"
+                        "src 10.20.20.8 dst 172.22.0.21\n"
+                        "\tproto esp spi 0xdddd reqid 4 mode transport\n"
+                        "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8100 dport 5103\n"
+                    ),
+                    stderr="",
+                ),
+            ),
+        ) as mock_run:
+            port_pc, port_ps = resolver.resolve_protected_ports("111111")
+
+        self.assertEqual((port_pc, port_ps), (8100, 8101))
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertEqual(
+            mock_run.call_args_list[0].args[0],
+            ["docker", "logs", "pcscf", "--since", "5m"],
+        )
+        self.assertEqual(
+            mock_run.call_args_list[1].args[0],
+            ["docker", "exec", "pcscf", "ip", "xfrm", "state"],
+        )
+
 
 class IPsecSACheckTests(unittest.TestCase):
     """Tests for check_ipsec_sa_alive()."""
@@ -180,6 +255,90 @@ class IPsecSACheckTests(unittest.TestCase):
             status = check_ipsec_sa_alive()
         self.assertFalse(status.alive)
         self.assertIn("docker not found", status.detail)
+
+
+class NativeIPsecSessionResolverTests(unittest.TestCase):
+    _XFRM_OUTPUT = (
+        "src 172.22.0.21 dst 10.20.20.8\n"
+        "\tproto esp spi 0x1111 reqid 1 mode transport\n"
+        "\tsel src 172.22.0.21/32 dst 10.20.20.8/32 sport 5103 dport 8100\n"
+        "src 10.20.20.8 dst 172.22.0.21\n"
+        "\tproto esp spi 0x2222 reqid 2 mode transport\n"
+        "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8100 dport 5103\n"
+        "src 172.22.0.21 dst 10.20.20.8\n"
+        "\tproto esp spi 0x3333 reqid 3 mode transport\n"
+        "\tsel src 172.22.0.21/32 dst 10.20.20.8/32 sport 5104 dport 8101\n"
+    )
+
+    def test_resolves_native_session_and_port_map(self) -> None:
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["docker"],
+                returncode=0,
+                stdout=self._XFRM_OUTPUT,
+                stderr="",
+            ),
+        ) as mock_run:
+            session = resolve_native_ipsec_session(
+                ue_ip="10.20.20.8",
+                env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"},
+            )
+
+        self.assertIsInstance(session, ResolvedNativeIPsecSession)
+        self.assertEqual(session.ue_ip, "10.20.20.8")
+        self.assertEqual(session.pcscf_ip, "172.22.0.21")
+        self.assertEqual(session.port_map, {8100: 5103, 8101: 5104})
+        self.assertEqual(
+            session.observer_events,
+            (
+                "native-ipsec:port-map:8100->5103",
+                "native-ipsec:port-map:8101->5104",
+            ),
+        )
+        self.assertEqual(session.pcscf_port_for(8100), 5103)
+        mock_run.assert_called_once_with(
+            ["docker", "exec", "pcscf", "ip", "xfrm", "state"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+
+    def test_resolve_native_session_errors_when_no_matching_tuples_exist(self) -> None:
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["docker"],
+                returncode=0,
+                stdout=(
+                    "src 10.20.20.8 dst 172.22.0.21\n"
+                    "\tproto esp spi 0x2222 reqid 2 mode transport\n"
+                    "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8100 dport 5103\n"
+                ),
+                stderr="",
+            ),
+        ):
+            with self.assertRaises(RealUEDirectResolutionError) as ctx:
+                resolve_native_ipsec_session(
+                    ue_ip="10.20.20.8",
+                    env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"},
+                )
+
+        self.assertIn("no matching native IPsec tuples", str(ctx.exception))
+
+    def test_pcscf_port_for_raises_on_unknown_ue_port(self) -> None:
+        session = ResolvedNativeIPsecSession(
+            ue_ip="10.20.20.8",
+            pcscf_ip="172.22.0.21",
+            port_map={8100: 5103},
+            observer_events=(),
+        )
+
+        with self.assertRaises(RealUEDirectResolutionError) as ctx:
+            session.pcscf_port_for(9999)
+
+        self.assertIn("unknown UE protected port 9999", str(ctx.exception))
 
 
 if __name__ == "__main__":
