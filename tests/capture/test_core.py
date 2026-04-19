@@ -8,7 +8,7 @@ from volte_mutation_fuzzer.capture.core import PcapCapture
 
 
 class PcapCaptureTests(unittest.TestCase):
-    @patch("subprocess.Popen")
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
     def test_start_launches_tcpdump(self, mock_popen: MagicMock) -> None:
         capture = PcapCapture("/tmp/test.pcap", interface="eth0")
 
@@ -28,22 +28,29 @@ class PcapCaptureTests(unittest.TestCase):
             stderr=subprocess.DEVNULL,
         )
 
-    @patch("subprocess.Popen")
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
     def test_stop_returns_path_when_file_exists(self, mock_popen: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pcap_path = Path(tmpdir) / "case.pcap"
             pcap_path.write_bytes(b"pcap")
-            process = mock_popen.return_value
+            capture_process = MagicMock()
+            capture_process.wait.return_value = 0
+            tshark_process = MagicMock()
+            tshark_process.returncode = 0
+            tshark_process.communicate.return_value = ("pcap text\n", "")
+            mock_popen.side_effect = [capture_process, tshark_process]
             capture = PcapCapture(str(pcap_path))
 
             capture.start()
             saved_path = capture.stop()
 
-            process.send_signal.assert_called_once()
-            process.wait.assert_called_once_with(timeout=3)
+            capture_process.send_signal.assert_called_once()
+            capture_process.wait.assert_called_once_with(timeout=3)
+            tshark_process.communicate.assert_called_once_with(timeout=10)
             self.assertEqual(saved_path, str(pcap_path))
+            self.assertEqual(pcap_path.with_suffix(".txt").read_text(), "pcap text\n")
 
-    @patch("subprocess.Popen")
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
     def test_stop_returns_none_when_file_missing(self, mock_popen: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pcap_path = Path(tmpdir) / "missing.pcap"
@@ -54,7 +61,7 @@ class PcapCaptureTests(unittest.TestCase):
 
             self.assertIsNone(saved_path)
 
-    @patch("subprocess.Popen")
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
     def test_start_raises_if_already_running(self, mock_popen: MagicMock) -> None:
         capture = PcapCapture("/tmp/test.pcap")
 
@@ -65,7 +72,7 @@ class PcapCaptureTests(unittest.TestCase):
 
         mock_popen.assert_called_once()
 
-    @patch("subprocess.Popen")
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
     def test_stop_kills_on_timeout(self, mock_popen: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pcap_path = Path(tmpdir) / "case.pcap"
@@ -81,3 +88,27 @@ class PcapCaptureTests(unittest.TestCase):
 
             process.kill.assert_called_once_with()
             self.assertIsNone(saved_path)
+
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
+    def test_stop_kills_tshark_export_on_timeout(
+        self, mock_popen: MagicMock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pcap_path = Path(tmpdir) / "case.pcap"
+            pcap_path.write_bytes(b"pcap")
+            capture_process = MagicMock()
+            capture_process.wait.return_value = 0
+            tshark_process = MagicMock()
+            tshark_process.communicate.side_effect = [
+                subprocess.TimeoutExpired(cmd="tshark", timeout=10),
+                ("", ""),
+            ]
+            mock_popen.side_effect = [capture_process, tshark_process]
+            capture = PcapCapture(str(pcap_path))
+
+            capture.start()
+            saved_path = capture.stop()
+
+            tshark_process.kill.assert_called_once_with()
+            self.assertEqual(saved_path, str(pcap_path))
+            self.assertFalse(pcap_path.with_suffix(".txt").exists())

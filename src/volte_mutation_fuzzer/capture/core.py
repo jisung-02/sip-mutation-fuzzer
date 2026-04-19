@@ -3,6 +3,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from subprocess import Popen as subprocess_popen
 
 
 class PcapCapture:
@@ -22,7 +23,7 @@ class PcapCapture:
         with self._lock:
             if self._process is not None:
                 raise RuntimeError("pcap capture is already running")
-            self._process = subprocess.Popen(
+            self._process = subprocess_popen(
                 [
                     "sudo",
                     "tcpdump",
@@ -60,15 +61,21 @@ class PcapCapture:
     def _export_txt(pcap_path: Path) -> None:
         """Export pcap to human-readable txt using tshark."""
         txt_path = pcap_path.with_suffix(".txt")
+        proc: subprocess.Popen[str] | None = None
         try:
-            result = subprocess.run(
+            proc = subprocess_popen(
                 ["tshark", "-r", str(pcap_path), "-V"],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=10,
             )
-            if result.returncode == 0 and result.stdout:
-                txt_path.write_text(result.stdout, encoding="utf-8")
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+            stdout, _stderr = proc.communicate(timeout=10)
+            if proc.returncode == 0 and stdout:
+                txt_path.write_text(stdout, encoding="utf-8")
+        except FileNotFoundError:
             # tshark not installed or timeout — skip silently
             pass
+        except subprocess.TimeoutExpired:
+            if proc is not None:
+                proc.kill()
+                proc.communicate()

@@ -85,6 +85,24 @@ class AdbConnectorTests(unittest.TestCase):
 
 def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
     outputs = {
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
+            "telephony output\n"
+        ),
+        ("adb", "-s", "SER123", "shell", "dumpsys", "ims"): "ims output\n",
+        ("adb", "-s", "SER123", "shell", "netstat", "-tlnup"): "netstat output\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "main"): "main logcat\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "system"): "system logcat\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "radio"): "radio logcat\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "crash"): "crash logcat\n",
+        (
+            "adb",
+            "-s",
+            "SER123",
+            "logcat",
+            "-d",
+            "-b",
+            "main,system,radio,crash",
+        ): "combined logcat\n",
         ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo"): "meminfo output\n",
         ("adb", "-s", "SER123", "shell", "dmesg"): "dmesg output\n",
     }
@@ -106,20 +124,54 @@ def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
     assert snapshot.errors == ()
     assert snapshot.meminfo_path is not None
     assert snapshot.dmesg_path is not None
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is not None
+    assert snapshot.netstat_path is not None
+    assert snapshot.logcat_path is not None
     assert Path(snapshot.meminfo_path).read_text(encoding="utf-8") == "meminfo output\n"
     assert Path(snapshot.dmesg_path).read_text(encoding="utf-8") == "dmesg output\n"
+    assert (
+        Path(snapshot.telephony_path).read_text(encoding="utf-8")
+        == "telephony output\n"
+    )
+    assert Path(snapshot.ims_path).read_text(encoding="utf-8") == "ims output\n"
+    assert Path(snapshot.netstat_path).read_text(encoding="utf-8") == "netstat output\n"
+    assert Path(snapshot.logcat_path).read_text(encoding="utf-8") == "combined logcat\n"
 
 
 def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:
+    outputs = {
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
+            "telephony output\n"
+        ),
+        ("adb", "-s", "SER123", "shell", "dumpsys", "ims"): "ims output\n",
+        ("adb", "-s", "SER123", "shell", "netstat", "-tlnup"): "netstat output\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "main"): "",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "system"): "",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "radio"): "",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "crash"): "",
+        (
+            "adb",
+            "-s",
+            "SER123",
+            "logcat",
+            "-d",
+            "-b",
+            "main,system,radio,crash",
+        ): "",
+    }
+
     def fake_run(
         cmd: list[str],
         capture_output: bool,
         text: bool,
         timeout: int,
     ) -> _DummyCompletedProcess:
-        if cmd[-2:] == ["dumpsys", "meminfo"]:
+        if tuple(cmd) == ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo"):
             raise RuntimeError("meminfo boom")
-        return _DummyCompletedProcess(stdout="permission denied", returncode=1)
+        if tuple(cmd) == ("adb", "-s", "SER123", "shell", "dmesg"):
+            return _DummyCompletedProcess(stdout="permission denied", returncode=1)
+        return _DummyCompletedProcess(stdout=outputs.get(tuple(cmd), ""))
 
     connector = AdbConnector(serial="SER123")
     with patch("subprocess.run", side_effect=fake_run):
@@ -127,6 +179,9 @@ def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:
 
     assert snapshot.meminfo_path is None
     assert snapshot.dmesg_path is None
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is not None
+    assert snapshot.netstat_path is not None
     assert snapshot.errors == (
         "dumpsys meminfo failed: meminfo boom",
         "dmesg failed: permission denied",
@@ -134,18 +189,27 @@ def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:
 
 
 def test_take_snapshot_creates_output_dir_for_bugreport(tmp_path: Path) -> None:
+    outputs = {
+        ("adb", "shell", "dumpsys", "meminfo"): "meminfo output\n",
+        ("adb", "shell", "dmesg"): "dmesg output\n",
+        ("adb", "shell", "dumpsys", "telephony.registry"): "telephony output\n",
+        ("adb", "shell", "dumpsys", "ims"): "ims output\n",
+        ("adb", "shell", "netstat", "-tlnup"): "netstat output\n",
+        ("adb", "logcat", "-d", "-b", "main"): "",
+        ("adb", "logcat", "-d", "-b", "system"): "",
+        ("adb", "logcat", "-d", "-b", "radio"): "",
+        ("adb", "logcat", "-d", "-b", "crash"): "",
+        ("adb", "logcat", "-d", "-b", "main,system,radio,crash"): "",
+        ("adb", "bugreport"): "bugreport output\n",
+    }
+
     def fake_run(
         cmd: list[str],
         capture_output: bool,
         text: bool,
         timeout: int,
     ) -> _DummyCompletedProcess:
-        outputs = {
-            ("adb", "shell", "dumpsys", "meminfo"): "meminfo output\n",
-            ("adb", "shell", "dmesg"): "dmesg output\n",
-            ("adb", "bugreport"): "bugreport output\n",
-        }
-        return _DummyCompletedProcess(stdout=outputs[tuple(cmd)])
+        return _DummyCompletedProcess(stdout=outputs.get(tuple(cmd), ""))
 
     connector = AdbConnector()
     output_dir = tmp_path / "new" / "adb"
