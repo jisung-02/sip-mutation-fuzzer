@@ -1,12 +1,15 @@
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, cast, get_args
 
 import typer
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor, ResultStore
+
+IpsecMode = Literal["null", "bypass", "native", "ipsec"]
+_IPSEC_MODES: tuple[str, ...] = get_args(IpsecMode)
 
 app = typer.Typer(
     add_completion=False,
@@ -232,90 +235,78 @@ def run_command(
         else ("model", "wire", "byte")
     )
 
-    payload: dict[str, object] = {
-        "target_host": target_host,
-        "target_port": target_port,
-        "transport": transport,
-        "mode": mode,
-        "strategies": strategies,
-        "layers": layers,
-        "max_cases": max_cases,
-        "timeout_seconds": timeout,
-        "cooldown_seconds": cooldown,
-        "seed_start": seed_start,
-        "process_name": process_name,
-        "log_path": log_path,
-        "pcap_interface": pcap_interface,
-        "preserve_via": preserve_via,
-        "preserve_contact": preserve_contact,
-        "mo_contact_host": mo_contact_host,
-        "mo_contact_port_pc": mo_contact_port_pc,
-        "mo_contact_port_ps": mo_contact_port_ps,
-        "from_msisdn": from_msisdn,
-        "mt_local_port": mt_local_port,
-        "crash_analysis": crash_analysis,
-        "resume": resume,
-        "circuit_breaker_threshold": circuit_breaker,
-    }
-    if output is not None:
-        payload["output_name"] = output
-    # Only set these when explicitly specified by user (None = auto-decide in model_validator)
-    if adb is not None:
-        payload["adb_enabled"] = adb
-    if pcap is not None:
-        payload["pcap_enabled"] = pcap
-    if no_process_check is not None:
-        payload["check_process"] = not no_process_check
-
-    if ipsec_mode is not None:
-        payload["ipsec_mode"] = ipsec_mode
-    if target_msisdn is not None:
-        payload["target_msisdn"] = target_msisdn
-    if impi is not None:
-        payload["impi"] = impi
-    if mt:
-        payload["mt"] = True
-    if mt_invite_template is not None:
-        payload["mt_invite_template"] = mt_invite_template
-
-    if adb_serial is not None:
-        payload["adb_serial"] = adb_serial
-    if adb_buffers is not None:
-        payload["adb_buffers"] = tuple(
-            b.strip() for b in adb_buffers.split(",") if b.strip()
-        )
-
-    payload["ios_enabled"] = ios
-    if ios_udid is not None:
-        payload["ios_udid"] = ios_udid
-    if ios_filter_processes is not None:
-        payload["ios_filter_processes"] = tuple(
-            p.strip() for p in ios_filter_processes.split(",") if p.strip()
-        )
-    payload["ios_run_diagnostics"] = ios_diagnostics
-
-    parsed_methods = _parse_methods(methods)
-    if parsed_methods is not None:
-        payload["methods"] = parsed_methods
-
-    parsed_response_codes = _parse_response_codes(response_codes)
-    if parsed_response_codes is not None:
-        payload["response_codes"] = parsed_response_codes
-
-    if with_dialog is not None:
-        payload["with_dialog"] = with_dialog
-
     # Validate that either target_host or target_msisdn is provided for real-ue-direct mode
-    if mode == "real-ue-direct":
-        if target_host is None and target_msisdn is None:
-            typer.echo(
-                "Error: real-ue-direct mode requires either --target-host or --target-msisdn",
-                err=True,
-            )
-            raise typer.Exit(code=1)
+    if mode == "real-ue-direct" and target_host is None and target_msisdn is None:
+        typer.echo(
+            "Error: real-ue-direct mode requires either --target-host or --target-msisdn",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if ipsec_mode is not None and ipsec_mode not in _IPSEC_MODES:
+        typer.echo(
+            f"Error: --ipsec-mode must be one of {','.join(_IPSEC_MODES)}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    ipsec_mode_value = cast(IpsecMode | None, ipsec_mode)
+
+    _field_defaults = CampaignConfig.model_fields
+    adb_buffers_value: tuple[str, ...] = (
+        tuple(b.strip() for b in adb_buffers.split(",") if b.strip())
+        if adb_buffers is not None
+        else _field_defaults["adb_buffers"].default
+    )
+    ios_filter_processes_value: tuple[str, ...] = (
+        tuple(p.strip() for p in ios_filter_processes.split(",") if p.strip())
+        if ios_filter_processes is not None
+        else _field_defaults["ios_filter_processes"].default
+    )
 
     try:
-        config = CampaignConfig.model_validate(payload)
+        config = CampaignConfig(
+            target_host=target_host,
+            target_port=target_port,
+            transport=transport,
+            mode=mode,
+            methods=_parse_methods(methods) or (),
+            response_codes=_parse_response_codes(response_codes) or (),
+            with_dialog=bool(with_dialog) if with_dialog is not None else False,
+            strategies=strategies,
+            layers=layers,
+            max_cases=max_cases,
+            timeout_seconds=timeout,
+            cooldown_seconds=cooldown,
+            seed_start=seed_start,
+            output_name=output,
+            crash_analysis=crash_analysis,
+            process_name=process_name,
+            check_process=None if no_process_check is None else not no_process_check,
+            log_path=log_path,
+            adb_enabled=adb,
+            adb_serial=adb_serial,
+            ios_enabled=ios,
+            ios_udid=ios_udid,
+            ios_run_diagnostics=ios_diagnostics,
+            pcap_enabled=pcap,
+            pcap_interface=pcap_interface,
+            target_msisdn=target_msisdn,
+            impi=impi,
+            mt=mt,
+            mt_invite_template=mt_invite_template,
+            ipsec_mode=ipsec_mode_value,
+            preserve_via=preserve_via,
+            preserve_contact=preserve_contact,
+            mo_contact_host=mo_contact_host,
+            mo_contact_port_pc=mo_contact_port_pc,
+            mo_contact_port_ps=mo_contact_port_ps,
+            from_msisdn=from_msisdn,
+            mt_local_port=mt_local_port,
+            resume=resume,
+            circuit_breaker_threshold=circuit_breaker,
+            adb_buffers=adb_buffers_value,
+            ios_filter_processes=ios_filter_processes_value,
+        )
     except Exception as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
         raise typer.Exit(code=1)
