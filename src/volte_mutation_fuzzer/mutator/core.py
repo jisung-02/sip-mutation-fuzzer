@@ -531,10 +531,8 @@ class SIPMutator:
 
         if target is not None:
             selected_target = self._build_canonical_model_target(target)
-            if not any(
-                candidate.path == selected_target.path
-                for candidate in available_targets
-            ):
+            before_value = self._get_path_value(packet, selected_target.path)
+            if before_value is _MISSING or before_value is None:
                 raise ValueError(
                     f"model target is not available for packet: {selected_target.path}"
                 )
