@@ -163,6 +163,55 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertTrue(captured["config"].crash_analysis)
 
+    def test_run_command_msisdn_banner_omits_unresolved_port(self) -> None:
+        def _build_executor(config: CampaignConfig) -> Mock:
+            executor = Mock()
+            executor.campaign_dir = Path("results") / "test_run"
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-msisdn-banner",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--mode",
+                    "real-ue-direct",
+                    "--target-msisdn",
+                    "111111",
+                    "--methods",
+                    "OPTIONS",
+                    "--layer",
+                    "model",
+                    "--strategy",
+                    "default",
+                    "--max-cases",
+                    "1",
+                    "--timeout",
+                    "0.1",
+                    "--cooldown",
+                    "0",
+                    "--no-process-check",
+                    "--output",
+                    "test_run",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("target=msisdn:111111", result.output)
+        self.assertNotIn("target=msisdn:111111:5060", result.output)
+
     def test_run_command_invalid_host_exits_nonzero(self) -> None:
         result = self.runner.invoke(
             app,

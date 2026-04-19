@@ -327,13 +327,19 @@ def run_command(
         else "-"
     )
     crash_analysis_label = " crash_analysis=enabled" if config.crash_analysis else ""
+    if config.target_host:
+        target_label = f"{config.target_host}:{config.target_port}"
+    elif config.target_msisdn:
+        target_label = f"msisdn:{config.target_msisdn}"
+    else:
+        target_label = f"-:{config.target_port}"
     print(
         "[vmf campaign] starting: "
         f"methods={methods_label} "
         f"response_codes={response_codes_label} "
         f"with_dialog={config.with_dialog} "
         f"max_cases={max_cases} "
-        f"target={target_host}:{target_port}"
+        f"target={target_label}"
         f"{crash_analysis_label}",
         file=sys.stderr,
     )
