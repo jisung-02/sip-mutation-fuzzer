@@ -36,6 +36,13 @@ class CampaignConfigTests(unittest.TestCase):
         self.assertEqual(cfg.oracle_log_grace_seconds_for_method("OPTIONS"), 1.0)
         self.assertEqual(cfg.oracle_log_grace_seconds_for_method("BYE"), 2.0)
 
+    def test_oracle_log_grace_seconds_for_method_returns_zero_outside_real_ue_direct(
+        self,
+    ) -> None:
+        cfg = CampaignConfig(target_host="127.0.0.1")
+
+        self.assertEqual(cfg.oracle_log_grace_seconds_for_method("INVITE"), 0.0)
+
     def test_oracle_log_grace_seconds_for_method_preserves_explicit_override(self) -> None:
         cfg = CampaignConfig(
             target_host="10.20.20.8",
