@@ -83,7 +83,7 @@ class AdbConnectorTests(unittest.TestCase):
         self.assertEqual(info.error, "adb not found")
 
 
-def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
+def test_take_snapshot_full_profile_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
     outputs: dict[tuple[str, ...], str] = {
         ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
             "telephony output\n"
@@ -118,7 +118,7 @@ def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
     connector = AdbConnector(serial="SER123")
     output_dir = tmp_path / "nested" / "snapshots"
     with patch("subprocess.run", side_effect=fake_run):
-        snapshot = connector.take_snapshot(str(output_dir))
+        snapshot = connector.take_snapshot(str(output_dir), profile="full")
 
     assert output_dir.exists()
     assert snapshot.errors == ()
@@ -137,6 +137,61 @@ def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
     assert Path(snapshot.ims_path).read_text(encoding="utf-8") == "ims output\n"
     assert Path(snapshot.netstat_path).read_text(encoding="utf-8") == "netstat output\n"
     assert Path(snapshot.logcat_path).read_text(encoding="utf-8") == "combined logcat\n"
+
+
+def test_take_snapshot_light_profile_keeps_telephony_and_logcat(
+    tmp_path: Path,
+) -> None:
+    collector = AdbLogCollector()
+    collector.push_for_test("main", "before-window", timestamp=10.0)
+    collector.push_for_test("radio", "radio-window", timestamp=20.0)
+    collector.push_for_test("main", "main-window", timestamp=25.0)
+    collector.push_for_test("main", "after-window", timestamp=40.0)
+
+    called_cmds: list[tuple[str, ...]] = []
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        called_cmds.append(tuple(cmd))
+        if tuple(cmd) == ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"):
+            return _DummyCompletedProcess(stdout="telephony output\n")
+        raise AssertionError(f"unexpected shell command: {cmd}")
+
+    connector = AdbConnector(serial="SER123")
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            profile="light",
+            collector=collector,
+            log_since=10.0,
+            log_until=30.0,
+        )
+
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is None
+    assert snapshot.netstat_path is None
+    assert snapshot.meminfo_path is None
+    assert snapshot.dmesg_path is None
+    assert snapshot.logcat_path is not None
+    assert Path(snapshot.telephony_path).read_text(encoding="utf-8") == (
+        "telephony output\n"
+    )
+    assert Path(tmp_path / "snapshots" / "logcat_main.txt").read_text(
+        encoding="utf-8"
+    ) == "main-window\n"
+    assert Path(tmp_path / "snapshots" / "logcat_radio.txt").read_text(
+        encoding="utf-8"
+    ) == "radio-window\n"
+    assert Path(snapshot.logcat_path).read_text(encoding="utf-8") == (
+        "radio-window\nmain-window\n"
+    )
+    assert called_cmds == [
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"),
+    ]
 
 
 def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:

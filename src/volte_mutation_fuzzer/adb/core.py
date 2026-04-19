@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from volte_mutation_fuzzer.adb.contracts import (
     AdbAnomalyEvent,
@@ -30,6 +30,9 @@ class _AdbHistoryLine:
     timestamp: float
     buffer_name: str
     line: str
+
+
+SnapshotProfile = Literal["light", "full"]
 
 
 class AdbConnector:
@@ -95,6 +98,75 @@ class AdbConnector:
         cmd = self._adb_cmd("shell", *args)
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
+    def _write_logcat_outputs(
+        self,
+        base_dir: Path,
+        *,
+        collector: "AdbLogCollector | None",
+        log_since: float | None,
+        log_until: float | None,
+        errors: list[str],
+    ) -> str | None:
+        logcat_path: str | None = None
+        logcat_buffers = ("main", "system", "radio", "crash")
+
+        if collector is not None and log_since is not None and log_until is not None:
+            log_lines = collector.slice(log_since, log_until)
+            combined_lines = [
+                line
+                for buffer_name, line in log_lines
+                if buffer_name in logcat_buffers
+            ]
+            for buf in logcat_buffers:
+                matched = [
+                    line for buffer_name, line in log_lines if buffer_name == buf
+                ]
+                if not matched:
+                    continue
+                buf_file = base_dir / f"logcat_{buf}.txt"
+                buf_file.write_text(
+                    "\n".join(matched) + "\n",
+                    encoding="utf-8",
+                )
+            if combined_lines:
+                logcat_file = base_dir / "logcat_all.txt"
+                logcat_file.write_text(
+                    "\n".join(combined_lines) + "\n",
+                    encoding="utf-8",
+                )
+                logcat_path = str(logcat_file)
+            return logcat_path
+
+        for buf in logcat_buffers:
+            try:
+                buf_file = base_dir / f"logcat_{buf}.txt"
+                result = subprocess.run(
+                    self._adb_cmd("logcat", "-d", "-b", buf),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode == 0 and result.stdout:
+                    buf_file.write_text(result.stdout, encoding="utf-8")
+            except Exception as exc:
+                errors.append(f"logcat -b {buf} failed: {exc}")
+
+        try:
+            logcat_file = base_dir / "logcat_all.txt"
+            result = subprocess.run(
+                self._adb_cmd("logcat", "-d", "-b", ",".join(logcat_buffers)),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout:
+                logcat_file.write_text(result.stdout, encoding="utf-8")
+                logcat_path = str(logcat_file)
+        except Exception as exc:
+            errors.append(f"logcat dump failed: {exc}")
+
+        return logcat_path
+
     def take_snapshot(
         self,
         output_dir: str,
@@ -103,13 +175,12 @@ class AdbConnector:
         collector: "AdbLogCollector | None" = None,
         log_since: float | None = None,
         log_until: float | None = None,
+        profile: SnapshotProfile = "full",
     ) -> AdbSnapshotResult:
-        """Capture meminfo + dmesg (and optionally bugreport) to output_dir."""
+        """Capture an ADB snapshot to output_dir using a light or full profile."""
         base_dir = Path(output_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
-        meminfo_path: str | None = None
-        dmesg_path: str | None = None
         bugreport_path: str | None = None
 
         def _write_shell_output(filename: str, *args: str, timeout: int) -> str | None:
@@ -134,69 +205,30 @@ class AdbConnector:
         telephony_path = _write_shell_output(
             "telephony.txt", "dumpsys", "telephony.registry", timeout=30
         )
-        ims_path = _write_shell_output(
-            "ims.txt", "dumpsys", "ims", timeout=30
-        )
-        netstat_path = _write_shell_output(
-            "netstat.txt", "netstat", "-tlnup", timeout=10
+        logcat_path = self._write_logcat_outputs(
+            base_dir,
+            collector=collector,
+            log_since=log_since,
+            log_until=log_until,
+            errors=errors,
         )
 
-        logcat_path: str | None = None
-        logcat_buffers = ("main", "system", "radio", "crash")
-        if collector is not None and log_since is not None and log_until is not None:
-            log_lines = collector.slice(log_since, log_until)
-            combined_lines = [line for buffer_name, line in log_lines if buffer_name in logcat_buffers]
-            for buf in logcat_buffers:
-                matched = [line for buffer_name, line in log_lines if buffer_name == buf]
-                if not matched:
-                    continue
-                buf_file = base_dir / f"logcat_{buf}.txt"
-                buf_file.write_text(
-                    "\n".join(matched) + "\n",
-                    encoding="utf-8",
-                )
-            if combined_lines:
-                logcat_file = base_dir / "logcat_all.txt"
-                logcat_file.write_text(
-                    "\n".join(combined_lines) + "\n",
-                    encoding="utf-8",
-                )
-                logcat_path = str(logcat_file)
-        else:
-            # --- Logcat: per-buffer + combined ---
-            for buf in logcat_buffers:
-                try:
-                    buf_file = base_dir / f"logcat_{buf}.txt"
-                    result = subprocess.run(
-                        self._adb_cmd("logcat", "-d", "-b", buf),
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    if result.returncode == 0 and result.stdout:
-                        buf_file.write_text(result.stdout, encoding="utf-8")
-                except Exception as exc:
-                    errors.append(f"logcat -b {buf} failed: {exc}")
+        ims_path: str | None = None
+        netstat_path: str | None = None
+        meminfo_path: str | None = None
+        dmesg_path: str | None = None
 
-            try:
-                logcat_file = base_dir / "logcat_all.txt"
-                result = subprocess.run(
-                    self._adb_cmd("logcat", "-d", "-b", ",".join(logcat_buffers)),
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode == 0 and result.stdout:
-                    logcat_file.write_text(result.stdout, encoding="utf-8")
-                    logcat_path = str(logcat_file)
-            except Exception as exc:
-                errors.append(f"logcat dump failed: {exc}")
-
-        # --- General system ---
-        meminfo_path = _write_shell_output(
-            "meminfo.txt", "dumpsys", "meminfo", timeout=60
-        )
-        dmesg_path = _write_shell_output("dmesg.txt", "dmesg", timeout=60)
+        if profile == "full":
+            ims_path = _write_shell_output(
+                "ims.txt", "dumpsys", "ims", timeout=30
+            )
+            netstat_path = _write_shell_output(
+                "netstat.txt", "netstat", "-tlnup", timeout=10
+            )
+            meminfo_path = _write_shell_output(
+                "meminfo.txt", "dumpsys", "meminfo", timeout=60
+            )
+            dmesg_path = _write_shell_output("dmesg.txt", "dmesg", timeout=60)
 
         if bugreport:
             path = base_dir / "bugreport.txt"
