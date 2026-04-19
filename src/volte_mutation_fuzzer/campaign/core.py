@@ -709,29 +709,11 @@ class CampaignExecutor:
                 log_path=config.log_path,
                 process_check_interval=10,
             )
-            adb_snapshot_dir: str | None = None
-            if config.adb_enabled:
-                try:
-                    from volte_mutation_fuzzer.adb.core import AdbConnector
-
-                    snapshot_until = time.time()
-                    adb_snapshot_dir = str(
-                        self._campaign_dir
-                        / "adb_snapshots"
-                        / f"case_{spec.case_id}"
-                    )
-                    AdbConnector(serial=config.adb_serial).take_snapshot(
-                        adb_snapshot_dir,
-                        collector=self._adb_collector,
-                        log_since=timestamp,
-                        log_until=snapshot_until,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "failed to capture adb snapshot for case %s: %s",
-                        spec.case_id,
-                        exc,
-                    )
+            adb_snapshot_dir = self._capture_adb_snapshot(
+                spec,
+                timestamp=timestamp,
+                verdict=verdict.verdict,
+            )
 
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated.records
@@ -1100,30 +1082,12 @@ class CampaignExecutor:
                 process_check_interval=10,
             )
 
-            # 11. ADB snapshot (every case)
-            adb_snapshot_dir: str | None = None
-            if config.adb_enabled:
-                try:
-                    from volte_mutation_fuzzer.adb.core import AdbConnector
-
-                    snapshot_until = time.time()
-                    adb_snapshot_dir = str(
-                        self._campaign_dir
-                        / "adb_snapshots"
-                        / f"case_{spec.case_id}"
-                    )
-                    AdbConnector(serial=config.adb_serial).take_snapshot(
-                        adb_snapshot_dir,
-                        collector=self._adb_collector,
-                        log_since=timestamp,
-                        log_until=snapshot_until,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "failed to capture adb snapshot for case %s: %s",
-                        spec.case_id,
-                        exc,
-                    )
+            # 11. ADB snapshot (profile depends on verdict)
+            adb_snapshot_dir = self._capture_adb_snapshot(
+                spec,
+                timestamp=timestamp,
+                verdict=verdict.verdict,
+            )
 
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated_wire.records
@@ -1455,6 +1419,46 @@ class CampaignExecutor:
                 summary.infra_failure += 1
             case _:
                 summary.unknown += 1
+
+    @staticmethod
+    def _snapshot_profile_for_verdict(verdict: str) -> Literal["light", "full"]:
+        if verdict in ("suspicious", "crash", "stack_failure"):
+            return "full"
+        return "light"
+
+    def _capture_adb_snapshot(
+        self,
+        spec: CaseSpec,
+        *,
+        timestamp: float,
+        verdict: str,
+    ) -> str | None:
+        config = self._config
+        if not config.adb_enabled:
+            return None
+
+        try:
+            from volte_mutation_fuzzer.adb.core import AdbConnector
+
+            snapshot_until = time.time()
+            adb_snapshot_dir = str(
+                self._campaign_dir / "adb_snapshots" / f"case_{spec.case_id}"
+            )
+            AdbConnector(serial=config.adb_serial).take_snapshot(
+                adb_snapshot_dir,
+                collector=self._adb_collector,
+                log_since=timestamp,
+                log_until=snapshot_until,
+                profile=self._snapshot_profile_for_verdict(verdict),
+            )
+            return adb_snapshot_dir
+        except Exception as exc:
+            logger.warning(
+                "failed to capture adb snapshot for case %s: %s",
+                spec.case_id,
+                exc,
+            )
+            return None
 
     def _raw_response_from_send_result(
         self, verdict: str, send_result: SendReceiveResult
