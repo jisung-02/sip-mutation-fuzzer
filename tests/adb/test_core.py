@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from volte_mutation_fuzzer.adb.contracts import AdbCollectorConfig
 from volte_mutation_fuzzer.adb.core import (
     AdbAnomalyDetector,
@@ -192,6 +194,79 @@ def test_take_snapshot_light_profile_keeps_telephony_and_logcat(
     assert called_cmds == [
         ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"),
     ]
+
+
+def test_take_snapshot_light_profile_without_collector_skips_heavy_outputs(
+    tmp_path: Path,
+) -> None:
+    outputs: dict[tuple[str, ...], str] = {
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
+            "telephony output\n"
+        ),
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "main"): "main logcat\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "system"): "",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "radio"): "radio logcat\n",
+        ("adb", "-s", "SER123", "logcat", "-d", "-b", "crash"): "",
+        (
+            "adb",
+            "-s",
+            "SER123",
+            "logcat",
+            "-d",
+            "-b",
+            "main,system,radio,crash",
+        ): "combined logcat\n",
+    }
+    called_cmds: list[tuple[str, ...]] = []
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        key = tuple(cmd)
+        called_cmds.append(key)
+        if key in outputs:
+            return _DummyCompletedProcess(stdout=outputs[key])
+        raise AssertionError(f"unexpected command for light profile: {cmd}")
+
+    connector = AdbConnector(serial="SER123")
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            profile="light",
+        )
+
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is None
+    assert snapshot.netstat_path is None
+    assert snapshot.meminfo_path is None
+    assert snapshot.dmesg_path is None
+    assert snapshot.logcat_path is not None
+    assert Path(snapshot.logcat_path).read_text(encoding="utf-8") == "combined logcat\n"
+    assert ("adb", "-s", "SER123", "shell", "dumpsys", "ims") not in called_cmds
+    assert ("adb", "-s", "SER123", "shell", "netstat", "-tlnup") not in called_cmds
+    assert ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo") not in called_cmds
+    assert ("adb", "-s", "SER123", "shell", "dmesg") not in called_cmds
+
+
+def test_take_snapshot_rejects_unknown_profile(tmp_path: Path) -> None:
+    connector = AdbConnector(serial="SER123")
+
+    with pytest.raises(ValueError, match="unsupported snapshot profile"):
+        connector.take_snapshot(str(tmp_path / "snapshots"), profile="unknown")
+
+
+def test_take_snapshot_light_profile_rejects_bugreport(tmp_path: Path) -> None:
+    connector = AdbConnector(serial="SER123")
+
+    with pytest.raises(ValueError, match="bugreport requires profile='full'"):
+        connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            profile="light",
+            bugreport=True,
+        )
 
 
 def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:

@@ -178,6 +178,11 @@ class AdbConnector:
         profile: SnapshotProfile = "full",
     ) -> AdbSnapshotResult:
         """Capture an ADB snapshot to output_dir using a light or full profile."""
+        if profile not in ("light", "full"):
+            raise ValueError(f"unsupported snapshot profile: {profile}")
+        if bugreport and profile != "full":
+            raise ValueError("bugreport requires profile='full'")
+
         base_dir = Path(output_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
         errors: list[str] = []
