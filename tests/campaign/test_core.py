@@ -5,6 +5,7 @@ import unittest
 import unittest.mock
 from types import SimpleNamespace
 from pathlib import Path
+from typing import Literal
 
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.contracts import (
@@ -34,7 +35,7 @@ class CaseGeneratorTests(unittest.TestCase):
     def _config(self, **kwargs) -> CampaignConfig:
         defaults = dict(target_host="127.0.0.1")
         defaults.update(kwargs)
-        return CampaignConfig(**defaults)
+        return CampaignConfig.model_validate(defaults)
 
     def test_methods_generate_direct_combinations(self) -> None:
         cfg = self._config(methods=("OPTIONS", "INVITE"), max_cases=8)
@@ -255,6 +256,7 @@ class ResultStoreTests(unittest.TestCase):
 
             result = store.read_case(3)
             self.assertIsNotNone(result)
+            assert result is not None
             self.assertEqual(result.case_id, 3)
 
     def test_read_case_not_found(self) -> None:
@@ -289,7 +291,7 @@ class ResultStoreTests(unittest.TestCase):
 
 
 class CampaignExecutorTests(unittest.TestCase):
-    def _make_config(self, host: str, port: int, **kwargs) -> CampaignConfig:
+    def _make_config(self, host: str | None, port: int, **kwargs) -> CampaignConfig:
         defaults = dict(
             target_host=host,
             target_port=port,
@@ -304,7 +306,7 @@ class CampaignExecutorTests(unittest.TestCase):
             pcap_enabled=False,
         )
         defaults.update(kwargs)
-        return CampaignConfig(**defaults)
+        return CampaignConfig.model_validate(defaults)
 
     def test_run_small_campaign_produces_results(self) -> None:
         responder = UDPResponder(
@@ -603,7 +605,11 @@ class CampaignExecutorTests(unittest.TestCase):
             ) as report_mock:
                 executor = CampaignExecutor(cfg)
                 executor._crash_analyzer = analyzer
-                executor._execute_case = unittest.mock.Mock(return_value=fake_case)
+                setattr(
+                    executor,
+                    "_execute_case",
+                    unittest.mock.Mock(return_value=fake_case),
+                )
                 executor.run()
 
             self.assertEqual(analyze_mock.call_count, 1)
@@ -1287,11 +1293,11 @@ class SACircuitBreakerTests(unittest.TestCase):
 
             # Mock _execute_case to always return timeout
             call_count = [0]
-            def fake_execute(spec):
+            def fake_execute(spec: CaseSpec) -> CaseResult:
                 call_count[0] += 1
                 return self._make_timeout_case(spec.case_id)
 
-            executor._execute_case = fake_execute
+            setattr(executor, "_execute_case", fake_execute)
 
             # Mock SA check to return dead
             from volte_mutation_fuzzer.sender.real_ue import IPsecSAStatus
@@ -1355,7 +1361,13 @@ class InviteTeardownTests(unittest.TestCase):
             SocketObservation,
         )
 
-        def _classify(code: int) -> str:
+        def _classify(code: int) -> Literal[
+            "provisional",
+            "success",
+            "client_error",
+            "server_error",
+            "invalid",
+        ]:
             if 100 <= code < 200:
                 return "provisional"
             if 200 <= code < 300:

@@ -17,7 +17,9 @@ class AdbDeviceInfoTests(unittest.TestCase):
 
     def test_extra_forbidden(self) -> None:
         with self.assertRaises(ValidationError):
-            AdbDeviceInfo(serial="emu", state="device", extra_field=True)
+            AdbDeviceInfo.model_validate(
+                {"serial": "emu", "state": "device", "extra_field": True}
+            )
 
 
 class AdbCollectorConfigTests(unittest.TestCase):
@@ -29,7 +31,7 @@ class AdbCollectorConfigTests(unittest.TestCase):
 
     def test_extra_forbidden(self) -> None:
         with self.assertRaises(ValidationError):
-            AdbCollectorConfig(unknown="value")
+            AdbCollectorConfig.model_validate({"unknown": "value"})
 
 
 class AdbSnapshotResultTests(unittest.TestCase):

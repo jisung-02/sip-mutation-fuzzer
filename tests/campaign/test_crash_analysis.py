@@ -24,7 +24,7 @@ class CampaignCrashAnalyzerTests(unittest.TestCase):
             "pcap_path": None,
         }
         payload.update(kwargs)
-        return CaseResult(**payload)
+        return CaseResult.model_validate(payload)
 
     def test_normal_case_only_updates_totals(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -64,6 +64,8 @@ class CampaignCrashAnalyzerTests(unittest.TestCase):
             report_file, json_file = analyzer.generate_final_report() or (None, None)
             self.assertIsNotNone(report_file)
             self.assertIsNotNone(json_file)
+            assert report_file is not None
+            assert json_file is not None
             self.assertTrue(Path(report_file).exists())
             self.assertTrue(Path(json_file).exists())
 

@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+from typing import cast
 from unittest.mock import patch
 
 from volte_mutation_fuzzer.adb.core import AdbAnomalyDetector
@@ -17,6 +18,8 @@ from volte_mutation_fuzzer.oracle.core import (
     SocketOracle,
 )
 from volte_mutation_fuzzer.sender.contracts import (
+    DeliveryOutcome,
+    ObservationClass,
     SendReceiveResult,
     SocketObservation,
     TargetEndpoint,
@@ -24,7 +27,7 @@ from volte_mutation_fuzzer.sender.contracts import (
 
 
 def _make_result(
-    outcome: str,
+    outcome: DeliveryOutcome,
     status_code: int | None = None,
     elapsed_ms: float = 50.0,
     error: str | None = None,
@@ -33,7 +36,7 @@ def _make_result(
     responses: tuple[SocketObservation, ...] = ()
     if status_code is not None:
         if 100 <= status_code <= 199:
-            cls = "provisional"
+            cls: ObservationClass = "provisional"
         elif 200 <= status_code <= 299:
             cls = "success"
         elif 300 <= status_code <= 399:
@@ -148,6 +151,7 @@ class ProcessOracleTests(unittest.TestCase):
             result = self.oracle.check("baresip")
         self.assertFalse(result.alive)
         self.assertIsNotNone(result.error)
+        assert result.error is not None
         self.assertIn("pgrep not found", result.error)
 
 
@@ -294,6 +298,7 @@ class LogOracleTests(unittest.TestCase):
             result, _ = self.oracle.check(path)
             self.assertTrue(result.matched)
             self.assertEqual(result.matched_pattern, "SIGSEGV")
+            assert result.matched_line is not None
             self.assertIn("SIGSEGV", result.matched_line)
         finally:
             os.unlink(path)
@@ -579,6 +584,15 @@ class OracleEngineDockerTests(unittest.TestCase):
 class _CollectorStub:
     def __init__(self, lines: list[tuple[str, str]]) -> None:
         self._lines = list(lines)
+        self.is_running = True
+
+    @property
+    def is_healthy(self) -> bool:
+        return True
+
+    @property
+    def dead_buffers(self) -> frozenset[str]:
+        return frozenset()
 
     def get_lines(self) -> list[tuple[str, str]]:
         lines = list(self._lines)
@@ -656,6 +670,7 @@ class AdbOracleTests(unittest.TestCase):
         result = oracle.check()
         self.assertFalse(result.matched)
         self.assertIsNotNone(result.error)
+        assert result.error is not None
         self.assertIn("disconnected", result.error)
         self.assertIn("main", result.error)
 
@@ -671,14 +686,16 @@ class OracleEngineWithAdbTests(unittest.TestCase):
         self.ctx = OracleContext(method="OPTIONS")
 
     def test_adb_oracle_triggers_stack_failure_verdict(self) -> None:
-        engine = OracleEngine(adb_oracle=_AdbOracleStub(True, r"SIGSEGV|signal 11"))
+        engine = OracleEngine(
+            adb_oracle=cast(AdbOracle, _AdbOracleStub(True, r"SIGSEGV|signal 11"))
+        )
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "stack_failure")
         self.assertEqual(verdict.confidence, 0.80)
         self.assertIn("ADB anomaly detected", verdict.reason)
 
     def test_adb_oracle_no_events_falls_through_to_normal_verdict(self) -> None:
-        engine = OracleEngine(adb_oracle=_AdbOracleStub(False))
+        engine = OracleEngine(adb_oracle=cast(AdbOracle, _AdbOracleStub(False)))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "normal")
 
@@ -788,13 +805,15 @@ class OracleEngineWithIosTests(unittest.TestCase):
         self.ctx = OracleContext(method="OPTIONS")
 
     def test_ios_oracle_triggers_stack_failure_verdict(self) -> None:
-        engine = OracleEngine(ios_oracle=_IosOracleStub(True, r"EXC_BAD_ACCESS"))
+        engine = OracleEngine(
+            ios_oracle=cast(IosOracle, _IosOracleStub(True, r"EXC_BAD_ACCESS"))
+        )
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "stack_failure")
         self.assertEqual(verdict.confidence, 0.80)
         self.assertIn("iOS anomaly detected", verdict.reason)
 
     def test_ios_oracle_no_events_falls_through_to_normal_verdict(self) -> None:
-        engine = OracleEngine(ios_oracle=_IosOracleStub(False))
+        engine = OracleEngine(ios_oracle=cast(IosOracle, _IosOracleStub(False)))
         verdict = engine.evaluate(_make_result("success", status_code=200), self.ctx)
         self.assertEqual(verdict.verdict, "normal")

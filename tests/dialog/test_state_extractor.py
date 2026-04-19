@@ -1,6 +1,7 @@
 from volte_mutation_fuzzer.dialog.state_extractor import extract_dialog_state
 from volte_mutation_fuzzer.generator.contracts import DialogContext
 from volte_mutation_fuzzer.sender.contracts import SocketObservation
+from volte_mutation_fuzzer.sip.common import SIPURI
 
 
 def _make_observation(headers: dict[str, str]) -> SocketObservation:
@@ -46,15 +47,13 @@ class TestExtractContactUri:
         obs = _make_observation({"Contact": "<sip:ue@10.0.0.1:5060>"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
-        assert ctx.request_uri is not None
+        assert isinstance(ctx.request_uri, SIPURI)
         assert ctx.request_uri.host == "10.0.0.1"
 
     def test_contact_port_extracted(self) -> None:
         obs = _make_observation({"Contact": "<sip:ue@10.0.0.1:5070>"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
-        from volte_mutation_fuzzer.sip.common import SIPURI
-
         assert isinstance(ctx.request_uri, SIPURI)
         assert ctx.request_uri.port == 5070
 
@@ -86,8 +85,6 @@ class TestExtractRecordRoute:
         )
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
-        from volte_mutation_fuzzer.sip.common import SIPURI
-
         assert len(ctx.route_set) == 2
         assert isinstance(ctx.route_set[0], SIPURI)
         # p2 should be first after reversal

@@ -362,6 +362,7 @@ class CampaignCrashAnalyzer:
             packet_summary = self.packet_analyzer.analyze_pcap(case_result.pcap_path)
 
         mutation_ops = case_result.mutation_ops
+        mutation_ops_list: list[str]
         if isinstance(mutation_ops, str):
             mutation_ops_list = [mutation_ops]
         elif isinstance(mutation_ops, (list, tuple)):

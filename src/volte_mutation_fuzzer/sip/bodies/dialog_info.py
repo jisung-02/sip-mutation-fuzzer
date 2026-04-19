@@ -66,8 +66,8 @@ class DialogInfoBody(SIPBody):
         return "\r\n".join(lines)
 
     @classmethod
-    def default_instance(cls, **kwargs) -> Self:
-        defaults = {
+    def default_instance(cls, **kwargs: object) -> Self:
+        defaults: dict[str, object] = {
             "entity": "sip:alice@example.com",
             "dialogs": (
                 Dialog(
@@ -81,4 +81,4 @@ class DialogInfoBody(SIPBody):
             ),
         }
         defaults.update(kwargs)
-        return cls(**defaults)
+        return cls.model_validate(defaults)

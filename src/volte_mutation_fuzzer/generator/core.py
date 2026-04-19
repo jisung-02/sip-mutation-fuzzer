@@ -696,7 +696,6 @@ class SIPGenerator:
     def _apply_3gpp_invite_defaults(self, defaults: dict[str, Any]) -> None:
         """INVITE-specific 3GPP IMS headers and SDP."""
         s = self.settings
-        domain = s.ims_domain
         pcscf_ip = s.via_host  # P-CSCF IP = Via host
 
         # Record-Route (P-CSCF + S-CSCF x2)

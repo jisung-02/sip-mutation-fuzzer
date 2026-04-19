@@ -2,8 +2,8 @@ import os
 import re
 import socket
 import time
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from collections.abc import Sequence
 from typing import Final
 
 from volte_mutation_fuzzer.sender.contracts import (
@@ -97,7 +97,7 @@ def parse_sip_response(
 
     remote_host: str | None = None
     remote_port: int | None = None
-    if remote_addr is not None and len(remote_addr) >= 2:  # type: ignore[arg-type]
+    if remote_addr is not None and len(remote_addr) >= 2:
         remote_host = str(remote_addr[0])
         remote_port_candidate = remote_addr[1]
         if isinstance(remote_port_candidate, int):
@@ -143,7 +143,7 @@ class SIPSenderReactor:
         self,
         *,
         auto_setup_route: bool = True,
-        env: dict[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self._auto_setup_route = auto_setup_route
         self._env = os.environ if env is None else env

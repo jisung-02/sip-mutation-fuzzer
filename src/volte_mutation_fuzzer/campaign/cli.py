@@ -315,7 +315,7 @@ def run_command(
             raise typer.Exit(code=1)
 
     try:
-        config = CampaignConfig(**payload)
+        config = CampaignConfig.model_validate(payload)
     except Exception as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
         raise typer.Exit(code=1)

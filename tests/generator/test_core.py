@@ -709,6 +709,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         assert packet.supported is not None
         self.assertIn("100rel", packet.supported)
         self.assertIsNotNone(packet.timestamp)
+        assert packet.timestamp is not None
         self.assertGreater(packet.timestamp, 0)
 
     def test_request_defaults_populate_contact_for_bye(self) -> None:
@@ -727,6 +728,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         packet = ByeRequest.model_validate(defaults)
 
         self.assertIsNotNone(packet.contact)
+        assert packet.contact is not None
         self.assertEqual(len(packet.contact), 1)
 
     def test_overrides_take_precedence_over_optional_defaults(self) -> None:
@@ -745,6 +747,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             context,
         )
 
+        assert isinstance(packet, InviteRequest)
         self.assertEqual(packet.session_expires, 900)
         self.assertEqual(packet.supported, ("custom",))
         self.assertEqual(packet.subject, "Overridden Subject")

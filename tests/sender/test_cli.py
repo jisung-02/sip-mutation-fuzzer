@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from tests.sender._server import TCPResponder, UDPResponder
 from volte_mutation_fuzzer.generator.cli import app
-from volte_mutation_fuzzer.sender.contracts import SendReceiveResult
+from volte_mutation_fuzzer.sender.contracts import SendReceiveResult, TargetEndpoint
 from volte_mutation_fuzzer.sender.real_ue import ResolvedRealUETarget, RouteCheckResult
 
 
@@ -389,7 +389,7 @@ class SIPSenderCLITests(unittest.TestCase):
         self.addCleanup(responder.close)
 
         def _resolve(
-            target: object, impi: str | None = None
+            target: TargetEndpoint, impi: str | None = None
         ) -> ResolvedRealUETarget:
             self.assertIsNone(target.port)
             return ResolvedRealUETarget(

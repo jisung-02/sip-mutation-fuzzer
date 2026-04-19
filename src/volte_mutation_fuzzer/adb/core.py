@@ -1,9 +1,11 @@
 import subprocess
 import threading
 import time
+from collections.abc import Iterable
 from collections import deque
 from pathlib import Path
 from queue import Empty, Queue
+from typing import Protocol, cast
 
 from volte_mutation_fuzzer.adb.contracts import (
     AdbAnomalyEvent,
@@ -12,6 +14,14 @@ from volte_mutation_fuzzer.adb.contracts import (
     AdbSnapshotResult,
 )
 from volte_mutation_fuzzer.adb.patterns import ANOMALY_PATTERNS, AnomalyPattern
+
+
+class _PopenLike(Protocol):
+    stdout: Iterable[str] | None
+
+    def wait(self, timeout: int | float | None = None) -> object: ...
+
+    def kill(self) -> object: ...
 
 
 class AdbConnector:
@@ -299,8 +309,8 @@ class AdbLogCollector:
         with self._lock:
             return self._reconnect_count
 
-    def _reader_loop(self, buffer_name: str, proc: subprocess.Popen[str]) -> None:
-        current_proc = proc
+    def _reader_loop(self, buffer_name: str, proc: object) -> None:
+        current_proc = cast(_PopenLike, proc)
         consecutive_failures = 0
 
         while self._running.is_set():

@@ -1,7 +1,7 @@
 """Extract SIP dialog state from server responses."""
 
 import re
-from typing import Final
+from typing import Final, Literal
 
 from volte_mutation_fuzzer.generator.contracts import DialogContext
 from volte_mutation_fuzzer.sender.contracts import SocketObservation
@@ -37,7 +37,12 @@ def _parse_sip_uri(uri_str: str) -> SIPURI | None:
     uri_str = uri_str.split(";")[0].strip()  # drop parameters
     try:
         scheme, rest = uri_str.split(":", 1)
-        if scheme.lower() not in ("sip", "sips"):
+        scheme_lower = scheme.lower()
+        if scheme_lower == "sip":
+            parsed_scheme: Literal["sip", "sips", "tel"] = "sip"
+        elif scheme_lower == "sips":
+            parsed_scheme = "sips"
+        else:
             return None
         # rest is user@host:port or host:port
         port: int | None = None
@@ -54,7 +59,7 @@ def _parse_sip_uri(uri_str: str) -> SIPURI | None:
                 host = hostpart
         else:
             host = hostpart
-        return SIPURI(scheme=scheme.lower(), user=user, host=host, port=port)
+        return SIPURI(scheme=parsed_scheme, user=user, host=host, port=port)
     except Exception:
         return None
 

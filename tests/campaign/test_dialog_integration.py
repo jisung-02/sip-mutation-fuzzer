@@ -1,6 +1,5 @@
 import tempfile
 import unittest
-from pathlib import Path
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig, CaseSpec
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor
@@ -30,7 +29,7 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
             results_dir=tmpdir.name, output_name="test",
         )
         defaults.update(kwargs)
-        return CampaignConfig(**defaults)
+        return CampaignConfig.model_validate(defaults)
 
     @staticmethod
     def _make_case_spec(method: str) -> CaseSpec:
@@ -101,4 +100,3 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
 
         self.assertNotEqual(result.verdict, "unknown")
         self.assertEqual(self._methods_seen(server), ["OPTIONS"])
-

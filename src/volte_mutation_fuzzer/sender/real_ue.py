@@ -5,6 +5,7 @@ import re
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -54,7 +55,7 @@ _DEFAULT_MSISDN_TO_IP: Final[dict[str, str]] = {
 
 
 def resolve_ue_ip_from_msisdn(
-    msisdn: str, *, env: dict[str, str] | None = None
+    msisdn: str, *, env: Mapping[str, str] | None = None
 ) -> str:
     """Resolve UE IP address from MSISDN.
 
@@ -68,13 +69,12 @@ def resolve_ue_ip_from_msisdn(
     Raises:
         ValueError: If MSISDN is not found in mapping table
     """
-    if env is None:
-        env = os.environ
+    source = os.environ if env is None else env
 
     # Check for environment variable override: VMF_MSISDN_TO_IP_<msisdn>
     env_key = f"VMF_MSISDN_TO_IP_{msisdn}"
-    if env_key in env:
-        return env[env_key]
+    if env_key in source:
+        return source[env_key]
 
     # Check default mapping table
     if msisdn in _DEFAULT_MSISDN_TO_IP:
@@ -154,7 +154,7 @@ class RouteCheckResult:
 class RealUEDirectResolver:
     """Resolves capstone-style real UE targets from static or lab-backed sources."""
 
-    def __init__(self, env: dict[str, str] | None = None) -> None:
+    def __init__(self, env: Mapping[str, str] | None = None) -> None:
         source = os.environ if env is None else env
         self._env = source
         self.scscf_container = source.get(
@@ -484,7 +484,7 @@ def resolve_ue_protected_ports(
     *,
     msisdn: str,
     pcscf_container: str = _DEFAULT_PCSCF_CONTAINER,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[int, int]:
     """Return ``(port_pc, port_ps)`` for *msisdn* by querying the P-CSCF container.
 
@@ -590,7 +590,7 @@ def resolve_native_ipsec_session(
     *,
     ue_ip: str,
     pcscf_container: str = _DEFAULT_PCSCF_CONTAINER,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> ResolvedNativeIPsecSession:
     source = os.environ if env is None else env
     pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_REAL_UE_PCSCF_IP)
@@ -752,7 +752,7 @@ def check_route_to_target(target_ip: str) -> RouteCheckResult:
 def setup_route_to_target(
     target_ip: str,
     *,
-    env: dict[str, str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> RouteCheckResult:
     source = os.environ if env is None else env
     ims_subnet = (

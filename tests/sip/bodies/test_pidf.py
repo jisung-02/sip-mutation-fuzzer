@@ -14,6 +14,7 @@ class PIdfBodyTests(unittest.TestCase):
         self.assertEqual(root.tag, "{urn:ietf:params:xml:ns:pidf}presence")
         tuple_element = root.find("{urn:ietf:params:xml:ns:pidf}tuple")
         self.assertIsNotNone(tuple_element)
+        assert tuple_element is not None
         self.assertEqual(tuple_element.attrib["id"], "t1")
         self.assertIn("<basic>open</basic>", rendered)
         self.assertIn("<contact>sip:alice@example.com</contact>", rendered)

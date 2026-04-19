@@ -4,7 +4,9 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Protocol, cast
 
 from volte_mutation_fuzzer.ios.contracts import (
     IosAnomalyEvent,
@@ -26,6 +28,14 @@ _SYSLOG_LINE = re.compile(
     r"(?:<(?P<level>\w+)>:?)?\s*"
     r"(?P<message>.*)$"
 )
+
+
+class _PopenLike(Protocol):
+    stdout: Iterable[str] | None
+
+    def wait(self, timeout: int | float | None = None) -> object: ...
+
+    def kill(self) -> object: ...
 
 
 def _parse_syslog_line(line: str, host_ts: float) -> IosSyslogLine:
@@ -300,8 +310,8 @@ class IosSyslogCollector:
         with self._lock:
             self._dead = False
 
-    def _reader_loop(self, proc: subprocess.Popen[str]) -> None:
-        current = proc
+    def _reader_loop(self, proc: object) -> None:
+        current = cast(_PopenLike, proc)
         consecutive_failures = 0
 
         while self._running.is_set():

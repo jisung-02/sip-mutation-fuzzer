@@ -328,6 +328,7 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.assertEqual(len(result.responses), 1)
         self.assertEqual(result.responses[0].status_code, 200)
         self.assertIsNotNone(result.final_response)
+        assert result.final_response is not None
         self.assertEqual(result.final_response.status_code, 200)
         self.assertIn("resolver:static:10.20.20.8:5060", result.observer_events)
         self.assertIn("native-ipsec:preflight:ok:pcscf", result.observer_events)

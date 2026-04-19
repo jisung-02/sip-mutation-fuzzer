@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Literal, cast
 
 from volte_mutation_fuzzer.campaign.contracts import (
     CampaignConfig,
@@ -31,7 +32,11 @@ from volte_mutation_fuzzer.generator.real_ue_mt_template import (
     load_mt_invite_template,
     render_mt_invite,
 )
-from volte_mutation_fuzzer.mutator.contracts import MutationConfig, MutatedCase
+from volte_mutation_fuzzer.mutator.contracts import (
+    MutationConfig,
+    MutatedCase,
+    PacketModel,
+)
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.mutator.editable import parse_editable_from_wire
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
@@ -40,6 +45,8 @@ from volte_mutation_fuzzer.sender.contracts import (
     SendArtifact,
     SendReceiveResult,
     TargetEndpoint,
+    TargetMode,
+    TransportProtocol,
 )
 from volte_mutation_fuzzer.sender.core import SIPSenderReactor
 from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver, check_ipsec_sa_alive
@@ -316,7 +323,7 @@ class CampaignExecutor:
         self._generator = generator or SIPGenerator(GeneratorSettings())
         self._mutator = mutator or SIPMutator()
         self._sender = sender or SIPSenderReactor()
-        self._adb_collector: object = None
+        self._adb_collector: Any | None = None
         _docker_mode = config.mode == "real-ue-direct"
         if oracle is not None:
             self._oracle = oracle
@@ -358,8 +365,8 @@ class CampaignExecutor:
         self._target = TargetEndpoint(
             host=config.target_host,
             port=target_port,
-            transport=config.transport,
-            mode=config.mode,
+            transport=cast(TransportProtocol, config.transport),
+            mode=cast(TargetMode, config.mode),
             timeout_seconds=config.timeout_seconds,
             msisdn=config.target_msisdn,
             ipsec_mode=config.ipsec_mode,
@@ -626,7 +633,7 @@ class CampaignExecutor:
                 MutationConfig(
                     seed=spec.seed,
                     strategy=spec.strategy,
-                    layer=spec.layer,
+                    layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
                 ),
             )
             artifact = self._artifact_from_mutated(mutated)
@@ -935,7 +942,9 @@ class CampaignExecutor:
                 MutationConfig(
                     seed=spec.seed,
                     strategy=spec.strategy,
-                    layer=effective_layer,
+                    layer=cast(
+                        Literal["model", "wire", "byte", "auto"], effective_layer
+                    ),
                 ),
             )
 
@@ -1156,7 +1165,7 @@ class CampaignExecutor:
         mutation_config = MutationConfig(
             seed=spec.seed,
             strategy=spec.strategy,
-            layer=spec.layer,
+            layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
         )
         config = self._config
         capture: PcapCapture | None = None
@@ -1257,7 +1266,7 @@ class CampaignExecutor:
             pcap_path=pcap_path_saved,
         )
 
-    def _build_packet(self, spec: CaseSpec) -> object:
+    def _build_packet(self, spec: CaseSpec) -> PacketModel:
         if spec.response_code is None:
             context = (
                 self._synthetic_dialog_context() if self._config.with_dialog else None

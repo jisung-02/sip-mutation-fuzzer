@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """CLI wrapper for the shared campaign crash analyzer."""
 
 from __future__ import annotations

@@ -63,8 +63,8 @@ class ReginfoBody(SIPBody):
         return "\r\n".join(lines)
 
     @classmethod
-    def default_instance(cls, **kwargs) -> Self:
-        defaults = {
+    def default_instance(cls, **kwargs: object) -> Self:
+        defaults: dict[str, object] = {
             "registrations": (
                 Registration(
                     aor="sip:alice@example.com",
@@ -79,4 +79,4 @@ class ReginfoBody(SIPBody):
             ),
         }
         defaults.update(kwargs)
-        return cls(**defaults)
+        return cls.model_validate(defaults)

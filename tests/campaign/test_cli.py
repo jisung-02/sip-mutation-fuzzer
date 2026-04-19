@@ -128,9 +128,7 @@ class CampaignRunCLITests(unittest.TestCase):
             )
             return executor
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out = str(Path(tmpdir) / "out.jsonl")
-            analysis_dir = str(Path(tmpdir) / "crash-analysis")
+        with tempfile.TemporaryDirectory():
             with patch(
                 "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
                 side_effect=_build_executor,

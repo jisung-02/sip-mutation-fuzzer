@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import typer
 from pydantic import ValidationError
@@ -150,7 +150,10 @@ def _build_target(
             mode=cast(TargetMode, mode),
             timeout_seconds=timeout_seconds,
             label=label,
-            ipsec_mode=ipsec_mode,
+            ipsec_mode=cast(
+                Literal["null", "bypass", "native", "ipsec"] | None,
+                normalized_ipsec_mode,
+            ),
         )
     except ValidationError as exc:
         raise typer.BadParameter(str(exc)) from exc

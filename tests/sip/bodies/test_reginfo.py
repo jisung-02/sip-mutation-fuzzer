@@ -18,6 +18,7 @@ class ReginfoBodyTests(unittest.TestCase):
         self.assertEqual(root.tag, "{urn:ietf:params:xml:ns:reginfo}reginfo")
         registration = root.find("{urn:ietf:params:xml:ns:reginfo}registration")
         self.assertIsNotNone(registration)
+        assert registration is not None
         self.assertEqual(registration.attrib["aor"], "sip:alice@example.com")
         self.assertIn("<uri>sip:alice@example.com</uri>", rendered)
 

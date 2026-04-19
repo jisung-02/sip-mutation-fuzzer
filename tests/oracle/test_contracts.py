@@ -29,7 +29,7 @@ class OracleContextTests(unittest.TestCase):
 
     def test_extra_fields_forbidden(self) -> None:
         with self.assertRaises(ValidationError):
-            OracleContext(method="OPTIONS", unknown_field="x")
+            OracleContext.model_validate({"method": "OPTIONS", "unknown_field": "x"})
 
 
 class ProcessCheckResultTests(unittest.TestCase):
@@ -80,7 +80,9 @@ class OracleVerdictTests(unittest.TestCase):
 
     def test_invalid_verdict(self) -> None:
         with self.assertRaises(ValidationError):
-            OracleVerdict(verdict="bogus", reason="x", elapsed_ms=0.0)
+            OracleVerdict.model_validate(
+                {"verdict": "bogus", "reason": "x", "elapsed_ms": 0.0}
+            )
 
     def test_confidence_bounds(self) -> None:
         with self.assertRaises(ValidationError):

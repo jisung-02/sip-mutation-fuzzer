@@ -49,7 +49,7 @@ class CampaignConfigTests(unittest.TestCase):
 
     def test_extra_fields_forbidden(self) -> None:
         with self.assertRaises(ValidationError):
-            CampaignConfig(target_host="127.0.0.1", unknown="x")
+            CampaignConfig.model_validate({"target_host": "127.0.0.1", "unknown": "x"})
 
     def test_mt_template_defaults_ipsec_mode_for_real_ue_direct(self) -> None:
         cfg = CampaignConfig(
@@ -154,7 +154,7 @@ class CaseResultTests(unittest.TestCase):
             timestamp=1.0,
         )
         defaults.update(kwargs)
-        return CaseResult(**defaults)
+        return CaseResult.model_validate(defaults)
 
     def test_normal_case(self) -> None:
         r = self._make(response_code=200)
@@ -209,11 +209,13 @@ class CampaignResultTests(unittest.TestCase):
 
     def test_invalid_status(self) -> None:
         with self.assertRaises(ValidationError):
-            CampaignResult(
-                campaign_id="abc",
-                started_at="2026-01-01T00:00:00Z",
-                config=self._make_config(),
-                status="invalid",
+            CampaignResult.model_validate(
+                {
+                    "campaign_id": "abc",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "config": self._make_config().model_dump(mode="json"),
+                    "status": "invalid",
+                }
             )
 
 
@@ -233,7 +235,9 @@ class AdbCampaignConfigTests(unittest.TestCase):
 
     def test_adb_extra_forbid(self) -> None:
         with self.assertRaises(Exception):
-            CampaignConfig(target_host="127.0.0.1", unknown_adb_field=True)
+            CampaignConfig.model_validate(
+                {"target_host": "127.0.0.1", "unknown_adb_field": True}
+            )
 
 
 class IosCampaignConfigTests(unittest.TestCase):

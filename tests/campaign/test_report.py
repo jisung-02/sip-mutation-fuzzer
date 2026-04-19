@@ -1,6 +1,5 @@
 """Tests for HtmlReportGenerator."""
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,7 +30,7 @@ def _make_case(case_id: int, verdict: str, **kwargs) -> CaseResult:
         mutation_ops=("flip_char(Via)",) if verdict != "normal" else (),
     )
     defaults.update(kwargs)
-    return CaseResult(**defaults)
+    return CaseResult.model_validate(defaults)
 
 
 def _write_campaign(tmpdir: str, cases: list[CaseResult]) -> Path:

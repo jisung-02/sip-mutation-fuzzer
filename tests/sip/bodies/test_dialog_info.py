@@ -18,6 +18,7 @@ class DialogInfoBodyTests(unittest.TestCase):
         self.assertEqual(root.tag, "{urn:ietf:params:xml:ns:dialog-info}dialog-info")
         dialog = root.find("{urn:ietf:params:xml:ns:dialog-info}dialog")
         self.assertIsNotNone(dialog)
+        assert dialog is not None
         self.assertEqual(dialog.attrib["call-id"], "call-1")
         self.assertIn("<state>confirmed</state>", rendered)
 

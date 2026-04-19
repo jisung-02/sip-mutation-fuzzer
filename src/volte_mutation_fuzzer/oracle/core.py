@@ -2,6 +2,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from typing import Any, Protocol
 
 from volte_mutation_fuzzer.oracle.contracts import (
     LogCheckResult,
@@ -10,6 +11,36 @@ from volte_mutation_fuzzer.oracle.contracts import (
     ProcessCheckResult,
 )
 from volte_mutation_fuzzer.sender.contracts import SendReceiveResult
+
+
+class SupportsAdbCollector(Protocol):
+    @property
+    def is_healthy(self) -> bool: ...
+
+    @property
+    def is_running(self) -> bool: ...
+
+    @property
+    def dead_buffers(self) -> frozenset[str]: ...
+
+    def get_lines(self) -> Any: ...
+
+
+class SupportsIosCollector(Protocol):
+    @property
+    def is_healthy(self) -> bool: ...
+
+    def slice(self, since_ts: float, until_ts: float) -> Any: ...
+
+
+class SupportsEventDetector(Protocol):
+    def feed_lines(self, lines: Any) -> Any: ...
+
+    def drain_events(self) -> list[Any]: ...
+
+
+class SupportsOracleCheck(Protocol):
+    def check(self) -> LogCheckResult: ...
 
 
 class SocketOracle:
@@ -409,7 +440,11 @@ class LogOracle:
 class AdbOracle:
     """Oracle that checks ADB logcat anomaly events for crash/failure indicators."""
 
-    def __init__(self, collector: object, detector: object) -> None:
+    def __init__(
+        self,
+        collector: SupportsAdbCollector,
+        detector: SupportsEventDetector,
+    ) -> None:
         self._collector = collector
         self._detector = detector
 
@@ -449,7 +484,11 @@ class AdbOracle:
 class IosOracle:
     """Oracle that checks iOS syslog anomaly events for crash/failure indicators."""
 
-    def __init__(self, collector: object, detector: object) -> None:
+    def __init__(
+        self,
+        collector: SupportsIosCollector,
+        detector: SupportsEventDetector,
+    ) -> None:
         self._collector = collector
         self._detector = detector
         self._last_check_ts: float = time.time()
@@ -492,8 +531,8 @@ class OracleEngine:
         socket_oracle: SocketOracle | None = None,
         process_oracle: ProcessOracle | None = None,
         log_oracle: LogOracle | None = None,
-        adb_oracle: AdbOracle | None = None,
-        ios_oracle: IosOracle | None = None,
+        adb_oracle: SupportsOracleCheck | None = None,
+        ios_oracle: SupportsOracleCheck | None = None,
         docker_mode: bool = False,
     ) -> None:
         self._socket_oracle = socket_oracle or SocketOracle()

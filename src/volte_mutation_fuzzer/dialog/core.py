@@ -16,6 +16,7 @@ from volte_mutation_fuzzer.mutator.contracts import MutationConfig, MutatedCase
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.sender.contracts import (
     CorrelationKey,
+    DeliveryOutcome,
     SendArtifact,
     SendReceiveResult,
     SocketObservation,
@@ -176,14 +177,14 @@ class DialogOrchestrator:
             payload = self._build_payload(artifact)
             correlation_key = CorrelationKey(
                 call_id=getattr(packet, "call_id", None),
-                cseq_method=step.method,
+                cseq_method=SIPMethod(step.method),
                 cseq_sequence=getattr(getattr(packet, "cseq", None), "sequence", None),
             )
         else:
             payload = render_packet_bytes(packet)
             correlation_key = CorrelationKey(
                 call_id=getattr(packet, "call_id", None),
-                cseq_method=step.method,
+                cseq_method=SIPMethod(step.method),
                 cseq_sequence=getattr(getattr(packet, "cseq", None), "sequence", None),
             )
 
@@ -332,7 +333,7 @@ class DialogOrchestrator:
     @staticmethod
     def _resolve_outcome(
         observations: list[SocketObservation],
-    ) -> str:
+    ) -> DeliveryOutcome:
         if not observations:
             return "timeout"
         selected = next(

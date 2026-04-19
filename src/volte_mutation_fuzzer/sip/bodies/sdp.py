@@ -87,9 +87,9 @@ class SDPBody(SIPBody):
         return "\r\n".join(lines) + "\r\n"
 
     @classmethod
-    def default_instance(cls, **kwargs) -> Self:
-        defaults = {
+    def default_instance(cls, **kwargs: object) -> Self:
+        defaults: dict[str, object] = {
             "media_descriptions": (SDPMediaDescription(),),
         }
         defaults.update(kwargs)
-        return cls(**defaults)
+        return cls.model_validate(defaults)

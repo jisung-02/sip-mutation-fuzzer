@@ -43,6 +43,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             )
 
             self.assertIsNotNone(evidence_dir)
+            assert evidence_dir is not None
             d = Path(evidence_dir)
             self.assertTrue(d.is_dir())
 
@@ -72,6 +73,7 @@ class EvidenceCollectorTests(unittest.TestCase):
 
             evidence_dir = collector.collect(result, sent_payload="OPTIONS sip:x\r\n\r\n")
             self.assertIsNotNone(evidence_dir)
+            assert evidence_dir is not None
             d = Path(evidence_dir)
             self.assertTrue((d / "summary.json").exists())
             self.assertTrue((d / "sent.sip").exists())
@@ -105,6 +107,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             payload = b"\x00\x01\x02INVITE sip:test"
 
             evidence_dir = collector.collect(result, sent_payload=payload)
+            assert evidence_dir is not None
             d = Path(evidence_dir)
             self.assertTrue((d / "sent.bin").exists())
             self.assertEqual((d / "sent.bin").read_bytes(), payload)
@@ -122,6 +125,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             evidence_dir = collector.collect(
                 result, pcap_path=str(pcap_path)
             )
+            assert evidence_dir is not None
             d = Path(evidence_dir)
             self.assertTrue((d / "capture.pcap").exists())
             self.assertEqual(
@@ -143,6 +147,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             evidence_dir = collector.collect(
                 result, adb_snapshot_dir=str(adb_dir)
             )
+            assert evidence_dir is not None
             d = Path(evidence_dir)
             adb_log = (d / "adb_log.txt").read_text()
             self.assertIn("crash.txt", adb_log)
@@ -163,5 +168,6 @@ class EvidenceCollectorTests(unittest.TestCase):
             collector = EvidenceCollector(Path(tmpdir))
             result = _make_result(case_id=31, verdict="suspicious")
             evidence_dir = collector.collect(result, sent_payload="test")
+            assert evidence_dir is not None
             self.assertIn("interesting", evidence_dir)
             self.assertIn("case_000031", evidence_dir)

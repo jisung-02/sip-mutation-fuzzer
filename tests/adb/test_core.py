@@ -84,7 +84,7 @@ class AdbConnectorTests(unittest.TestCase):
 
 
 def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
-    outputs = {
+    outputs: dict[tuple[str, ...], str] = {
         ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
             "telephony output\n"
         ),
@@ -140,7 +140,7 @@ def test_take_snapshot_writes_meminfo_and_dmesg(tmp_path: Path) -> None:
 
 
 def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:
-    outputs = {
+    outputs: dict[tuple[str, ...], str] = {
         ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
             "telephony output\n"
         ),
@@ -189,7 +189,7 @@ def test_take_snapshot_records_shell_failures(tmp_path: Path) -> None:
 
 
 def test_take_snapshot_creates_output_dir_for_bugreport(tmp_path: Path) -> None:
-    outputs = {
+    outputs: dict[tuple[str, ...], str] = {
         ("adb", "shell", "dumpsys", "meminfo"): "meminfo output\n",
         ("adb", "shell", "dmesg"): "dmesg output\n",
         ("adb", "shell", "dumpsys", "telephony.registry"): "telephony output\n",

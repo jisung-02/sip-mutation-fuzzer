@@ -4,7 +4,6 @@ from unittest.mock import patch
 
 from volte_mutation_fuzzer.sender.contracts import SendArtifact, TargetEndpoint
 from volte_mutation_fuzzer.sender.real_ue import (
-    IPsecSAStatus,
     RealUEDirectResolver,
     RouteCheckResult,
     ResolvedNativeIPsecSession,
