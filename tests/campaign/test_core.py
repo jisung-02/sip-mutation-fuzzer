@@ -334,6 +334,70 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(result.summary.total, 4)
         self.assertIsNotNone(result.completed_at)
 
+    def test_run_waits_for_pending_pcap_exports_before_return(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                cooldown_seconds=0.0,
+                results_dir=tmpdir,
+                output_name="test",
+            )
+            executor = CampaignExecutor(cfg)
+            fake_case = CaseResult(
+                case_id=0,
+                seed=0,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+                verdict="normal",
+                reason="ok",
+                elapsed_ms=10.0,
+                reproduction_cmd="uv run fuzzer ...",
+                timestamp=1.0,
+            )
+
+            with unittest.mock.patch.object(
+                executor,
+                "_execute_case",
+                return_value=fake_case,
+            ), unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.PcapCapture.wait_for_pending_exports"
+            ) as wait_mock:
+                executor.run()
+
+        wait_mock.assert_called_once_with()
+
+    def test_run_waits_for_pending_pcap_exports_on_keyboard_interrupt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                cooldown_seconds=0.0,
+                results_dir=tmpdir,
+                output_name="test",
+            )
+            executor = CampaignExecutor(cfg)
+
+            with unittest.mock.patch.object(
+                executor,
+                "_execute_case",
+                side_effect=KeyboardInterrupt,
+            ), unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.PcapCapture.wait_for_pending_exports"
+            ) as wait_mock, unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.HtmlReportGenerator.generate",
+                return_value=Path(tmpdir) / "report.html",
+            ):
+                result = executor.run()
+
+        self.assertEqual(result.status, "aborted")
+        wait_mock.assert_called_once_with()
+
     def test_execute_case_passes_time_window_to_adb_snapshot(self) -> None:
         cfg = self._make_config(
             "127.0.0.1",

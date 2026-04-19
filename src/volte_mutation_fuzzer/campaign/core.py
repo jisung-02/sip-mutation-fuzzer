@@ -607,6 +607,7 @@ class CampaignExecutor:
 
             # Generate final crash analysis report
             self._finalize_crash_analysis()
+            self._wait_for_pending_pcap_exports()
 
         final_status = (
             "aborted"
@@ -631,6 +632,12 @@ class CampaignExecutor:
             logger.warning("failed to generate HTML report: %s", exc)
 
         return campaign
+
+    def _wait_for_pending_pcap_exports(self) -> None:
+        try:
+            PcapCapture.wait_for_pending_exports()
+        except Exception as exc:
+            logger.warning("failed to drain pending pcap txt exports: %s", exc)
 
     def _execute_case(self, spec: CaseSpec) -> CaseResult:
         config = self._config
