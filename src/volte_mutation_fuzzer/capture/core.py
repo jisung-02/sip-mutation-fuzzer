@@ -1,3 +1,4 @@
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_futures
 import signal
 import subprocess
 import threading
@@ -7,6 +8,10 @@ from subprocess import Popen as subprocess_popen
 
 
 class PcapCapture:
+    _export_lock = threading.Lock()
+    _export_executor: ThreadPoolExecutor | None = None
+    _pending_exports: set[Future[None]] = set()
+
     def __init__(
         self,
         output_path: str,
@@ -53,9 +58,51 @@ class PcapCapture:
 
         output_path = Path(self._output_path)
         if output_path.exists() and output_path.stat().st_size > 0:
-            self._export_txt(output_path)
+            self._schedule_txt_export(output_path)
             return self._output_path
         return None
+
+    @classmethod
+    def _schedule_txt_export(cls, pcap_path: Path) -> None:
+        executor = cls._ensure_export_executor()
+        future = executor.submit(cls._export_txt, pcap_path)
+        with cls._export_lock:
+            cls._pending_exports.add(future)
+        future.add_done_callback(cls._forget_export_future)
+
+    @classmethod
+    def _ensure_export_executor(cls) -> ThreadPoolExecutor:
+        with cls._export_lock:
+            if cls._export_executor is None:
+                cls._export_executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="vmf-pcap-export",
+                )
+            return cls._export_executor
+
+    @classmethod
+    def _forget_export_future(cls, future: Future[None]) -> None:
+        with cls._export_lock:
+            cls._pending_exports.discard(future)
+
+    @classmethod
+    def wait_for_pending_exports(cls, timeout: float | None = None) -> None:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            with cls._export_lock:
+                pending = tuple(cls._pending_exports)
+            if not pending:
+                return
+
+            remaining = None
+            if deadline is not None:
+                remaining = max(0.0, deadline - time.monotonic())
+
+            done, not_done = wait_futures(pending, timeout=remaining)
+            for future in done:
+                future.result()
+            if not_done:
+                raise TimeoutError("timed out waiting for pending pcap txt exports")
 
     @staticmethod
     def _export_txt(pcap_path: Path) -> None:

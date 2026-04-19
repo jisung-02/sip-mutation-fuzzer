@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,6 +9,9 @@ from volte_mutation_fuzzer.capture.core import PcapCapture
 
 
 class PcapCaptureTests(unittest.TestCase):
+    def _wait_exports(self) -> None:
+        PcapCapture.wait_for_pending_exports(timeout=1.0)
+
     @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
     def test_start_launches_tcpdump(self, mock_popen: MagicMock) -> None:
         capture = PcapCapture("/tmp/test.pcap", interface="eth0")
@@ -43,6 +47,7 @@ class PcapCaptureTests(unittest.TestCase):
 
             capture.start()
             saved_path = capture.stop()
+            self._wait_exports()
 
             capture_process.send_signal.assert_called_once()
             capture_process.wait.assert_called_once_with(timeout=3)
@@ -108,7 +113,53 @@ class PcapCaptureTests(unittest.TestCase):
 
             capture.start()
             saved_path = capture.stop()
+            self._wait_exports()
 
             tshark_process.kill.assert_called_once_with()
             self.assertEqual(saved_path, str(pcap_path))
             self.assertFalse(pcap_path.with_suffix(".txt").exists())
+
+    @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
+    def test_stop_returns_before_txt_export_finishes(
+        self, mock_popen: MagicMock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pcap_path = Path(tmpdir) / "case.pcap"
+            pcap_path.write_bytes(b"pcap")
+            capture_process = MagicMock()
+            capture_process.wait.return_value = 0
+            tshark_process = MagicMock()
+            tshark_process.returncode = 0
+            communicate_started = threading.Event()
+            release_export = threading.Event()
+
+            def _communicate(timeout: int) -> tuple[str, str]:
+                communicate_started.set()
+                release_export.wait(timeout=1)
+                return ("pcap text\n", "")
+
+            tshark_process.communicate.side_effect = _communicate
+            mock_popen.side_effect = [capture_process, tshark_process]
+            capture = PcapCapture(str(pcap_path))
+
+            capture.start()
+            result: dict[str, str | None] = {}
+            stop_finished = threading.Event()
+
+            def _stop_capture() -> None:
+                result["saved_path"] = capture.stop()
+                stop_finished.set()
+
+            stop_thread = threading.Thread(target=_stop_capture)
+            stop_thread.start()
+            try:
+                self.assertTrue(communicate_started.wait(timeout=1))
+                returned_early = stop_finished.wait(timeout=0.2)
+            finally:
+                release_export.set()
+                stop_thread.join(timeout=1)
+
+            self.assertTrue(returned_early)
+            self.assertEqual(result["saved_path"], str(pcap_path))
+            self._wait_exports()
+            self.assertEqual(pcap_path.with_suffix(".txt").read_text(), "pcap text\n")
