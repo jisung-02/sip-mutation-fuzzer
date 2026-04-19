@@ -224,6 +224,54 @@ def test_take_snapshot_creates_output_dir_for_bugreport(tmp_path: Path) -> None:
     )
 
 
+def test_take_snapshot_uses_collector_window_for_logcat(tmp_path: Path) -> None:
+    collector = AdbLogCollector()
+    collector.push_for_test("main", "before-window", timestamp=10.0)
+    collector.push_for_test("radio", "radio-first", timestamp=20.0)
+    collector.push_for_test("main", "main-second", timestamp=25.0)
+    collector.push_for_test("crash", "boundary-window", timestamp=30.0)
+    connector = AdbConnector(serial="SER123")
+    calls: list[tuple[str, ...]] = []
+
+    outputs: dict[tuple[str, ...], str] = {
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
+            "telephony output\n"
+        ),
+        ("adb", "-s", "SER123", "shell", "dumpsys", "ims"): "ims output\n",
+        ("adb", "-s", "SER123", "shell", "netstat", "-tlnup"): "netstat output\n",
+        ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo"): "meminfo output\n",
+        ("adb", "-s", "SER123", "shell", "dmesg"): "dmesg output\n",
+    }
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        calls.append(tuple(cmd))
+        return _DummyCompletedProcess(stdout=outputs[tuple(cmd)])
+
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            collector=collector,
+            log_since=10.0,
+            log_until=30.0,
+        )
+
+    assert snapshot.logcat_path is not None
+    body = Path(snapshot.logcat_path).read_text(encoding="utf-8")
+    assert "before-window" not in body
+    assert "radio-first" in body
+    assert "main-second" in body
+    assert "boundary-window" in body
+    assert body.index("radio-first") < body.index("main-second") < body.index(
+        "boundary-window"
+    )
+    assert not any("logcat" in cmd for cmd in calls)
+
+
 class AdbLogCollectorTests(unittest.TestCase):
     def test_start_spawns_process_per_buffer_and_clears_logcat(self) -> None:
         config = AdbCollectorConfig(serial="SER123", buffers=("main", "radio"))
@@ -261,6 +309,18 @@ class AdbLogCollectorTests(unittest.TestCase):
 
         self.assertEqual(lines, [("main", "one"), ("radio", "two")])
         self.assertEqual(collector.get_lines(), [])
+
+    def test_slice_uses_non_overlapping_time_windows(self) -> None:
+        collector = AdbLogCollector()
+        collector.push_for_test("main", "first", timestamp=10.0)
+        collector.push_for_test("main", "boundary", timestamp=20.0)
+        collector.push_for_test("radio", "later", timestamp=30.0)
+
+        first = collector.slice(since_ts=0.0, until_ts=20.0)
+        second = collector.slice(since_ts=20.0, until_ts=40.0)
+
+        self.assertEqual(first, [("main", "first"), ("main", "boundary")])
+        self.assertEqual(second, [("radio", "later")])
 
 
 class AdbLogCollectorHealthTests(unittest.TestCase):

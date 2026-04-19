@@ -670,12 +670,18 @@ class CampaignExecutor:
                 try:
                     from volte_mutation_fuzzer.adb.core import AdbConnector
 
+                    snapshot_until = time.time()
                     adb_snapshot_dir = str(
                         self._campaign_dir
                         / "adb_snapshots"
                         / f"case_{spec.case_id}"
                     )
-                    AdbConnector(serial=config.adb_serial).take_snapshot(adb_snapshot_dir)
+                    AdbConnector(serial=config.adb_serial).take_snapshot(
+                        adb_snapshot_dir,
+                        collector=self._adb_collector,
+                        log_since=timestamp,
+                        log_until=snapshot_until,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "failed to capture adb snapshot for case %s: %s",
@@ -1040,12 +1046,18 @@ class CampaignExecutor:
                 try:
                     from volte_mutation_fuzzer.adb.core import AdbConnector
 
+                    snapshot_until = time.time()
                     adb_snapshot_dir = str(
                         self._campaign_dir
                         / "adb_snapshots"
                         / f"case_{spec.case_id}"
                     )
-                    AdbConnector(serial=config.adb_serial).take_snapshot(adb_snapshot_dir)
+                    AdbConnector(serial=config.adb_serial).take_snapshot(
+                        adb_snapshot_dir,
+                        collector=self._adb_collector,
+                        log_since=timestamp,
+                        log_until=snapshot_until,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "failed to capture adb snapshot for case %s: %s",

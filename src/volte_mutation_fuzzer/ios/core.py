@@ -384,7 +384,7 @@ class IosSyslogCollector:
             return [
                 x
                 for x in self._lines
-                if since_ts <= x.host_ts <= until_ts
+                if since_ts < x.host_ts <= until_ts
             ]
 
     def push_for_test(self, line: IosSyslogLine) -> None:

@@ -745,6 +745,28 @@ class IosOracleTests(unittest.TestCase):
         self.assertFalse(result.matched)
         self.assertEqual(result.lines_scanned, 0)
 
+    def test_boundary_timestamp_is_not_replayed_on_next_check(self) -> None:
+        collector = IosSyslogCollector()
+        oracle = IosOracle(collector, IosAnomalyDetector())
+        collector.push_for_test(
+            IosSyslogLine(
+                host_ts=100.0,
+                process="CommCenter",
+                line="CommCenter: EXC_BAD_ACCESS at 0x0",
+            )
+        )
+        oracle._last_check_ts = 50.0
+
+        with patch(
+            "volte_mutation_fuzzer.oracle.core.time.time",
+            side_effect=[100.0, 150.0],
+        ):
+            first = oracle.check()
+            second = oracle.check()
+
+        self.assertTrue(first.matched)
+        self.assertFalse(second.matched)
+
 
 class IosOracleDetectorIsolationTests(unittest.TestCase):
     """Regression: snapshot detector must not pollute the oracle detector queue.

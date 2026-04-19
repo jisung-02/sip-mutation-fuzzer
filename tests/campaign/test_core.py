@@ -334,6 +334,70 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(result.summary.total, 4)
         self.assertIsNotNone(result.completed_at)
 
+    def test_execute_case_passes_time_window_to_adb_snapshot(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+            adb_enabled=True,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="model",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="packet",
+            bytes_sent=120,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+
+        with unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
+            return_value=SimpleNamespace(),
+        ) as snapshot_mock, unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.time.time",
+            side_effect=[100.0, 101.0],
+        ):
+            executor._execute_case(spec)
+
+        self.assertEqual(snapshot_mock.call_count, 1)
+        self.assertEqual(
+            snapshot_mock.call_args.kwargs["collector"],
+            executor._adb_collector,
+        )
+        self.assertEqual(snapshot_mock.call_args.kwargs["log_since"], 100.0)
+        self.assertEqual(snapshot_mock.call_args.kwargs["log_until"], 101.0)
+
     def test_run_populates_normal_verdicts_on_200(self) -> None:
         responder = UDPResponder(
             responses=(

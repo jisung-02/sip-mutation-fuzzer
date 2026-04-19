@@ -3,6 +3,7 @@ import threading
 import time
 from collections.abc import Iterable
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Protocol, cast
@@ -22,6 +23,13 @@ class _PopenLike(Protocol):
     def wait(self, timeout: int | float | None = None) -> object: ...
 
     def kill(self) -> object: ...
+
+
+@dataclass(frozen=True)
+class _AdbHistoryLine:
+    timestamp: float
+    buffer_name: str
+    line: str
 
 
 class AdbConnector:
@@ -88,7 +96,13 @@ class AdbConnector:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
     def take_snapshot(
-        self, output_dir: str, *, bugreport: bool = False
+        self,
+        output_dir: str,
+        *,
+        bugreport: bool = False,
+        collector: "AdbLogCollector | None" = None,
+        log_since: float | None = None,
+        log_until: float | None = None,
     ) -> AdbSnapshotResult:
         """Capture meminfo + dmesg (and optionally bugreport) to output_dir."""
         base_dir = Path(output_dir)
@@ -127,36 +141,56 @@ class AdbConnector:
             "netstat.txt", "netstat", "-tlnup", timeout=10
         )
 
-        # --- Logcat: per-buffer + combined ---
         logcat_path: str | None = None
         logcat_buffers = ("main", "system", "radio", "crash")
-        for buf in logcat_buffers:
-            try:
+        if collector is not None and log_since is not None and log_until is not None:
+            log_lines = collector.slice(log_since, log_until)
+            combined_lines = [line for buffer_name, line in log_lines if buffer_name in logcat_buffers]
+            for buf in logcat_buffers:
+                matched = [line for buffer_name, line in log_lines if buffer_name == buf]
+                if not matched:
+                    continue
                 buf_file = base_dir / f"logcat_{buf}.txt"
+                buf_file.write_text(
+                    "\n".join(matched) + "\n",
+                    encoding="utf-8",
+                )
+            if combined_lines:
+                logcat_file = base_dir / "logcat_all.txt"
+                logcat_file.write_text(
+                    "\n".join(combined_lines) + "\n",
+                    encoding="utf-8",
+                )
+                logcat_path = str(logcat_file)
+        else:
+            # --- Logcat: per-buffer + combined ---
+            for buf in logcat_buffers:
+                try:
+                    buf_file = base_dir / f"logcat_{buf}.txt"
+                    result = subprocess.run(
+                        self._adb_cmd("logcat", "-d", "-b", buf),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if result.returncode == 0 and result.stdout:
+                        buf_file.write_text(result.stdout, encoding="utf-8")
+                except Exception as exc:
+                    errors.append(f"logcat -b {buf} failed: {exc}")
+
+            try:
+                logcat_file = base_dir / "logcat_all.txt"
                 result = subprocess.run(
-                    self._adb_cmd("logcat", "-d", "-b", buf),
+                    self._adb_cmd("logcat", "-d", "-b", ",".join(logcat_buffers)),
                     capture_output=True,
                     text=True,
                     timeout=30,
                 )
                 if result.returncode == 0 and result.stdout:
-                    buf_file.write_text(result.stdout, encoding="utf-8")
+                    logcat_file.write_text(result.stdout, encoding="utf-8")
+                    logcat_path = str(logcat_file)
             except Exception as exc:
-                errors.append(f"logcat -b {buf} failed: {exc}")
-
-        try:
-            logcat_file = base_dir / "logcat_all.txt"
-            result = subprocess.run(
-                self._adb_cmd("logcat", "-d", "-b", ",".join(logcat_buffers)),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0 and result.stdout:
-                logcat_file.write_text(result.stdout, encoding="utf-8")
-                logcat_path = str(logcat_file)
-        except Exception as exc:
-            errors.append(f"logcat dump failed: {exc}")
+                errors.append(f"logcat dump failed: {exc}")
 
         # --- General system ---
         meminfo_path = _write_shell_output(
@@ -211,6 +245,7 @@ class AdbLogCollector:
         self._procs: dict[str, subprocess.Popen[str]] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._queue: Queue[tuple[str, str]] = Queue()
+        self._history: deque[_AdbHistoryLine] = deque(maxlen=200_000)
         self._running = threading.Event()
         self._max_reconnect_attempts = max_reconnect_attempts
         self._reconnect_delay = reconnect_delay
@@ -290,6 +325,30 @@ class AdbLogCollector:
             pass
         return lines
 
+    def slice(self, since_ts: float, until_ts: float) -> list[tuple[str, str]]:
+        with self._lock:
+            return [
+                (entry.buffer_name, entry.line)
+                for entry in self._history
+                if since_ts < entry.timestamp <= until_ts
+            ]
+
+    def push_for_test(
+        self,
+        buffer_name: str,
+        line: str,
+        *,
+        timestamp: float | None = None,
+    ) -> None:
+        entry = _AdbHistoryLine(
+            timestamp=time.time() if timestamp is None else timestamp,
+            buffer_name=buffer_name,
+            line=line,
+        )
+        with self._lock:
+            self._history.append(entry)
+        self._queue.put((buffer_name, line))
+
     @property
     def is_running(self) -> bool:
         return self._running.is_set()
@@ -321,7 +380,16 @@ class AdbLogCollector:
                     for line in current_proc.stdout:
                         if not self._running.is_set():
                             return
-                        self._queue.put((buffer_name, line.rstrip("\n")))
+                        text = line.rstrip("\n")
+                        with self._lock:
+                            self._history.append(
+                                _AdbHistoryLine(
+                                    timestamp=time.time(),
+                                    buffer_name=buffer_name,
+                                    line=text,
+                                )
+                            )
+                        self._queue.put((buffer_name, text))
                         got_data = True
                     # EOF reached — adb logcat subprocess died
                 except Exception:
