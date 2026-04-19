@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated, Literal, cast, get_args
 
 import typer
+from pydantic import ValidationError
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor, ResultStore
@@ -235,14 +236,6 @@ def run_command(
         else ("model", "wire", "byte")
     )
 
-    # Validate that either target_host or target_msisdn is provided for real-ue-direct mode
-    if mode == "real-ue-direct" and target_host is None and target_msisdn is None:
-        typer.echo(
-            "Error: real-ue-direct mode requires either --target-host or --target-msisdn",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
     if ipsec_mode is not None and ipsec_mode not in _IPSEC_MODES:
         typer.echo(
             f"Error: --ipsec-mode must be one of {','.join(_IPSEC_MODES)}",
@@ -307,7 +300,7 @@ def run_command(
             adb_buffers=adb_buffers_value,
             ios_filter_processes=ios_filter_processes_value,
         )
-    except Exception as exc:
+    except ValidationError as exc:
         typer.echo(f"Configuration error: {exc}", err=True)
         raise typer.Exit(code=1)
 

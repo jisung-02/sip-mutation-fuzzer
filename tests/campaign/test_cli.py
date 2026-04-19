@@ -212,6 +212,26 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertIn("target=msisdn:111111", result.output)
         self.assertNotIn("target=msisdn:111111:5060", result.output)
 
+    def test_run_command_real_ue_missing_target_uses_config_validation(self) -> None:
+        result = self.runner.invoke(
+            app,
+            [
+                "campaign",
+                "run",
+                "--mode",
+                "real-ue-direct",
+                "--max-cases",
+                "1",
+            ],
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Configuration error:", result.output)
+        self.assertIn(
+            "real-ue-direct mode requires either target_host or target_msisdn",
+            result.output,
+        )
+
     def test_run_command_invalid_host_exits_nonzero(self) -> None:
         result = self.runner.invoke(
             app,
