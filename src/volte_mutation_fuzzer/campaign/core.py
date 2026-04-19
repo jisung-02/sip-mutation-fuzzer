@@ -430,6 +430,10 @@ class CampaignExecutor:
     def _generate_dir_name() -> str:
         return f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
+    @staticmethod
+    def _case_wall_ms(case_started_monotonic: float) -> float:
+        return round((time.monotonic() - case_started_monotonic) * 1000, 3)
+
     @property
     def campaign_dir(self) -> Path:
         return self._campaign_dir
@@ -642,6 +646,7 @@ class CampaignExecutor:
     def _execute_case(self, spec: CaseSpec) -> CaseResult:
         config = self._config
         timestamp = time.time()
+        case_started_monotonic = time.monotonic()
         error: str | None = None
         capture: PcapCapture | None = None
         pcap_path_saved: str | None = None
@@ -652,13 +657,17 @@ class CampaignExecutor:
                 self._mt_template_text is not None
                 and spec.response_code is None
             ):
-                return self._execute_mt_template_case(spec, timestamp)
+                return self._execute_mt_template_case(
+                    spec, timestamp, case_started_monotonic
+                )
 
             # If this method requires a dialog, use DialogOrchestrator
             if spec.response_code is None:
                 scenario = scenario_for_method(spec.method)
                 if scenario is not None:
-                    return self._execute_dialog_case(spec, scenario, timestamp)
+                    return self._execute_dialog_case(
+                        spec, scenario, timestamp, case_started_monotonic
+                    )
 
             packet = self._build_packet(spec)
             mutated: MutatedCase = self._mutator.mutate(
@@ -749,6 +758,7 @@ class CampaignExecutor:
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
             self._evidence.collect(
@@ -777,6 +787,7 @@ class CampaignExecutor:
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
     def _resolve_ports_cached(self, msisdn: str) -> tuple[int, int]:
@@ -880,7 +891,12 @@ class CampaignExecutor:
 
         return events
 
-    def _execute_mt_template_case(self, spec: CaseSpec, timestamp: float) -> CaseResult:
+    def _execute_mt_template_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
         """Execute one MT INVOKE replay-template case against a real UE."""
         config = self._config
         assert self._mt_template_text is not None
@@ -966,6 +982,7 @@ class CampaignExecutor:
                     reproduction_cmd=self._build_mt_template_reproduction_cmd(spec),
                     error="fragmentation-guard",
                     timestamp=timestamp,
+                    case_wall_ms=self._case_wall_ms(case_started_monotonic),
                 )
 
             # 5. Parse to EditableSIPMessage
@@ -1126,6 +1143,7 @@ class CampaignExecutor:
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
             self._evidence.collect(
@@ -1154,6 +1172,7 @@ class CampaignExecutor:
                 fuzz_response_code=spec.response_code,
                 fuzz_related_method=spec.related_method,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
     def _build_mt_template_reproduction_cmd(self, spec: CaseSpec) -> str:
@@ -1206,7 +1225,11 @@ class CampaignExecutor:
         return ""
 
     def _execute_dialog_case(
-        self, spec: CaseSpec, scenario, timestamp: float
+        self,
+        spec: CaseSpec,
+        scenario,
+        timestamp: float,
+        case_started_monotonic: float,
     ) -> CaseResult:
         orchestrator = DialogOrchestrator(self._generator, self._mutator, self._target)
         mutation_config = MutationConfig(
@@ -1243,6 +1266,7 @@ class CampaignExecutor:
                 error=str(exc),
                 timestamp=timestamp,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
         if not exchange.setup_succeeded:
@@ -1259,6 +1283,7 @@ class CampaignExecutor:
                 error=exchange.error,
                 timestamp=timestamp,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
         fuzz_result = exchange.fuzz_result
@@ -1277,6 +1302,7 @@ class CampaignExecutor:
                 reproduction_cmd=self._build_reproduction_cmd(spec),
                 timestamp=timestamp,
                 pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
         context = OracleContext(
@@ -1312,6 +1338,7 @@ class CampaignExecutor:
             details=getattr(verdict, "details", {}) or {},
             timestamp=timestamp,
             pcap_path=pcap_path_saved,
+            case_wall_ms=self._case_wall_ms(case_started_monotonic),
         )
 
     def _build_packet(self, spec: CaseSpec) -> PacketModel:

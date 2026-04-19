@@ -259,6 +259,102 @@ class ResultStoreTests(unittest.TestCase):
             assert result is not None
             self.assertEqual(result.case_id, 3)
 
+
+class CampaignExecutorWallClockTests(unittest.TestCase):
+    def _make_campaign(self, path: str) -> CampaignResult:
+        return CampaignResult(
+            campaign_id="test123",
+            started_at="2026-01-01T00:00:00Z",
+            config=CampaignConfig(target_host="127.0.0.1"),
+            status="running",
+        )
+
+    def _make_case_result(self, case_id: int = 0) -> CaseResult:
+        return CaseResult(
+            case_id=case_id,
+            seed=case_id,
+            method="OPTIONS",
+            layer="model",
+            strategy="default",
+            verdict="normal",
+            reason="ok",
+            elapsed_ms=50.0,
+            reproduction_cmd="uv run fuzzer ...",
+            timestamp=time.time(),
+        )
+
+    def _make_config(
+        self,
+        host: str,
+        port: int,
+        *,
+        methods: tuple[str, ...],
+        max_cases: int,
+    ) -> CampaignConfig:
+        return CampaignConfig.model_validate(
+            {
+                "target_host": host,
+                "target_port": port,
+                "methods": methods,
+                "max_cases": max_cases,
+            }
+        )
+
+    def test_execute_case_records_case_wall_ms(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="model",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="packet",
+            bytes_sent=120,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+
+        with unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=100.0,
+                process_alive=True,
+                details={},
+            ),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.time.monotonic",
+            side_effect=[10.0, 10.9],
+        ):
+            result = executor._execute_case(spec)
+
+        self.assertEqual(result.case_wall_ms, 900.0)
+
     def test_read_case_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "campaign.jsonl"
@@ -1014,7 +1110,11 @@ class CampaignExecutorTests(unittest.TestCase):
                 cancel_ok,
             ],
         ) as send_mock:
-            result = executor._execute_mt_template_case(spec, timestamp=1234.5)
+            result = executor._execute_mt_template_case(
+                spec,
+                timestamp=1234.5,
+                case_started_monotonic=1234.0,
+            )
 
         self.assertEqual(result.raw_response, "SIP/2.0 180 Ringing\r\n\r\n")
         self.assertEqual(send_mock.call_count, 2)
@@ -1111,7 +1211,11 @@ class CampaignExecutorTests(unittest.TestCase):
                 send_completed_at=1.1,
             ),
         ):
-            result = executor._execute_mt_template_case(spec, timestamp=1234.5)
+            result = executor._execute_mt_template_case(
+                spec,
+                timestamp=1234.5,
+                case_started_monotonic=1234.0,
+            )
 
         self.assertEqual(result.raw_response, "SIP/2.0 200 OK\r\n\r\n")
 
@@ -1295,7 +1399,11 @@ class CampaignExecutorTests(unittest.TestCase):
                 cancel_ok,
             ],
         ) as send_mock:
-            executor._execute_mt_template_case(spec, timestamp=1234.5)
+            executor._execute_mt_template_case(
+                spec,
+                timestamp=1234.5,
+                case_started_monotonic=1234.0,
+            )
 
         self.assertEqual(send_mock.call_count, 2)
         cancel_artifact = send_mock.call_args_list[1].args[0]
@@ -1418,7 +1526,11 @@ class CampaignExecutorTests(unittest.TestCase):
                 cancel_ok,
             ],
         ) as send_mock:
-            executor._execute_mt_template_case(spec, timestamp=1234.5)
+            executor._execute_mt_template_case(
+                spec,
+                timestamp=1234.5,
+                case_started_monotonic=1234.0,
+            )
 
         self.assertEqual(send_mock.call_count, 2)
         cancel_artifact = send_mock.call_args_list[1].args[0]

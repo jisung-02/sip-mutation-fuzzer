@@ -26,6 +26,7 @@ def _make_case(case_id: int, verdict: str, **kwargs) -> CaseResult:
         elapsed_ms=42.0 + case_id,
         reproduction_cmd=f"uv run fuzzer campaign run --seed-start {case_id} --max-cases 1",
         timestamp=1000000.0 + case_id,
+        case_wall_ms=900.0 + case_id,
         response_code=180 if verdict == "normal" else None,
         mutation_ops=("flip_char(Via)",) if verdict != "normal" else (),
     )
@@ -125,6 +126,15 @@ class HtmlReportGeneratorTests(unittest.TestCase):
             self.assertIn("Context", content)
             self.assertIn("ADB warning", content)
             self.assertIn("IMS deregist triggered by network change", content)
+
+    def test_cases_table_renders_wall_ms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases = [_make_case(0, "normal")]
+            jsonl_path = _write_campaign(tmpdir, cases)
+            content = HtmlReportGenerator(jsonl_path).generate().read_text()
+
+            self.assertIn("Wall", content)
+            self.assertIn("900", content)
 
     def test_interesting_cases_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

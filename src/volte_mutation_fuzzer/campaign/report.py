@@ -405,6 +405,7 @@ class HtmlReportGenerator:
             "Verdict",
             "Code",
             "ms",
+            "Wall",
             "Context",
         ):
             parts.append(f"<th>{col}</th>")
@@ -421,6 +422,7 @@ class HtmlReportGenerator:
                 else str(c.case_id)
             )
             context_text = "<br>".join(_esc(line) for line in _context_lines(c))
+            wall_ms_str = "" if c.case_wall_ms is None else f"{c.case_wall_ms:.0f}"
             parts.append(
                 f'<tr class="{row_class}" style="border-left: 3px solid {color};">'
                 f"<td>{id_cell}</td>"
@@ -431,6 +433,7 @@ class HtmlReportGenerator:
                 f'<td style="color:{color};font-weight:bold;">{_esc(c.verdict)}</td>'
                 f"<td>{code_str}</td>"
                 f"<td>{c.elapsed_ms:.0f}</td>"
+                f"<td>{wall_ms_str}</td>"
                 f"<td>{context_text}</td>"
                 f"</tr>"
             )

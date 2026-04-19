@@ -234,6 +234,7 @@ class CaseResult(BaseModel):
     fuzz_response_code: int | None = None
     fuzz_related_method: str | None = None
     pcap_path: str | None = None
+    case_wall_ms: float | None = None
 
 
 class CampaignSummary(BaseModel):
