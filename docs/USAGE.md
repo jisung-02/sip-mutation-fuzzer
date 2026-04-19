@@ -18,6 +18,10 @@ uv run fuzzer campaign run --target-host 127.0.0.1 --max-cases 10
 # A31 실기기 대상 퍼징  
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
   --impi 001010000123511 --mt-invite-template a31 --ipsec-mode null --max-cases 5
+
+# A31 실기기 대상 실제 IPsec 경로 검증
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+  --impi 001010000123511 --mt-invite-template a31 --ipsec-mode native --max-cases 1
 ```
 
 ## 📋 CLI 옵션 상세
@@ -50,12 +54,12 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 # MT Template 설정
 --mt-invite-template <NAME> # MT template (a31, 또는 파일경로)
 --impi <IMPI>               # IMS Private Identity
---ipsec-mode null|bypass    # IPsec 우회 방식
+--ipsec-mode null|bypass|native  # null/bypass 평문 우회, native 실제 IPsec/xfrm
 
 # 고급 설정
 --preserve-via              # Via 헤더 보존 (template용)  
 --preserve-contact          # Contact 헤더 보존 (template용)
---mt-local-port <PORT>      # Via sent-by 포트 (기본: 15100)
+--mt-local-port <PORT>      # null/bypass용 Via sent-by 포트 (native에서는 비권위적)
 --mo-contact-host <IP>      # MO UE IP (기본: 10.20.20.9)
 --from-msisdn <MSISDN>      # 발신자 번호 (기본: 222222)
 
@@ -70,6 +74,13 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 --cooldown <SEC>            # 케이스간 대기시간 (기본: 0.2)
 --log-path <PATH>           # 애플리케이션 로그 경로
 ```
+
+### IPsec 모드 가이드
+- `null`: host spoofing 기반 평문 우회 경로. 외부 pcap/Wireshark에서 평문 SIP가 보일 수 있다.
+- `bypass`: `pcscf` 컨테이너 netns를 통한 평문 우회 경로. 외부 pcap/Wireshark에서 평문 SIP가 보일 수 있다.
+- `native`: 실제 협상된 IMS IPsec/xfrm 세션을 사용한다. 현재 구현 범위는 `real-ue-direct + UDP`이며, MT 경로에서는 `--target-msisdn`이 필요하다.
+- `native`에서는 응답 확인 기준이 평문 wire 가독성이 아니라 observer가 합성한 SIP 응답과 `observer_events`다.
+- `native`에서는 outer wire 기준으로 ESP가 보일 가능성이 높아서 Wireshark에 평문 SIP가 바로 보이지 않을 수 있다.
 
 ## 🎯 주요 시나리오
 
