@@ -1,6 +1,7 @@
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable
 from collections import deque
 from dataclasses import dataclass
@@ -188,52 +189,90 @@ class AdbConnector:
         errors: list[str] = []
         bugreport_path: str | None = None
 
-        def _write_shell_output(filename: str, *args: str, timeout: int) -> str | None:
+        def _write_shell_output(
+            filename: str, *args: str, timeout: int
+        ) -> tuple[str | None, str | None]:
             path = base_dir / filename
             try:
                 result = self.run_shell(*args, timeout=timeout)
             except Exception as exc:
-                errors.append(f"{' '.join(args)} failed: {exc}")
-                return None
+                return None, f"{' '.join(args)} failed: {exc}"
 
             if result.returncode != 0:
                 message = (
                     result.stderr.strip() or result.stdout.strip() or "unknown error"
                 )
-                errors.append(f"{' '.join(args)} failed: {message}")
-                return None
+                return None, f"{' '.join(args)} failed: {message}"
 
             path.write_text(result.stdout, encoding="utf-8")
-            return str(path)
+            return str(path), None
 
         # --- IMS/telephony specific ---
-        telephony_path = _write_shell_output(
-            "telephony.txt", "dumpsys", "telephony.registry", timeout=30
-        )
-        logcat_path = self._write_logcat_outputs(
-            base_dir,
-            collector=collector,
-            log_since=log_since,
-            log_until=log_until,
-            errors=errors,
-        )
-
+        telephony_path: str | None = None
         ims_path: str | None = None
         netstat_path: str | None = None
         meminfo_path: str | None = None
         dmesg_path: str | None = None
+        logcat_path: str | None = None
 
-        if profile == "full":
-            ims_path = _write_shell_output(
-                "ims.txt", "dumpsys", "ims", timeout=30
+        if profile == "light":
+            telephony_path, error = _write_shell_output(
+                "telephony.txt", "dumpsys", "telephony.registry", timeout=30
             )
-            netstat_path = _write_shell_output(
-                "netstat.txt", "netstat", "-tlnup", timeout=10
+            if error is not None:
+                errors.append(error)
+        else:
+            full_profile_shells = (
+                (
+                    "telephony_path",
+                    "telephony.txt",
+                    ("dumpsys", "telephony.registry"),
+                    30,
+                ),
+                ("ims_path", "ims.txt", ("dumpsys", "ims"), 30),
+                ("netstat_path", "netstat.txt", ("netstat", "-tlnup"), 10),
+                ("meminfo_path", "meminfo.txt", ("dumpsys", "meminfo"), 60),
+                ("dmesg_path", "dmesg.txt", ("dmesg",), 60),
             )
-            meminfo_path = _write_shell_output(
-                "meminfo.txt", "dumpsys", "meminfo", timeout=60
+            with ThreadPoolExecutor(
+                max_workers=len(full_profile_shells),
+                thread_name_prefix="vmf-adb-snapshot",
+            ) as executor:
+                futures = {
+                    name: executor.submit(
+                        _write_shell_output, filename, *args, timeout=timeout
+                    )
+                    for name, filename, args, timeout in full_profile_shells
+                }
+                logcat_path = self._write_logcat_outputs(
+                    base_dir,
+                    collector=collector,
+                    log_since=log_since,
+                    log_until=log_until,
+                    errors=errors,
+                )
+                for name, _, _, _ in full_profile_shells:
+                    path, error = futures[name].result()
+                    if name == "telephony_path":
+                        telephony_path = path
+                    elif name == "ims_path":
+                        ims_path = path
+                    elif name == "netstat_path":
+                        netstat_path = path
+                    elif name == "meminfo_path":
+                        meminfo_path = path
+                    elif name == "dmesg_path":
+                        dmesg_path = path
+                    if error is not None:
+                        errors.append(error)
+        if profile == "light":
+            logcat_path = self._write_logcat_outputs(
+                base_dir,
+                collector=collector,
+                log_since=log_since,
+                log_until=log_until,
+                errors=errors,
             )
-            dmesg_path = _write_shell_output("dmesg.txt", "dmesg", timeout=60)
 
         if bugreport:
             path = base_dir / "bugreport.txt"

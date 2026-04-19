@@ -1,4 +1,5 @@
 import unittest
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -139,6 +140,133 @@ def test_take_snapshot_full_profile_writes_meminfo_and_dmesg(tmp_path: Path) -> 
     assert Path(snapshot.ims_path).read_text(encoding="utf-8") == "ims output\n"
     assert Path(snapshot.netstat_path).read_text(encoding="utf-8") == "netstat output\n"
     assert Path(snapshot.logcat_path).read_text(encoding="utf-8") == "combined logcat\n"
+
+
+def test_take_snapshot_full_profile_runs_shell_dumps_concurrently(
+    tmp_path: Path,
+) -> None:
+    collector = AdbLogCollector()
+    collector.push_for_test("main", "window", timestamp=10.0)
+
+    barrier = threading.Barrier(2)
+    started: list[str] = []
+    started_lock = threading.Lock()
+
+    outputs: dict[tuple[str, ...], str] = {
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
+            "telephony output\n"
+        ),
+        ("adb", "-s", "SER123", "shell", "dumpsys", "ims"): "ims output\n",
+        ("adb", "-s", "SER123", "shell", "netstat", "-tlnup"): "netstat output\n",
+        ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo"): "meminfo output\n",
+        ("adb", "-s", "SER123", "shell", "dmesg"): "dmesg output\n",
+    }
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        key = tuple(cmd)
+        if key not in outputs:
+            raise AssertionError(f"unexpected shell command: {cmd}")
+
+        with started_lock:
+            started.append(" ".join(cmd))
+
+        if key in {
+            ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"),
+            ("adb", "-s", "SER123", "shell", "dumpsys", "ims"),
+        }:
+            barrier.wait(timeout=1)
+
+        return _DummyCompletedProcess(stdout=outputs[key])
+
+    connector = AdbConnector(serial="SER123")
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            profile="full",
+            collector=collector,
+            log_since=0.0,
+            log_until=20.0,
+        )
+
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is not None
+    assert snapshot.netstat_path is not None
+    assert snapshot.meminfo_path is not None
+    assert snapshot.dmesg_path is not None
+    assert Path(snapshot.telephony_path).read_text(encoding="utf-8") == (
+        "telephony output\n"
+    )
+    assert Path(snapshot.ims_path).read_text(encoding="utf-8") == "ims output\n"
+    assert Path(snapshot.netstat_path).read_text(encoding="utf-8") == (
+        "netstat output\n"
+    )
+    assert Path(snapshot.meminfo_path).read_text(encoding="utf-8") == (
+        "meminfo output\n"
+    )
+    assert Path(snapshot.dmesg_path).read_text(encoding="utf-8") == "dmesg output\n"
+    assert any(
+        "dumpsys telephony.registry" in entry for entry in started
+    ), started
+    assert any("dumpsys ims" in entry for entry in started), started
+
+
+def test_take_snapshot_full_profile_preserves_successful_outputs_on_failure(
+    tmp_path: Path,
+) -> None:
+    collector = AdbLogCollector()
+    collector.push_for_test("main", "window", timestamp=10.0)
+
+    outputs: dict[tuple[str, ...], str] = {
+        ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"): (
+            "telephony output\n"
+        ),
+        ("adb", "-s", "SER123", "shell", "dumpsys", "ims"): "ims output\n",
+        ("adb", "-s", "SER123", "shell", "netstat", "-tlnup"): "netstat output\n",
+        ("adb", "-s", "SER123", "shell", "dmesg"): "dmesg output\n",
+    }
+
+    def fake_run(
+        cmd: list[str],
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> _DummyCompletedProcess:
+        key = tuple(cmd)
+        if key == ("adb", "-s", "SER123", "shell", "dumpsys", "meminfo"):
+            raise RuntimeError("meminfo boom")
+        if key not in outputs:
+            raise AssertionError(f"unexpected shell command: {cmd}")
+        return _DummyCompletedProcess(stdout=outputs[key])
+
+    connector = AdbConnector(serial="SER123")
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            profile="full",
+            collector=collector,
+            log_since=0.0,
+            log_until=20.0,
+        )
+
+    assert snapshot.meminfo_path is None
+    assert snapshot.telephony_path is not None
+    assert snapshot.ims_path is not None
+    assert snapshot.netstat_path is not None
+    assert snapshot.dmesg_path is not None
+    assert Path(snapshot.telephony_path).read_text(encoding="utf-8") == (
+        "telephony output\n"
+    )
+    assert Path(snapshot.ims_path).read_text(encoding="utf-8") == "ims output\n"
+    assert Path(snapshot.netstat_path).read_text(encoding="utf-8") == (
+        "netstat output\n"
+    )
+    assert Path(snapshot.dmesg_path).read_text(encoding="utf-8") == "dmesg output\n"
+    assert snapshot.errors == ("dumpsys meminfo failed: meminfo boom",)
 
 
 def test_take_snapshot_light_profile_keeps_telephony_and_logcat(
