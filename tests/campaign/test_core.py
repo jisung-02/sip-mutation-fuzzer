@@ -1101,6 +1101,121 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
         self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
 
+    def test_execute_case_preserves_resolved_profile_and_strategy_on_send_failure(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            profile="parser_breaker",
+            method="OPTIONS",
+            layer="wire",
+            strategy="default",
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_build_packet",
+            return_value=object(),
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate",
+            return_value=SimpleNamespace(
+                original_packet=object(),
+                mutated_packet=object(),
+                wire_text="SIP/2.0 200 OK\r\n\r\n",
+                packet_bytes=None,
+                records=(),
+                seed=0,
+                profile="delivery_preserving",
+                strategy="final_crlf_loss",
+                final_layer="wire",
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            side_effect=RuntimeError("send failed"),
+        ):
+            result = executor._execute_case(spec)
+
+        self.assertEqual(result.profile, "delivery_preserving")
+        self.assertEqual(result.strategy, "final_crlf_loss")
+        self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
+        self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
+        self.assertIn("executor error: send failed", result.reason)
+
+    def test_execute_mt_template_case_preserves_resolved_profile_and_strategy_on_send_failure(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.8",
+            5060,
+            mode="real-ue-direct",
+            methods=("INVITE",),
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="null",
+            max_cases=1,
+            layers=("wire",),
+            strategies=("default",),
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="wire",
+            strategy="default",
+            profile="legacy",
+        )
+        invite_wire = (
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
+            "CSeq: 1 INVITE\r\n"
+            "\r\n"
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_cached",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.build_default_slots",
+            return_value={},
+        ), unittest.mock.patch(
+            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+            return_value=invite_wire,
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate_editable",
+            return_value=SimpleNamespace(
+                final_layer="wire",
+                wire_text=invite_wire,
+                packet_bytes=None,
+                records=(),
+                profile="delivery_preserving",
+                strategy="final_crlf_loss",
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            side_effect=RuntimeError("mt send failed"),
+        ):
+            result = executor._execute_mt_template_case(
+                spec,
+                timestamp=1234.5,
+                case_started_monotonic=1234.0,
+            )
+
+        self.assertEqual(result.profile, "delivery_preserving")
+        self.assertEqual(result.strategy, "final_crlf_loss")
+        self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
+        self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
+        self.assertIn("mt-template executor error: mt send failed", result.reason)
+
     def test_execute_case_uses_light_snapshot_profile_for_normal_verdict(self) -> None:
         cfg = self._make_config(
             "127.0.0.1",

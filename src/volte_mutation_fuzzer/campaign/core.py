@@ -692,6 +692,7 @@ class CampaignExecutor:
         error: str | None = None
         capture: PcapCapture | None = None
         pcap_path_saved: str | None = None
+        mutated: MutatedCase | None = None
 
         try:
             # MT template path (real-ue-direct with 3GPP format)
@@ -712,7 +713,7 @@ class CampaignExecutor:
                     )
 
             packet = self._build_packet(spec)
-            mutated: MutatedCase = self._mutator.mutate(
+            mutated = self._mutator.mutate(
                 packet,
                 MutationConfig(
                     seed=spec.seed,
@@ -796,12 +797,20 @@ class CampaignExecutor:
 
         except Exception as exc:
             error = str(exc)
+            resolved_profile = getattr(mutated, "profile", spec.profile)
+            resolved_strategy = getattr(mutated, "strategy", spec.strategy)
             return self._build_case_result(
                 spec,
                 verdict="unknown",
                 reason=f"executor error: {error}",
                 elapsed_ms=0.0,
-                reproduction_cmd=self._build_reproduction_cmd(spec),
+                reproduction_cmd=self._build_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
                 error=error,
                 timestamp=timestamp,
                 fuzz_response_code=spec.response_code,
@@ -925,6 +934,7 @@ class CampaignExecutor:
         error: str | None = None
         capture: PcapCapture | None = None
         pcap_path_saved: str | None = None
+        mutated_wire: MutatedWireCase | None = None
 
         try:
             # 1. Resolve UE IP and IMPI dynamically
@@ -1158,12 +1168,20 @@ class CampaignExecutor:
 
         except Exception as exc:
             error = str(exc)
+            resolved_profile = getattr(mutated_wire, "profile", spec.profile)
+            resolved_strategy = getattr(mutated_wire, "strategy", spec.strategy)
             return self._build_case_result(
                 spec,
                 verdict="unknown",
                 reason=f"mt-template executor error: {error}",
                 elapsed_ms=0.0,
-                reproduction_cmd=self._build_mt_template_reproduction_cmd(spec),
+                reproduction_cmd=self._build_mt_template_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
                 error=error,
                 timestamp=timestamp,
                 fuzz_response_code=spec.response_code,
