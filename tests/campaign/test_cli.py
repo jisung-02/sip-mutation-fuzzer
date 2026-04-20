@@ -425,7 +425,13 @@ class CampaignReportCLITests(unittest.TestCase):
     def test_report_shows_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "campaign.jsonl"
-            _write_sample_jsonl(path, [_make_case_result(0), _make_case_result(1)])
+            _write_sample_jsonl(
+                path,
+                [
+                    _make_case_result(0, profile="parser_breaker"),
+                    _make_case_result(1),
+                ],
+            )
 
             result = self.runner.invoke(app, ["campaign", "report", str(path)])
             self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -434,6 +440,7 @@ class CampaignReportCLITests(unittest.TestCase):
             self.assertEqual(payload["campaign_id"], "testcampaign")
             self.assertIn("summary", payload)
             self.assertIn("cases", payload)
+            self.assertEqual(payload["cases"][0]["profile"], "parser_breaker")
 
     def test_report_filter_suspicious_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

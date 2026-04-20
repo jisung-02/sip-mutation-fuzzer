@@ -1028,6 +1028,79 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(result.profile, "parser_breaker")
         self.assertIn("--profile parser_breaker", result.reproduction_cmd)
 
+    def test_execute_case_uses_resolved_profile_and_strategy_from_mutator_output(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            profile="parser_breaker",
+            method="OPTIONS",
+            layer="wire",
+            strategy="default",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="wire",
+            bytes_sent=120,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_build_packet",
+            return_value=object(),
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate",
+            return_value=SimpleNamespace(
+                original_packet=object(),
+                mutated_packet=object(),
+                wire_text="SIP/2.0 200 OK\r\n\r\n",
+                packet_bytes=None,
+                records=(),
+                seed=0,
+                profile="delivery_preserving",
+                strategy="final_crlf_loss",
+                final_layer="wire",
+            ),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ):
+            result = executor._execute_case(spec)
+
+        self.assertEqual(result.profile, "delivery_preserving")
+        self.assertEqual(result.strategy, "final_crlf_loss")
+        self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
+        self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
+
     def test_execute_case_uses_light_snapshot_profile_for_normal_verdict(self) -> None:
         cfg = self._make_config(
             "127.0.0.1",
@@ -1294,6 +1367,31 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("--ipsec-mode bypass", cmd)
         self.assertIn("--profile delivery_preserving", cmd)
         self.assertIn("--mt-local-port 15100", cmd)
+
+    def test_reproduction_cmd_honors_explicit_profile_and_strategy_overrides(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            layers=("wire",),
+            strategies=("default",),
+        )
+        executor = CampaignExecutor(cfg)
+        cmd = executor._build_reproduction_cmd(
+            CaseSpec(
+                case_id=0,
+                seed=7,
+                method="OPTIONS",
+                layer="wire",
+                strategy="default",
+                profile="legacy",
+            ),
+            profile="parser_breaker",
+            strategy="final_crlf_loss",
+        )
+
+        self.assertIn("--profile parser_breaker", cmd)
+        self.assertIn("--strategy final_crlf_loss", cmd)
 
     def test_reproduction_cmd_uses_msisdn_when_target_host_missing(self) -> None:
         cfg = self._make_config(

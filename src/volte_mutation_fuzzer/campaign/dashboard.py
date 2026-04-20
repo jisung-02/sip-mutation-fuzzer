@@ -159,7 +159,7 @@ class ConsoleProgressReporter:
         code_str = f" {result.response_code}," if result.response_code else ""
         return (
             f"  [{spec.case_id + 1}/{total_str}] "
-            f"{target_label} {spec.layer}/{spec.strategy} seed={spec.seed} "
+            f"{target_label} {spec.profile}:{spec.layer}/{spec.strategy} seed={spec.seed} "
             f"-> {result.verdict} ({code_str}{result.elapsed_ms:.0f}ms)"
         )
 

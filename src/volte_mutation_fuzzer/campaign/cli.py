@@ -410,6 +410,7 @@ def report_command(
         "cases": [
             {
                 "case_id": c.case_id,
+                "profile": c.profile,
                 "method": c.method,
                 "layer": c.layer,
                 "strategy": c.strategy,

@@ -755,25 +755,27 @@ class CampaignExecutor:
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated.records
             )
+            resolved_profile = getattr(mutated, "profile", spec.profile)
+            resolved_strategy = getattr(mutated, "strategy", spec.strategy)
             raw_response = self._raw_response_from_send_result(
                 verdict.verdict, send_result
             )
-
-            case_result = CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
-                mutation_ops=mutation_ops,
+            case_result = self._build_case_result(
+                spec,
                 verdict=verdict.verdict,
                 reason=verdict.reason,
                 response_code=verdict.response_code,
                 elapsed_ms=verdict.elapsed_ms,
                 process_alive=verdict.process_alive,
                 raw_response=raw_response,
-                reproduction_cmd=self._build_reproduction_cmd(spec),
+                reproduction_cmd=self._build_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                mutation_ops=mutation_ops,
                 error=error,
                 details=getattr(verdict, "details", {}) or {},
                 timestamp=timestamp,
@@ -794,13 +796,8 @@ class CampaignExecutor:
 
         except Exception as exc:
             error = str(exc)
-            return CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
+            return self._build_case_result(
+                spec,
                 verdict="unknown",
                 reason=f"executor error: {error}",
                 elapsed_ms=0.0,
@@ -990,20 +987,19 @@ class CampaignExecutor:
                 and config.ipsec_mode == "null"
                 and len(wire_text.encode("utf-8")) > _MT_TEMPLATE_FRAG_LIMIT
             ):
-                return CaseResult(
-                    case_id=spec.case_id,
-                    seed=spec.seed,
-                    method=spec.method,
-                    profile=spec.profile,
-                    layer=spec.layer,
-                    strategy=spec.strategy,
+                return self._build_case_result(
+                    spec,
                     verdict="unknown",
                     reason=(
                         f"template payload exceeds one-fragment UDP safety threshold "
                         f"({_MT_TEMPLATE_FRAG_LIMIT} bytes)"
                     ),
                     elapsed_ms=0.0,
-                    reproduction_cmd=self._build_mt_template_reproduction_cmd(spec),
+                    reproduction_cmd=self._build_mt_template_reproduction_cmd(
+                        spec,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                    ),
                     error="fragmentation-guard",
                     timestamp=timestamp,
                     case_wall_ms=self._case_wall_ms(case_started_monotonic),
@@ -1121,25 +1117,27 @@ class CampaignExecutor:
             mutation_ops = tuple(
                 f"{r.operator}({r.target.path})" for r in mutated_wire.records
             )
+            resolved_profile = getattr(mutated_wire, "profile", spec.profile)
+            resolved_strategy = getattr(mutated_wire, "strategy", spec.strategy)
             raw_response = self._raw_response_from_send_result(
                 verdict.verdict, send_result
             )
-
-            case_result = CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
-                mutation_ops=mutation_ops,
+            case_result = self._build_case_result(
+                spec,
                 verdict=verdict.verdict,
                 reason=verdict.reason,
                 response_code=verdict.response_code,
                 elapsed_ms=verdict.elapsed_ms,
                 process_alive=verdict.process_alive,
                 raw_response=raw_response,
-                reproduction_cmd=self._build_mt_template_reproduction_cmd(spec),
+                reproduction_cmd=self._build_mt_template_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                mutation_ops=mutation_ops,
                 error=error,
                 details=getattr(verdict, "details", {}) or {},
                 timestamp=timestamp,
@@ -1160,13 +1158,8 @@ class CampaignExecutor:
 
         except Exception as exc:
             error = str(exc)
-            return CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
+            return self._build_case_result(
+                spec,
                 verdict="unknown",
                 reason=f"mt-template executor error: {error}",
                 elapsed_ms=0.0,
@@ -1179,13 +1172,21 @@ class CampaignExecutor:
                 case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
-    def _build_mt_template_reproduction_cmd(self, spec: CaseSpec) -> str:
+    def _build_mt_template_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> str:
         cfg = self._config
         target_args = ""
         if cfg.target_host is not None:
             target_args = f" --target-host {cfg.target_host}"
         elif cfg.target_msisdn is not None:
             target_args = f" --target-msisdn {cfg.target_msisdn}"
+        profile_value = spec.profile if profile is None else profile
+        strategy_value = spec.strategy if strategy is None else strategy
 
         reproduction_cmd = (
             f"uv run fuzzer campaign run"
@@ -1197,9 +1198,9 @@ class CampaignExecutor:
             f"{' --preserve-via' if cfg.preserve_via else ''}"
             f"{' --preserve-contact' if cfg.preserve_contact else ''}"
             f" --methods {spec.method}"
-            f" --profile {spec.profile}"
+            f" --profile {profile_value}"
             f" --layer {spec.layer}"
-            f" --strategy {spec.strategy}"
+            f" --strategy {strategy_value}"
             f" --seed-start {spec.seed}"
             f" --max-cases 1"
             # note: port_pc/port_ps are re-queried live; may differ if UE re-registered
@@ -1259,13 +1260,8 @@ class CampaignExecutor:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
         except Exception as exc:
-            return CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
+            return self._build_case_result(
+                spec,
                 verdict="unknown",
                 reason=f"dialog executor error: {exc}",
                 elapsed_ms=0.0,
@@ -1277,13 +1273,8 @@ class CampaignExecutor:
             )
 
         if not exchange.setup_succeeded:
-            return CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
+            return self._build_case_result(
+                spec,
                 verdict="unknown",
                 reason=f"dialog setup failed: {exchange.error or 'unknown'}",
                 elapsed_ms=0.0,
@@ -1298,13 +1289,8 @@ class CampaignExecutor:
         send_result = fuzz_result.send_result if fuzz_result is not None else None
 
         if send_result is None:
-            return CaseResult(
-                case_id=spec.case_id,
-                seed=spec.seed,
-                method=spec.method,
-                profile=spec.profile,
-                layer=spec.layer,
-                strategy=spec.strategy,
+            return self._build_case_result(
+                spec,
                 verdict="unknown",
                 reason="dialog fuzz step produced no send result",
                 elapsed_ms=0.0,
@@ -1332,14 +1318,8 @@ class CampaignExecutor:
 
         raw_response = self._raw_response_from_send_result(verdict.verdict, send_result)
 
-        case_result = CaseResult(
-            case_id=spec.case_id,
-            seed=spec.seed,
-            method=spec.method,
-            profile=spec.profile,
-            layer=spec.layer,
-            strategy=spec.strategy,
-            mutation_ops=(),
+        case_result = self._build_case_result(
+            spec,
             verdict=verdict.verdict,
             reason=verdict.reason,
             response_code=verdict.response_code,
@@ -1402,13 +1382,78 @@ class CampaignExecutor:
         packet = mutated.mutated_packet or mutated.original_packet
         return SendArtifact.from_packet(packet)
 
-    def _build_reproduction_cmd(self, spec: CaseSpec) -> str:
+    def _build_case_result(
+        self,
+        spec: CaseSpec,
+        *,
+        verdict: str,
+        reason: str,
+        elapsed_ms: float,
+        reproduction_cmd: str | None = None,
+        profile: str | None = None,
+        strategy: str | None = None,
+        mutation_ops: tuple[str, ...] = (),
+        response_code: int | None = None,
+        process_alive: bool | None = None,
+        raw_response: str | None = None,
+        error: str | None = None,
+        details: dict[str, object] | None = None,
+        timestamp: float,
+        fuzz_response_code: int | None = None,
+        fuzz_related_method: str | None = None,
+        pcap_path: str | None = None,
+        case_wall_ms: float | None = None,
+    ) -> CaseResult:
+        resolved_profile = spec.profile if profile is None else profile
+        resolved_strategy = spec.strategy if strategy is None else strategy
+        resolved_reproduction_cmd = (
+            reproduction_cmd
+            if reproduction_cmd is not None
+            else self._build_reproduction_cmd(
+                spec,
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+            )
+        )
+        return CaseResult(
+            case_id=spec.case_id,
+            seed=spec.seed,
+            method=spec.method,
+            profile=resolved_profile,
+            layer=spec.layer,
+            strategy=resolved_strategy,
+            mutation_ops=mutation_ops,
+            verdict=verdict,
+            reason=reason,
+            response_code=response_code,
+            elapsed_ms=elapsed_ms,
+            process_alive=process_alive,
+            raw_response=raw_response,
+            reproduction_cmd=resolved_reproduction_cmd,
+            error=error,
+            details=details or {},
+            timestamp=timestamp,
+            fuzz_response_code=fuzz_response_code,
+            fuzz_related_method=fuzz_related_method,
+            pcap_path=pcap_path,
+            case_wall_ms=case_wall_ms,
+        )
+
+    def _build_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> str:
         cfg = self._config
         target_args = self._build_replay_target_args()
         transport_arg = (
             f" --transport {cfg.transport}" if cfg.transport.upper() != "UDP" else ""
         )
         ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
+        profile_value = spec.profile if profile is None else profile
+        strategy_value = spec.strategy if strategy is None else strategy
         if spec.response_code is not None:
             context = json.dumps(
                 self._synthetic_dialog_context().model_dump(mode="json"),
@@ -1418,8 +1463,8 @@ class CampaignExecutor:
             return (
                 f"uv run fuzzer mutate response {spec.response_code} {related_method}"
                 f" --context '{context}'"
-                f" --profile {spec.profile}"
-                f" --strategy {spec.strategy}"
+                f" --profile {profile_value}"
+                f" --strategy {strategy_value}"
                 f" --layer {spec.layer}"
                 f" --seed {spec.seed}"
                 f" | uv run fuzzer send packet"
@@ -1431,8 +1476,8 @@ class CampaignExecutor:
             )
         return (
             f"uv run fuzzer mutate request {spec.method}"
-            f" --profile {spec.profile}"
-            f" --strategy {spec.strategy}"
+            f" --profile {profile_value}"
+            f" --strategy {strategy_value}"
             f" --layer {spec.layer}"
             f" --seed {spec.seed}"
             f" | uv run fuzzer send packet"

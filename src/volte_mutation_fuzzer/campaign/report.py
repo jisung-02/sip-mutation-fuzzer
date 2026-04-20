@@ -150,14 +150,14 @@ def _svg_timeline(cases: list[CaseResult], width: int = 800, height: int = 120) 
 
 
 def _svg_bar_chart(cases: list[CaseResult], width: int = 600, height: int = 200) -> str:
-    """Render strategy×layer verdict distribution as horizontal stacked bars."""
+    """Render profile/layer/strategy verdict distribution as horizontal stacked bars."""
     if not cases:
         return ""
 
-    # Group by strategy/layer
+    # Group by profile/layer/strategy
     groups: dict[str, dict[str, int]] = {}
     for c in cases:
-        key = f"{c.layer}/{c.strategy}"
+        key = f"{c.profile}/{c.layer}/{c.strategy}"
         if key not in groups:
             groups[key] = {v: 0 for v in _VERDICT_ORDER}
         if c.verdict in groups[key]:
@@ -345,7 +345,7 @@ class HtmlReportGenerator:
         parts.append("</div></div>")
 
         # Section 2: Strategy/Layer bar chart
-        parts.append('<h2>2. Strategy / Layer Distribution</h2>')
+        parts.append('<h2>2. Profile / Layer / Strategy Distribution</h2>')
         parts.append(_svg_bar_chart(cases))
 
         # Section 3: Timeline

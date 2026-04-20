@@ -46,6 +46,7 @@ class EvidenceCollector:
                 "case_id": case_result.case_id,
                 "seed": case_result.seed,
                 "method": case_result.method,
+                "profile": case_result.profile,
                 "layer": case_result.layer,
                 "strategy": case_result.strategy,
                 "verdict": case_result.verdict,
