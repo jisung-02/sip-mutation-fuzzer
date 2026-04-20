@@ -34,6 +34,7 @@ from volte_mutation_fuzzer.sip.bodies import (
     SipfragBody,
     SmsBody,
 )
+from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 _CRLF: Final[str] = "\r\n"
 
@@ -308,7 +309,7 @@ def build_mt_packet(
     if method in ("SUBSCRIBE", "PUBLISH", "NOTIFY") and resolved_event_package is None:
         resolved_event_package = "presence"
     if method == "INFO" and resolved_info_package is None:
-        resolved_info_package = "dtmf"
+        resolved_info_package = DEFAULT_INFO_PACKAGE
 
     # Per-call deterministic identifiers
     rng = random.Random(seed)

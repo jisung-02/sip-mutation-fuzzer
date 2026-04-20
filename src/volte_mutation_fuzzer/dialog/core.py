@@ -146,7 +146,8 @@ class DialogOrchestrator:
         """Generate (and optionally mutate) a request, send it, and collect responses."""
         try:
             packet = self._generator.generate_request(
-                RequestSpec(method=SIPMethod(step.method)), context
+                self._build_request_spec(step),
+                context,
             )
         except Exception as exc:
             return DialogStepResult(
@@ -249,6 +250,15 @@ class DialogOrchestrator:
             profile=resolved_profile,
             strategy=resolved_strategy,
             success=True,
+        )
+
+    @staticmethod
+    def _build_request_spec(step: DialogStep) -> RequestSpec:
+        return RequestSpec(
+            method=SIPMethod(step.method),
+            body_kind=step.body_kind,
+            event_package=step.event_package,
+            info_package=step.info_package,
         )
 
     def _expect_step(

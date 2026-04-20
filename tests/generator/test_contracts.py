@@ -173,6 +173,8 @@ class RequestSpecTests(unittest.TestCase):
                 "method": "INVITE",
                 "scenario": " initial inbound call ",
                 "body_kind": " sdp_offer ",
+                "event_package": " presence ",
+                "info_package": " dtmf ",
                 "overrides": source_overrides,
             }
         )
@@ -180,6 +182,8 @@ class RequestSpecTests(unittest.TestCase):
         self.assertEqual(spec.method, SIPMethod.INVITE)
         self.assertEqual(spec.scenario, "initial inbound call")
         self.assertEqual(spec.body_kind, "sdp_offer")
+        self.assertEqual(spec.event_package, "presence")
+        self.assertEqual(spec.info_package, "dtmf")
         self.assertEqual(spec.overrides, {"max_forwards": 68})
         self.assertTrue(spec.has_overrides)
         self.assertIsNot(spec.overrides, source_overrides)
@@ -190,6 +194,8 @@ class RequestSpecTests(unittest.TestCase):
                 "method": "OPTIONS",
                 "scenario": " ",
                 "body_kind": " ",
+                "event_package": " ",
+                "info_package": " ",
                 "overrides": None,
             }
         )
@@ -197,6 +203,8 @@ class RequestSpecTests(unittest.TestCase):
         self.assertEqual(spec.method, SIPMethod.OPTIONS)
         self.assertIsNone(spec.scenario)
         self.assertIsNone(spec.body_kind)
+        self.assertIsNone(spec.event_package)
+        self.assertIsNone(spec.info_package)
         self.assertEqual(spec.overrides, {})
         self.assertFalse(spec.has_overrides)
 

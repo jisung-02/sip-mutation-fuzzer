@@ -11,7 +11,11 @@ from volte_mutation_fuzzer.sip.bodies.reginfo import ReginfoBody
 from volte_mutation_fuzzer.sip.bodies.sdp import SDPBody
 from volte_mutation_fuzzer.sip.bodies.sipfrag import SipfragBody
 from volte_mutation_fuzzer.sip.bodies.sms import SmsBody
-from volte_mutation_fuzzer.sip.body_factory import BodyContext, BodyFactory
+from volte_mutation_fuzzer.sip.body_factory import (
+    DEFAULT_INFO_PACKAGE,
+    BodyContext,
+    BodyFactory,
+)
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 
@@ -88,6 +92,38 @@ class BodyFactoryTests(unittest.TestCase):
             self.factory.select(BodyContext(method=SIPMethod.PRACK)),
             SDPBody,
         )
+
+    def test_explicit_body_kind_takes_precedence_over_method_inference(self) -> None:
+        self.assertIs(
+            self.factory.select(
+                BodyContext(
+                    method=SIPMethod.NOTIFY,
+                    body_kind=" sdp_offer ",
+                    event_package="presence",
+                )
+            ),
+            SDPBody,
+        )
+        self.assertIs(
+            self.factory.select(
+                BodyContext(
+                    method=SIPMethod.INFO,
+                    body_kind=" plain_text ",
+                    info_package=DEFAULT_INFO_PACKAGE,
+                )
+            ),
+            PlainTextBody,
+        )
+
+    def test_unknown_explicit_body_kind_raises_instead_of_falling_back(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported body_kind"):
+            self.factory.select(
+                BodyContext(
+                    method=SIPMethod.NOTIFY,
+                    body_kind="unknown-kind",
+                    event_package="presence",
+                )
+            )
 
     def test_select_response_body_types(self) -> None:
         self.assertIs(

@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from volte_mutation_fuzzer.sender.contracts import SendReceiveResult
 
@@ -23,8 +23,19 @@ class DialogStep(BaseModel):
     method: str
     role: Literal["send", "expect"]
     is_fuzz_target: bool = False
+    body_kind: str | None = None
+    event_package: str | None = None
+    info_package: str | None = None
     expect_status_min: int | None = None
     expect_status_max: int | None = None
+
+    @field_validator("body_kind", "event_package", "info_package", mode="before")
+    @classmethod
+    def _normalize_text(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
 
 
 class DialogScenario(BaseModel):

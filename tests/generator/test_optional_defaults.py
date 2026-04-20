@@ -4,6 +4,7 @@ from volte_mutation_fuzzer.generator.optional_defaults import (
     get_request_optional_defaults,
     get_response_optional_defaults,
 )
+from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 PCSCF_HOST = "pcscf.ims.mnc001.mcc001.3gppnetwork.org"
@@ -75,7 +76,7 @@ class OptionalDefaultsTests(unittest.TestCase):
     def test_info_request_has_info_package(self) -> None:
         defaults = get_request_optional_defaults(SIPMethod.INFO)
 
-        self.assertEqual(defaults["info_package"], "g.3gpp.iari-ref")
+        self.assertEqual(defaults["info_package"], DEFAULT_INFO_PACKAGE)
 
     def test_refer_request_has_refer_sub_enabled(self) -> None:
         defaults = get_request_optional_defaults(SIPMethod.REFER)

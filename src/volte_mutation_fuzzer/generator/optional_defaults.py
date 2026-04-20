@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from volte_mutation_fuzzer.sip.common import SIPMethod
+from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 _COMMON_REQUEST_OPTIONALS: dict[str, Any] = {
     "supported": (
@@ -81,7 +82,7 @@ _METHOD_REQUEST_OPTIONALS: dict[SIPMethod, dict[str, Any]] = {
         "recv_info": ("g.3gpp.iari-ref",),
     },
     SIPMethod.INFO: {
-        "info_package": "g.3gpp.iari-ref",
+        "info_package": DEFAULT_INFO_PACKAGE,
     },
 }
 

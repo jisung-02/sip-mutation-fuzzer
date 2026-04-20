@@ -18,17 +18,42 @@ from volte_mutation_fuzzer.sip.bodies import (
 )
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
+DEFAULT_INFO_PACKAGE = "dtmf"
+
 
 @dataclass(frozen=True)
 class BodyContext:
     method: SIPMethod
     status_code: int | None = None
+    body_kind: str | None = None
     event_package: str | None = None
     info_package: str | None = None
     sms_over_ip: bool = False
 
 
 class BodyFactory:
+    _BODY_KIND_MAP: dict[str, type[SIPBody]] = {
+        "conference": ConferenceInfoBody,
+        "conference_info": ConferenceInfoBody,
+        "conference-info": ConferenceInfoBody,
+        "dialog": DialogInfoBody,
+        "dialog_info": DialogInfoBody,
+        "dialog-info": DialogInfoBody,
+        "dtmf": DtmfRelayBody,
+        "ims_service": ImsServiceBody,
+        "ims-service": ImsServiceBody,
+        "message_summary": MessageSummaryBody,
+        "message-summary": MessageSummaryBody,
+        "pidf": PIdfBody,
+        "plain_text": PlainTextBody,
+        "plain-text": PlainTextBody,
+        "reginfo": ReginfoBody,
+        "sdp": SDPBody,
+        "sdp_offer": SDPBody,
+        "sdp-offer": SDPBody,
+        "sipfrag": SipfragBody,
+        "sms": SmsBody,
+    }
     _EVENT_BODY_MAP: dict[str, type[SIPBody]] = {
         "conference": ConferenceInfoBody,
         "dialog": DialogInfoBody,
@@ -38,11 +63,17 @@ class BodyFactory:
         "reg": ReginfoBody,
     }
     _INFO_BODY_MAP: dict[str, type[SIPBody]] = {
-        "dtmf": DtmfRelayBody,
+        DEFAULT_INFO_PACKAGE: DtmfRelayBody,
     }
     _SDP_METHODS = frozenset({SIPMethod.INVITE, SIPMethod.PRACK, SIPMethod.UPDATE})
 
     def select(self, ctx: BodyContext) -> type[SIPBody] | None:
+        normalized_body_kind = self._normalize(ctx.body_kind)
+        explicit_body = self._BODY_KIND_MAP.get(normalized_body_kind)
+        if explicit_body is not None:
+            return explicit_body
+        if normalized_body_kind:
+            raise ValueError(f"unsupported body_kind: {ctx.body_kind}")
         if ctx.status_code is None:
             return self._select_request_body(ctx)
         return self._select_response_body(ctx)

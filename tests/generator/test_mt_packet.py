@@ -1,4 +1,5 @@
 from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
+from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 
 def _split_packet(packet: str) -> tuple[str, str]:
@@ -125,7 +126,7 @@ def test_build_mt_packet_info_has_default_dtmf_body_and_header() -> None:
 
     headers, body = _split_packet(packet)
     assert "INFO sip:" in headers
-    assert "Info-Package: dtmf" in headers
+    assert f"Info-Package: {DEFAULT_INFO_PACKAGE}" in headers
     assert "Content-Type: application/dtmf-relay" in headers
     assert "Signal=4" in body
     assert "Duration=160" in body

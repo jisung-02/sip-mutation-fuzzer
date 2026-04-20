@@ -267,10 +267,12 @@ class SIPGenerator:
             # Softphone body (body_factory)
             if "body" not in (spec.overrides or {}):
                 event_pkg = spec.event_package or self._infer_event_package(defaults)
+                info_pkg = spec.info_package or self._infer_info_package(defaults)
                 body_ctx = BodyContext(
                     method=spec.method,
+                    body_kind=spec.body_kind,
                     event_package=event_pkg,
-                    info_package=spec.info_package,
+                    info_package=info_pkg,
                     sms_over_ip=spec.sms_over_ip,
                 )
                 body_model = self._body_factory.create(body_ctx)
@@ -288,6 +290,13 @@ class SIPGenerator:
         if isinstance(event, EventHeader):
             return event.package
         return None
+
+    def _infer_info_package(self, defaults: dict[str, Any]) -> str | None:
+        info_package = defaults.get("info_package")
+        if not isinstance(info_package, str):
+            return None
+        stripped = info_package.strip()
+        return stripped or None
 
     def _build_response_defaults(
         self,

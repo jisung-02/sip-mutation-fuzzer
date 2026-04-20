@@ -12,10 +12,19 @@ from volte_mutation_fuzzer.dialog.contracts import (
 
 class TestDialogStep:
     def test_send_step(self) -> None:
-        step = DialogStep(method="INVITE", role="send")
+        step = DialogStep(
+            method="INVITE",
+            role="send",
+            body_kind=" sdp_offer ",
+            event_package=" presence ",
+            info_package=" dtmf ",
+        )
         assert step.method == "INVITE"
         assert step.role == "send"
         assert step.is_fuzz_target is False
+        assert step.body_kind == "sdp_offer"
+        assert step.event_package == "presence"
+        assert step.info_package == "dtmf"
 
     def test_expect_step(self) -> None:
         step = DialogStep(
@@ -26,6 +35,9 @@ class TestDialogStep:
         )
         assert step.expect_status_min == 200
         assert step.expect_status_max == 299
+        assert step.body_kind is None
+        assert step.event_package is None
+        assert step.info_package is None
 
     def test_fuzz_target_flag(self) -> None:
         step = DialogStep(method="BYE", role="send", is_fuzz_target=True)

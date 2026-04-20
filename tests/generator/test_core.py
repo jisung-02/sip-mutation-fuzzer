@@ -13,7 +13,9 @@ from volte_mutation_fuzzer.sip.requests import (
     REQUEST_MODELS_BY_METHOD,
     ByeRequest,
     CancelRequest,
+    InfoRequest,
     InviteRequest,
+    NotifyRequest,
     OptionsRequest,
     SubscribeRequest,
 )
@@ -297,6 +299,52 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.method, SIPMethod.PUBLISH)
         self.assertEqual(packet.content_type, "application/pidf+xml")
         self.assertIsNotNone(packet.body)
+
+    def test_generate_request_defaults_info_to_dtmf_body_and_package(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
+            local_cseq=2,
+            remote_cseq=1,
+            request_uri=SIPURI(
+                scheme="sip",
+                user="001010000123511",
+                host=UE_HOST,
+            ),
+        )
+
+        packet = generator.generate_request(
+            RequestSpec(method=SIPMethod.INFO),
+            context,
+        )
+
+        assert isinstance(packet, InfoRequest)
+        self.assertEqual(packet.info_package, "dtmf")
+        self.assertEqual(packet.content_type, "application/dtmf-relay")
+        assert packet.body is not None
+        self.assertIn("Signal=", packet.body)
+        self.assertIn("Duration=160", packet.body)
+
+    def test_generate_request_honors_explicit_body_kind_before_event_inference(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+
+        packet = generator.generate_request(
+            RequestSpec(
+                method=SIPMethod.NOTIFY,
+                body_kind="sipfrag",
+                event_package="presence",
+            )
+        )
+
+        assert isinstance(packet, NotifyRequest)
+        assert packet.event is not None
+        self.assertEqual(packet.event.package, "presence")
+        self.assertEqual(packet.content_type, "message/sipfrag;version=2.0")
+        self.assertEqual(packet.body, "SIP/2.0 200 OK")
 
     def test_build_response_defaults_populates_subscribe_and_register_success_fields(
         self,
