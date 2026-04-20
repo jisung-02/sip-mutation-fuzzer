@@ -78,8 +78,15 @@ def _parse_context(raw_value: str | None, *, required: bool) -> DialogContext | 
         raise typer.BadParameter(str(exc), param_hint="--context") from exc
 
 
-def _build_config(strategy: str, layer: str, seed: int | None) -> MutationConfig:
-    return MutationConfig(strategy=strategy, layer=layer, seed=seed)  # type: ignore[arg-type]
+def _build_config(
+    profile: str, strategy: str, layer: str, seed: int | None
+) -> MutationConfig:
+    return MutationConfig(
+        profile=profile,
+        strategy=strategy,
+        layer=layer,
+        seed=seed,
+    )  # type: ignore[arg-type]
 
 
 def _build_target(target: str | None, layer: str) -> MutationTarget | None:
@@ -101,6 +108,12 @@ def _execute_mutation(
     return mutator.mutate(packet, config, context)
 
 
+def _apply_profile(case: MutatedCase, profile: str) -> MutatedCase:
+    if case.profile == profile:
+        return case
+    return case.model_copy(update={"profile": profile})
+
+
 def _render_result(case: MutatedCase) -> str:
     payload = case.model_dump(mode="json", by_alias=True, exclude_none=True)
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
@@ -111,10 +124,17 @@ _STRATEGY_HELP = (
     "final_crlf_loss, duplicate_content_length_conflict, tail_chop_1, "
     "tail_garbage, alias_port_desync."
 )
+_PROFILE_HELP = (
+    "Mutation profile name. Examples: legacy, delivery_preserving, "
+    "ims_specific, parser_breaker."
+)
 
 
 @app.command("packet")
 def packet_command(
+    profile: Annotated[
+        str, typer.Option("--profile", help=_PROFILE_HELP)
+    ] = "legacy",
     strategy: Annotated[
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
@@ -131,16 +151,19 @@ def packet_command(
     """Mutate a SIP packet from JSON read on stdin."""
     raw = sys.stdin.read()
     packet = _parse_packet_json(raw)
-    config = _build_config(strategy, layer, seed)
+    config = _build_config(profile, strategy, layer, seed)
     mutation_target = _build_target(target, layer)
     mutator = SIPMutator()
-    case = _execute_mutation(mutator, packet, config, mutation_target)
+    case = _apply_profile(_execute_mutation(mutator, packet, config, mutation_target), config.profile)
     typer.echo(_render_result(case))
 
 
 @app.command("request")
 def request_command(
     method: SIPMethod,
+    profile: Annotated[
+        str, typer.Option("--profile", help=_PROFILE_HELP)
+    ] = "legacy",
     strategy: Annotated[
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
@@ -162,10 +185,10 @@ def request_command(
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    config = _build_config(strategy, layer, seed)
+    config = _build_config(profile, strategy, layer, seed)
     mutation_target = _build_target(target, layer)
     mutator = SIPMutator()
-    case = _execute_mutation(mutator, packet, config, mutation_target)
+    case = _apply_profile(_execute_mutation(mutator, packet, config, mutation_target), config.profile)
     typer.echo(_render_result(case))
 
 
@@ -176,6 +199,9 @@ def response_command(
     context: Annotated[
         str, typer.Option("--context", help="Required DialogContext JSON object.")
     ],
+    profile: Annotated[
+        str, typer.Option("--profile", help=_PROFILE_HELP)
+    ] = "legacy",
     strategy: Annotated[
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
@@ -200,10 +226,10 @@ def response_command(
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    config = _build_config(strategy, layer, seed)
+    config = _build_config(profile, strategy, layer, seed)
     mutation_target = _build_target(target, layer)
     mutator = SIPMutator()
-    case = _execute_mutation(mutator, packet, config, mutation_target)
+    case = _apply_profile(_execute_mutation(mutator, packet, config, mutation_target), config.profile)
     typer.echo(_render_result(case))
 
 

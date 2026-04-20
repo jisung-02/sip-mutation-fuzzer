@@ -163,6 +163,108 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertTrue(captured["config"].crash_analysis)
 
+    def test_run_command_parses_profile_and_scales_default_strategy_by_profile(
+        self,
+    ) -> None:
+        captured: dict[str, CampaignConfig] = {}
+
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-profile",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--target-host",
+                    "127.0.0.1",
+                    "--target-port",
+                    "5060",
+                    "--methods",
+                    "OPTIONS",
+                    "--layer",
+                    "wire",
+                    "--profile",
+                    "parser_breaker",
+                    "--max-cases",
+                    "1",
+                    "--timeout",
+                    "0.1",
+                    "--cooldown",
+                    "0",
+                    "--no-process-check",
+                    "--output",
+                    "test_run",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].profiles, ("parser_breaker",))
+        self.assertEqual(captured["config"].strategies, ("default",))
+
+    def test_run_command_defaults_to_legacy_profile_strategy_pair(self) -> None:
+        captured: dict[str, CampaignConfig] = {}
+
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-legacy",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--target-host",
+                    "127.0.0.1",
+                    "--target-port",
+                    "5060",
+                    "--methods",
+                    "OPTIONS",
+                    "--layer",
+                    "model",
+                    "--max-cases",
+                    "1",
+                    "--timeout",
+                    "0.1",
+                    "--cooldown",
+                    "0",
+                    "--no-process-check",
+                    "--output",
+                    "test_run",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].profiles, ("legacy",))
+        self.assertEqual(captured["config"].strategies, ("default", "state_breaker"))
+
     def test_run_command_msisdn_banner_omits_unresolved_port(self) -> None:
         def _build_executor(config: CampaignConfig) -> Mock:
             executor = Mock()

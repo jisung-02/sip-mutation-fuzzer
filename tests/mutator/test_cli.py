@@ -37,6 +37,8 @@ class SIPMutatorCLITests(unittest.TestCase):
             self.app,
             [
                 "packet",
+                "--profile",
+                "parser_breaker",
                 "--layer",
                 "model",
                 "--seed",
@@ -49,6 +51,7 @@ class SIPMutatorCLITests(unittest.TestCase):
 
         payload = self.parse_output(result)
 
+        self.assertEqual(payload["profile"], "parser_breaker")
         self.assertEqual(payload["final_layer"], "model")
         self.assertEqual(payload["strategy"], "default")
         self.assertEqual(payload["seed"], 7)
@@ -143,7 +146,7 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertFalse(payload["wire_text"].endswith("\r\n\r\n"))
 
     def test_help_exposes_basic_mutation_options(self) -> None:
-        expected_options = ("--strategy", "--layer", "--seed", "--target")
+        expected_options = ("--profile", "--strategy", "--layer", "--seed", "--target")
 
         for command in ("packet", "request", "response"):
             with self.subTest(command=command):

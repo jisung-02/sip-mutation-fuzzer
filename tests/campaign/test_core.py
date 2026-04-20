@@ -81,6 +81,19 @@ class CaseGeneratorTests(unittest.TestCase):
         for case in cases:
             self.assertEqual(case.strategy, "default")
 
+    def test_profile_filter_from_config(self) -> None:
+        cfg = self._config(
+            methods=("OPTIONS",),
+            profiles=("parser_breaker",),
+            layers=("wire",),
+            strategies=("default",),
+            max_cases=1,
+        )
+        cases = list(CaseGenerator(cfg).generate())
+        self.assertGreater(len(cases), 0)
+        for case in cases:
+            self.assertEqual(case.profile, "parser_breaker")
+
     def test_methods_come_from_config(self) -> None:
         cfg = self._config(methods=("OPTIONS", "INVITE"), max_cases=100)
         cases = list(CaseGenerator(cfg).generate())
@@ -119,6 +132,21 @@ class CaseGeneratorTests(unittest.TestCase):
 
         self.assertIn(("wire", "final_crlf_loss"), combos)
         self.assertIn(("byte", "tail_chop_1"), combos)
+
+    def test_case_generator_skips_profile_incompatible_strategy_combos(self) -> None:
+        cfg = self._config(
+            methods=("OPTIONS",),
+            profiles=("delivery_preserving",),
+            layers=("wire",),
+            strategies=("default", "final_crlf_loss", "header_whitespace_noise"),
+            max_cases=10,
+        )
+
+        cases = list(CaseGenerator(cfg).generate())
+        strategies_seen = {case.strategy for case in cases}
+
+        self.assertNotIn("final_crlf_loss", strategies_seen)
+        self.assertIn("header_whitespace_noise", strategies_seen)
 
     def test_round_cycling_repeats_combos_with_new_seeds(self) -> None:
         """After exhausting unique combos, generator cycles with new seeds."""

@@ -24,6 +24,12 @@ def _parse_methods(raw: str | None) -> tuple[str, ...] | None:
     return tuple(method.strip().upper() for method in raw.split(",") if method.strip())
 
 
+def _parse_csv(raw: str | None) -> tuple[str, ...] | None:
+    if raw is None:
+        return None
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 def _parse_response_codes(raw: str | None) -> tuple[int, ...] | None:
     if raw is None:
         return None
@@ -61,6 +67,13 @@ def run_command(
         typer.Option(
             "--strategy",
             help="Mutation strategy (default/state_breaker). Comma-separated for multiple.",
+        ),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Mutation profile (legacy/delivery_preserving/ims_specific/parser_breaker). Comma-separated for multiple.",
         ),
     ] = None,
     layer: Annotated[
@@ -225,16 +238,12 @@ def run_command(
     ] = 10,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
-    strategies = (
-        tuple(s.strip() for s in strategy.split(","))
-        if strategy
-        else ("default", "state_breaker")
-    )
-    layers = (
-        tuple(lyr.strip() for lyr in layer.split(","))
-        if layer
-        else ("model", "wire", "byte")
-    )
+    profiles = _parse_csv(profile) or ("legacy",)
+    if strategy is None:
+        strategies = ("default", "state_breaker") if profiles == ("legacy",) else ("default",)
+    else:
+        strategies = _parse_csv(strategy) or ()
+    layers = _parse_csv(layer) or ("model", "wire", "byte")
 
     if ipsec_mode is not None and ipsec_mode not in _IPSEC_MODES:
         typer.echo(
@@ -265,6 +274,7 @@ def run_command(
             methods=_parse_methods(methods) or (),
             response_codes=_parse_response_codes(response_codes) or (),
             with_dialog=bool(with_dialog) if with_dialog is not None else False,
+            profiles=profiles,
             strategies=strategies,
             layers=layers,
             max_cases=max_cases,

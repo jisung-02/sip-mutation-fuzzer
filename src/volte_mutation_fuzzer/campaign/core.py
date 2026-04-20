@@ -37,6 +37,7 @@ from volte_mutation_fuzzer.mutator.contracts import (
     MutatedCase,
     PacketModel,
 )
+from volte_mutation_fuzzer.mutator.profile_catalog import profile_supports_strategy
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.mutator.editable import parse_editable_from_wire
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
@@ -114,8 +115,8 @@ class CaseGenerator:
 
     def generate(self, skip_before: int = -1) -> Iterator[CaseSpec]:
         config = self._config
-        seen: set[tuple[str, int | None, str | None, str, str]] = set()
-        combos: list[tuple[str, int | None, str | None, str, str]] = []
+        seen: set[tuple[str, str, int | None, str | None, str, str]] = set()
+        combos: list[tuple[str, str, int | None, str | None, str, str]] = []
 
         # Template mode: drop model layer (3GPP wire text used directly)
         template_active = config.mt_invite_template is not None
@@ -127,14 +128,19 @@ class CaseGenerator:
         )
 
         for method in config.methods:
-            for layer in effective_layers:
-                for strategy in config.strategies:
-                    if strategy not in _SUPPORTED_STRATEGIES.get(layer, frozenset()):
-                        continue
-                    key = (method, None, None, layer, strategy)
-                    if key not in seen:
-                        seen.add(key)
-                        combos.append(key)
+            for profile in config.profiles:
+                for layer in effective_layers:
+                    for strategy in config.strategies:
+                        if strategy not in _SUPPORTED_STRATEGIES.get(
+                            layer, frozenset()
+                        ):
+                            continue
+                        if not profile_supports_strategy(profile, layer, strategy):
+                            continue
+                        key = (profile, method, None, None, layer, strategy)
+                        if key not in seen:
+                            seen.add(key)
+                            combos.append(key)
 
         for response_code in config.response_codes:
             response_definition = SIP_CATALOG.get_response(response_code)
@@ -142,27 +148,41 @@ class CaseGenerator:
                 method.value for method in response_definition.related_methods
             ) or ("INVITE",)
             for related_method in related_methods:
-                for layer in config.layers:
-                    for strategy in config.strategies:
-                        if strategy not in _SUPPORTED_STRATEGIES.get(
-                            layer, frozenset()
-                        ):
-                            continue
-                        key = (
-                            related_method,
-                            response_code,
-                            related_method,
-                            layer,
-                            strategy,
-                        )
-                        if key not in seen:
-                            seen.add(key)
-                            combos.append(key)
+                for profile in config.profiles:
+                    for layer in config.layers:
+                        for strategy in config.strategies:
+                            if strategy not in _SUPPORTED_STRATEGIES.get(
+                                layer, frozenset()
+                            ):
+                                continue
+                            if not profile_supports_strategy(profile, layer, strategy):
+                                continue
+                            key = (
+                                profile,
+                                related_method,
+                                response_code,
+                                related_method,
+                                layer,
+                                strategy,
+                            )
+                            if key not in seen:
+                                seen.add(key)
+                                combos.append(key)
 
         # Build the recurring combo list (excludes identity baseline).
         # Round 0 uses full combos (including identity if template_active),
         # subsequent rounds use only recurring_combos.
-        recurring_combos = [c for c in combos if c != ("INVITE", None, None, "wire", "identity")]
+        recurring_combos = [
+            c
+            for c in combos
+            if not (
+                c[1] == "INVITE"
+                and c[2] is None
+                and c[3] is None
+                and c[4] == "wire"
+                and c[5] == "identity"
+            )
+        ]
 
         unlimited = config.max_cases == 0
         case_id = 0
@@ -170,6 +190,7 @@ class CaseGenerator:
         while True:
             round_combos = combos if round_num == 0 else recurring_combos
             for (
+                profile,
                 method,
                 response_code,
                 related_method,
@@ -184,6 +205,7 @@ class CaseGenerator:
                 yield CaseSpec(
                     case_id=case_id,
                     seed=config.seed_start + case_id,
+                    profile=profile,
                     method=method,
                     layer=layer,
                     strategy=strategy,
