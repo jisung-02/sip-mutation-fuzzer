@@ -2,6 +2,35 @@
 
 **VoLTE/IMS SIP 프로토콜 변이 퍼징 도구**
 
+## 현재 작업 지침
+
+- 현재 프로젝트 분석, 구현, 검증, 문서화는 `real-ue-direct` 및 실기기 퍼징 경로를 우선 기준으로 한다.
+- 별도 요청이 없는 한 현재 소프트폰 모드는 범위 밖으로 간주하고 고려하지 않는다.
+- 소프트폰 모드 관련 설명, 제안, 디버깅, 검증은 사용자가 명시적으로 요청한 경우에만 진행한다.
+
+## AI 작업 루틴
+
+- 에이전트 온보딩과 최신 판단 기준은 [`docs/AI_AGENT_GUIDE.md`](docs/AI_AGENT_GUIDE.md)를 먼저 본다.
+- 문서가 충돌하면 우선순위는 `AGENTS.md` → `CLAUDE.md` → `docs/AI_AGENT_GUIDE.md` → `docs/USAGE.md` / `docs/ARCHITECTURE.md` → 구현 코드 순으로 본다.
+- `mode` 와 `profile` 은 독립 축이다. `mode` 는 sender/실행 경로, `profile` 은 mutator 정책 축이다.
+- `--strategy default` 는 요청값이고, 실제 실행/저장/재현은 `profile + layer + seed` 로 해석된 concrete strategy 기준으로 읽는다.
+- `mutator` CLI 의 `--layer auto` 는 profile-aware 로 동작한다. non-legacy profile 도 compatible layer 를 자동 선택한다.
+- profile 축이나 campaign/report/persistence 를 건드릴 때는 아래 파일을 먼저 읽는다.
+  - `src/volte_mutation_fuzzer/mutator/profile_catalog.py`
+  - `src/volte_mutation_fuzzer/mutator/core.py`
+  - `src/volte_mutation_fuzzer/mutator/cli.py`
+  - `src/volte_mutation_fuzzer/campaign/core.py`
+  - `src/volte_mutation_fuzzer/campaign/report.py`
+  - `src/volte_mutation_fuzzer/dialog/core.py`
+
+## 권장 Skill
+
+- 큰 변경 전 계획 수립: `writing-plans`, 필요 시 `plan-eng-review`
+- 버그/실패 조사: `investigate`, `systematic-debugging`
+- 사용자가 명시적으로 subagent 방식을 원할 때: `subagent-driven-development`
+- 완료 직전 검증/리뷰: `requesting-code-review`, `review`, `verification-before-completion`
+- 문서 동기화: `document-release`
+
 Samsung Galaxy A31 등 실제 UE를 대상으로 한 MT-INVITE 변이 퍼징을 통해 취약점을 발견할 수 있는 도구입니다.
 
 ## 🎯 Quick Start
@@ -54,6 +83,7 @@ src/volte_mutation_fuzzer/
 ## 📚 상세 문서
 
 ### 🔧 시스템 가이드
+- **[AI Agent Guide](docs/AI_AGENT_GUIDE.md)** - AI/에이전트용 우선순위, 문서 읽기 순서, skill 추천, profile 축 가이드
 - **[시스템 아키텍처](docs/ARCHITECTURE.md)** - 전체 구성 요소 및 데이터 흐름
 - **[사용법 가이드](docs/USAGE.md)** - 상세 CLI 옵션 및 설정
 - **[문제 해결](docs/TROUBLESHOOTING.md)** - 자주 발생하는 문제와 해결책

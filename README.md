@@ -6,11 +6,12 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 본 연구에서는 SIP RFC문서를 기반으로 정상 메시지를 생성하고 이를 변조하여 단말 방향으로 전달하는 Mutation 기반 SIP퍼저를 설계 및 구현하여 실제 단말 환경에서 발생 가능한 메모리 오류 및 크래시 징후를 탐지하는 것을 목표로 한다.
 
 ## 문서 구조
+- [docs/AI_AGENT_GUIDE.md](docs/AI_AGENT_GUIDE.md): AI/에이전트용 우선순위, 문서 읽기 순서, skill 추천, mutation profile 축 가이드
 - [docs/README.md](docs/README.md): 전체 문서 인덱스
 - [docs/기획/PRD.md](docs/기획/PRD.md): 프로젝트 목표, 범위, 요구사항, 완료 기준
 - [docs/기획/GENERATOR_PRD.md](docs/기획/GENERATOR_PRD.md): Generator 상세 설계 문서
 - [docs/기획/MUTATOR_PRD.md](docs/기획/MUTATOR_PRD.md): Mutator 상세 설계 문서 (model/wire/byte 변조 + Typer CLI 설계 포함)
-- [docs/기획/PHASE4_PRD.md](docs/기획/PHASE4_PRD.md): Softphone-first Sender/Reactor 상세 설계 문서
+- [docs/기획/PHASE4_PRD.md](docs/기획/PHASE4_PRD.md): historical softphone-first Sender/Reactor 설계 문서
 - [docs/결과/GENERATOR-구현-결과.md](docs/결과/GENERATOR-구현-결과.md): Generator 구현 및 CLI 적용 결과
 - [docs/결과/SIP-공격면-우선순위표.md](docs/결과/SIP-공격면-우선순위표.md): 공격면 우선순위 문서
 - [docs/프로토콜/단말-기준-SIP-메시지-분류.md](docs/프로토콜/단말-기준-SIP-메시지-분류.md): 단말 기준 SIP 메시지 전체 분류
@@ -128,7 +129,8 @@ uv run fuzzer mutate response 200 INVITE --context '{"call_id":"call-1","local_t
 자세한 책임 분리와 내부 구현 원칙은 `docs/기획/MUTATOR_PRD.md`를 기준으로 한다.
 
 ## Sender/Reactor CLI 빠른 사용
-Softphone-first Phase 4 1차 구현으로 `fuzzer send ...` 서브커맨드가 추가되었다.
+`fuzzer send ...` 서브커맨드는 softphone 경로와 real-ue-direct 경로를 모두 지원한다.
+현재 운영 우선순위는 softphone-first 계획 문서보다 `real-ue-direct` 와 실기기 경로에 있다.
 
 baseline request를 바로 전송:
 

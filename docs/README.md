@@ -4,6 +4,7 @@
 
 | 문서 | 설명 |
 |------|------|
+| [`AI_AGENT_GUIDE.md`](AI_AGENT_GUIDE.md) | AI/에이전트용 온보딩, 우선순위, skill 추천, mutation profile 축 해설 |
 | [`프로젝트-개요.md`](프로젝트-개요.md) | 프로젝트 소개, 아키텍처, 모듈 요약, CLI, 개발 환경 |
 | [`구현-문서.md`](구현-문서.md) | 모듈별 설계 배경, 동작 방식, 코드 구조 상세 |
 | [`Fuzzer.md`](Fuzzer.md) | 퍼저 이론, SIP 프로토콜 퍼저 고려사항, 공격면 분류 (그룹 A~K) |
@@ -18,7 +19,7 @@
 | [`기획/PRD.md`](기획/PRD.md) | 프로젝트 목표, 범위, 기능/비기능 요구사항, 단계별 완료 기준 |
 | [`기획/GENERATOR_PRD.md`](기획/GENERATOR_PRD.md) | Generator 책임, 공개 API, 생성 흐름, CLI 경계 |
 | [`기획/MUTATOR_PRD.md`](기획/MUTATOR_PRD.md) | Mutator model/wire/byte 변조 구조, CLI 모드, 구현 우선순위 |
-| [`기획/PHASE4_PRD.md`](기획/PHASE4_PRD.md) | softphone-first Sender/Reactor 1차 범위, 공개 인터페이스 |
+| [`기획/PHASE4_PRD.md`](기획/PHASE4_PRD.md) | historical softphone-first Sender/Reactor 1차 범위 문서. 현재 운영 우선순위는 real-ue-direct 기준 |
 | [`기획/REAL_UE_DIRECT_PRD.md`](기획/REAL_UE_DIRECT_PRD.md) | real-ue-direct resolver 순서, route readiness, CLI 규칙 |
 
 ### `결과/` — 구현 결과, 리서치
@@ -27,8 +28,8 @@
 |------|------|
 | [`결과/GENERATOR-구현-결과.md`](결과/GENERATOR-구현-결과.md) | Generator 구현 상태, CLI 엔트리포인트, 검증 결과 |
 | [`결과/PHASE4-SENDER-REACTOR-리서치.md`](결과/PHASE4-SENDER-REACTOR-리서치.md) | Phase 4 Sender/Reactor 구현 경로 비교 리서치 |
-| [`결과/PHASE4-REAL-UE-SOFTPHONE-후속-리서치.md`](결과/PHASE4-REAL-UE-SOFTPHONE-후속-리서치.md) | SDR/USRP vs softphone 경로 비교, Baresip/Linphone/PJSIP 후보 비교 |
-| [`결과/SIP-공격면-우선순위표.md`](결과/SIP-공격면-우선순위표.md) | 공격면 우선순위 + softphone-first 실행 순서 |
+| [`결과/PHASE4-REAL-UE-SOFTPHONE-후속-리서치.md`](결과/PHASE4-REAL-UE-SOFTPHONE-후속-리서치.md) | historical 비교 리서치. 현재 기본 운용 모드는 real-ue-direct |
+| [`결과/SIP-공격면-우선순위표.md`](결과/SIP-공격면-우선순위표.md) | 공격면 우선순위 정리. 일부 softphone-first 맥락은 역사적 참고용 |
 
 ### `프로토콜/` — SIP 프로토콜 참조 자료
 
