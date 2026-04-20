@@ -25,6 +25,27 @@ graph TB
 
 ## 🏗️ 주요 구성 요소
 
+### Packet Completeness / Runtime Honesty
+
+SIP 요청 메서드 지원은 단순히 "구현됨"으로 읽지 않는다. 현재 아키텍처는 메서드별 완성도를 아래 축으로 분리한다.
+
+- `runtime_complete`: 현재 저장소 안에서 honest runtime path 가 있어 campaign/dialog/runtime 검증이 가능한 메서드
+- `generator_complete`: coherent generation/mutation 은 있지만, runtime prerequisite state 를 저장소가 아직 소유하지 않는 메서드
+
+여기서 `runtime_complete`는 자동으로 "real-device validated"를 뜻하지 않는다. 실제 의미는 `baseline_scope`에 따라 갈린다.
+
+- `real_ue_baseline`: 실제 UE 기준 baseline 이 있는 범위. 현재 `INVITE`만 해당
+- `invite_dialog`: INVITE로 honest state 를 세운 뒤 다이얼로그 내부에서 검증하는 범위
+- `stateless`: 별도 dialog setup 없이 직접 runtime path 를 태우는 범위
+- `generator_only`: generator/render/mutation 기준으로만 정직하게 말할 수 있는 범위
+
+현재 기준:
+
+- `INVITE`는 `runtime_complete + real_ue_baseline`
+- `ACK/BYE/CANCEL/INFO/PRACK/REFER/UPDATE`는 `runtime_complete + invite_dialog`
+- `MESSAGE/OPTIONS`는 `runtime_complete + stateless`
+- `NOTIFY/PUBLISH/REGISTER/SUBSCRIBE`는 `generator_complete + generator_only`
+
 ### 1. Campaign Layer (캠페인 실행)
 
 #### `CampaignExecutor`
@@ -60,12 +81,14 @@ graph TB
 #### `SIPGenerator`
 - **역할**: 구조적 SIP 패킷 생성 (model layer용)
 - **방식**: PacketModel → 렌더링 → wire text
+- **완성도 해석**: `generator_complete` 메서드도 여기서는 생성 가능하지만, 그것만으로 honest runtime support 를 의미하지는 않는다.
 
 #### `MT Template System`
 - **파일**: `generator/templates/mt_invite_a31.sip.tmpl`
 - **역할**: 실제 capture 기반 완전한 3GPP MT-INVITE 생성
 - **슬롯**: 18개 동적 매개변수 (IMPI, port_pc/port_ps, Call-ID 등)
 - **렌더링**: `build_default_slots()` → `render_mt_invite()`
+- **범위**: 현재 real-UE baseline 주력 경로는 `INVITE`다. 비-INVITE 메서드도 MT packet builder 경로는 존재하지만, 각 메서드의 honest claim 범위는 completeness registry의 `baseline_scope`로 읽어야 한다.
 
 ### 3. Mutator Layer (변이 엔진)
 
@@ -128,6 +151,8 @@ elif ipsec_mode == "bypass":
   - `resolve_protected_ports()`: port_pc/port_ps 실시간 조회
   - `resolve_ue_ip_from_msisdn()`: MSISDN → IP 매핑
 
+real-ue-direct 는 현재 문서 기준에서 "모든 runtime_complete 메서드가 실기기에서 동일 수준으로 검증되었다"는 뜻이 아니다. 실기기 baseline 은 `INVITE`이고, 나머지 runtime-complete 메서드는 주로 stateless 또는 invite-dialog smoke/runtime 경로로 정직하게 설명해야 한다.
+
 ### 5. Oracle Layer (응답 판정)
 
 #### `OracleEngine`
@@ -188,6 +213,8 @@ SIPSenderReactor → UDP/TCP direct send → SoftPhone
 OracleEngine → Verdict → ResultStore
 ```
 
+이 경로는 현재 `stateless` 메서드와 `invite_dialog` 메서드의 honest smoke/runtime 검증에 주로 사용된다.
+
 ### 2. Real-UE-Direct 모드 (A31)
 ```
 CLI Input{target_msisdn} → resolve_ue_ip → CampaignConfig{target_host}
@@ -208,6 +235,8 @@ A31 UE → SIP Response → OracleEngine + AdbConnector
     ↓
 Verdict + ADB snapshot → ResultStore + PcapCapture
 ```
+
+이 경로에서 가장 강한 baseline 은 `INVITE`다. `INFO`의 경우 invite-dialog 경로에서 기본 `info_package=dtmf`를 사용하며, real-ue-direct packet generation도 DTMF body를 실제 wire에 materialize 한다. `REFER`는 명시적으로 body를 덮어쓰지 않는 한 기본적으로 bodyless 로 유지된다. `PRACK`는 "임의의 18x"가 아니라 `Require: 100rel` 과 `RSeq`가 있는 reliable provisional response 에 의존한다.
 
 ## 🎛️ 설정 시스템
 
@@ -314,14 +343,14 @@ def check_fragmentation(payload: bytes, ipsec_mode: str) -> bool:
 ### 메모리 사용
 - **Template 캐싱**: 첫 로드 후 메모리 보관
 - **Pcap 버퍼링**: 케이스별 파일 분리로 메모리 절약
-- **Oracle 상태**: stateless 설계
+- **Oracle 상태**: verdict 평가는 per-case 중심으로 유지되지만, campaign/dialog 경로는 같은 케이스 안에서 INVITE 기반 dialog state를 세워서 `ACK/BYE/CANCEL/INFO/PRACK/REFER/UPDATE` 같은 runtime-complete 메서드를 검증할 수 있다.
 
 ---
 
 ## 🔮 확장 방향
 
 1. **다중 UE 지원**: IMPI 기반 동시 퍼징
-2. **Dialog 확장**: ACK/BYE까지 포함한 full dialog 퍼징  
+2. **Dialog 확장**: 현재 invite-dialog/runtime-complete 범위를 넘어서 SUBSCRIBE/NOTIFY, REGISTER, PUBLISH 같은 prerequisite-state 경로를 honest runtime path 로 넓히기
 3. **SDP 전용 mutator**: 미디어 협상 집중 공격
 4. **ML 기반 oracle**: 응답 패턴 학습을 통한 anomaly 감지
 5. **분산 실행**: 여러 host에서 병렬 캠페인 실행

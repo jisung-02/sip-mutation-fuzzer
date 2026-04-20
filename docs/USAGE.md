@@ -17,12 +17,39 @@ uv run fuzzer campaign run --target-host 127.0.0.1 --max-cases 10
 
 # A31 실기기 대상 퍼징  
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --ipsec-mode null --max-cases 5
+  --methods INVITE --mt-invite-template a31 --ipsec-mode null --max-cases 5
 
 # A31 실기기 대상 실제 IPsec 경로 검증
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --ipsec-mode native --max-cases 1
+  --methods INVITE --mt-invite-template a31 --ipsec-mode native --max-cases 1
 ```
+
+## 📦 SIP Packet Completeness
+
+이 저장소는 SIP 요청 메서드 지원을 하나의 "지원됨"으로 뭉뚱그려 말하지 않고, 두 축으로 구분한다.
+
+- `runtime_complete`: 현재 코드베이스에서 honest runtime path 로 실제 송신/검증 흐름을 갖는 메서드
+- `generator_complete`: generator/mutator는 일관되게 동작하지만, 저장소가 아직 honest runtime prerequisite state 를 소유하지 않는 메서드
+
+중요한 점:
+
+- `runtime_complete`가 곧 "실기기 validated"를 뜻하지는 않는다.
+- 실제 의미는 `baseline_scope`로 읽어야 한다.
+- 현재 `INVITE`만 `real_ue_baseline` 이다.
+- `ACK`, `BYE`, `CANCEL`, `INFO`, `PRACK`, `REFER`, `UPDATE`는 `invite_dialog` 범위에서의 honest runtime path 다.
+- `MESSAGE`, `OPTIONS`는 `stateless` runtime path 다.
+- `NOTIFY`, `PUBLISH`, `REGISTER`, `SUBSCRIBE`는 현재 `generator_complete`이며, coherent generation/mutation 은 되지만 runtime prerequisite state 는 아직 저장소 범위 밖이다.
+
+요약 표:
+
+| 분류 | 메서드 |
+| --- | --- |
+| `runtime_complete` + `real_ue_baseline` | `INVITE` |
+| `runtime_complete` + `invite_dialog` | `ACK`, `BYE`, `CANCEL`, `INFO`, `PRACK`, `REFER`, `UPDATE` |
+| `runtime_complete` + `stateless` | `MESSAGE`, `OPTIONS` |
+| `generator_complete` + `generator_only` | `NOTIFY`, `PUBLISH`, `REGISTER`, `SUBSCRIBE` |
+
+세부 기준과 notes 는 [`docs/프로토콜/SIP-메시지-완성도-매트릭스.md`](프로토콜/SIP-메시지-완성도-매트릭스.md)를 단일 기준으로 본다.
 
 ## 📋 CLI 옵션 상세
 
@@ -104,7 +131,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ```bash
 # IMS 헤더/alias 중심 변이: real-UE 경로에서도 자연스럽게 사용 가능
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 \
+  --mt-invite-template a31 \
   --methods INVITE --profile ims_specific --layer wire --strategy default \
   --max-cases 10
 
@@ -123,20 +150,76 @@ uv run fuzzer campaign run --target-host 127.0.0.1 --methods OPTIONS --max-cases
 
 # A31 connectivity 테스트  
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --profile legacy \
+  --mt-invite-template a31 --profile legacy \
   --strategy identity --max-cases 1
+```
+
+### Packet Completeness 스모크 테스트
+
+아래 예시는 `baseline_scope`를 구분해서 읽어야 한다. 복붙용 예시는 현재 운영 가정에 맞춰 `--impi` 없이 적는 것을 기본으로 한다.
+
+```bash
+# 1) real-ue baseline smoke: 현재 실기기 baseline 은 INVITE
+uv run fuzzer campaign run \
+  --mode real-ue-direct \
+  --target-msisdn 111111 \
+  --methods INVITE \
+  --profile legacy \
+  --layer wire \
+  --strategy identity \
+  --mt-invite-template a31 \
+  --ipsec-mode null \
+  --preserve-contact --preserve-via \
+  --max-cases 1
+
+# 2) stateless runtime smoke: OPTIONS
+uv run fuzzer campaign run \
+  --target-host 127.0.0.1 --target-port 5060 \
+  --methods OPTIONS \
+  --profile legacy \
+  --layer model \
+  --strategy identity \
+  --max-cases 1
+
+# 3) stateless runtime smoke: MESSAGE
+uv run fuzzer campaign run \
+  --target-host 127.0.0.1 --target-port 5060 \
+  --methods MESSAGE \
+  --profile legacy \
+  --layer model \
+  --strategy identity \
+  --max-cases 1
+
+# 4) invite-dialog runtime smoke: INFO 기본값은 dtmf body/materialization
+uv run fuzzer campaign run \
+  --target-host 127.0.0.1 --target-port 5060 \
+  --methods INFO \
+  --profile legacy \
+  --layer model \
+  --strategy identity \
+  --max-cases 1
+
+# 5) invite-dialog runtime smoke: PRACK 는 reliable provisional response 가 필요
+# 단순 "아무 18x"가 아니라 Require: 100rel + RSeq 가 있는 provisional response 여야 함
+uv run fuzzer campaign run \
+  --target-host 127.0.0.1 --target-port 5060 \
+  --methods PRACK \
+  --profile legacy \
+  --layer model \
+  --strategy identity \
+  --max-cases 1
 ```
 
 ### 2. 표준 변이 퍼징
 ```bash
 # 소프트폰: 전체 메서드 + 모든 레이어
 uv run fuzzer campaign run --target-host 192.168.1.100 \
-  --methods OPTIONS,INVITE,MESSAGE,REGISTER \
+  --methods OPTIONS,INVITE,MESSAGE \
   --profile legacy --layer model,wire,byte --strategy default --max-cases 500
 
 # A31: INVITE 집중 + 바이트 변이
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 \
+  --mt-invite-template a31 \
   --methods INVITE --profile ims_specific --layer byte --strategy default --max-cases 200
 ```
 
@@ -144,7 +227,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ```bash
 # 완전한 데이터 수집
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 \
+  --mt-invite-template a31 \
   --profile delivery_preserving --layer wire,byte --strategy default --max-cases 100 \
   --pcap --pcap-interface br-volte --pcap-dir results/pcaps \
   --adb --adb-serial SM_A315F_12345 \
@@ -273,7 +356,7 @@ uv run fuzzer mutate packet --layer byte --strategy tail_chop_1 < baseline.json
 
 # MT-template / real-UE 집중 전략
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --methods INVITE --layer wire \
+  --methods INVITE --layer wire \
   --strategy alias_port_desync --mt-invite-template a31 --ipsec-mode null \
   --max-cases 1
 ```
@@ -284,17 +367,17 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ```bash
 # 1. 연결성 확인
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --profile legacy \
+  --mt-invite-template a31 --profile legacy \
   --strategy identity --max-cases 1
 
 # 2. 소규모 테스트
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --profile ims_specific \
+  --mt-invite-template a31 --profile ims_specific \
   --strategy default --max-cases 10
 
 # 3. 본격 퍼징
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --profile delivery_preserving \
+  --mt-invite-template a31 --profile delivery_preserving \
   --strategy default --max-cases 1000 \
   --pcap --adb --adb-serial <SERIAL>
 ```
@@ -312,7 +395,7 @@ mkdir -p $OUTPUT_DIR
 for LAYER in wire byte; do
     uv run fuzzer campaign run \
         --mode real-ue-direct --target-msisdn 111111 \
-        --impi 001010000123511 --mt-invite-template a31 \
+        --mt-invite-template a31 \
         --profile parser_breaker --layer $LAYER --strategy default --max-cases 2000 \
         --output $OUTPUT_DIR/campaign_$LAYER.jsonl \
         --pcap-dir $OUTPUT_DIR/pcaps_$LAYER \

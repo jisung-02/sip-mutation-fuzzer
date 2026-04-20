@@ -8,6 +8,7 @@
 | [`AI_AGENT_GUIDE_EXPLAINED.md`](AI_AGENT_GUIDE_EXPLAINED.md) | 위 AI 가이드를 사람이 읽기 쉽게 풀어쓴 설명 문서 |
 | [`프로젝트-개요.md`](프로젝트-개요.md) | 프로젝트 소개, 아키텍처, 모듈 요약, CLI, 개발 환경 |
 | [`구현-문서.md`](구현-문서.md) | 모듈별 설계 배경, 동작 방식, 코드 구조 상세 |
+| [`프로토콜/SIP-메시지-완성도-매트릭스.md`](프로토콜/SIP-메시지-완성도-매트릭스.md) | `runtime_complete` / `generator_complete`, `runtime_path`, `baseline_scope`를 함께 읽는 현재 SIP packet completeness 기준 |
 | [`Fuzzer.md`](Fuzzer.md) | 퍼저 이론, SIP 프로토콜 퍼저 고려사항, 공격면 분류 (그룹 A~K) |
 | [`발전-로드맵.md`](발전-로드맵.md) | Phase 완료 현황, 미해결 의사결정, 단기/장기 로드맵 |
 
