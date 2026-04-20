@@ -5,6 +5,16 @@ from volte_mutation_fuzzer.sip.catalog import (
     SIPCatalog,
     validate_catalog_counts,
 )
+from volte_mutation_fuzzer.sip.completeness import (
+    GENERATOR_COMPLETE_METHODS,
+    PACKET_COMPLETENESS,
+    PacketBaselineScope,
+    PacketCompletion,
+    PacketCompletionTier,
+    PacketRuntimePath,
+    RUNTIME_COMPLETE_METHODS,
+    get_packet_completion,
+)
 from volte_mutation_fuzzer.sip.common import (
     AbsoluteURI,
     AuthChallenge,
@@ -47,6 +57,12 @@ __all__ = [
     "REQUEST_MODELS_BY_METHOD",
     "RESPONSE_DEFINITIONS",
     "RESPONSE_MODELS_BY_CODE",
+    "GENERATOR_COMPLETE_METHODS",
+    "PACKET_COMPLETENESS",
+    "PacketBaselineScope",
+    "PacketCompletion",
+    "PacketCompletionTier",
+    "PacketRuntimePath",
     "RequestReceptionProfile",
     "RetryAfterHeader",
     "SIPCatalog",
@@ -62,6 +78,8 @@ __all__ = [
     "SubscriptionStateHeader",
     "URIReference",
     "UERole",
+    "RUNTIME_COMPLETE_METHODS",
     "ViaHeader",
+    "get_packet_completion",
     "validate_catalog_counts",
 ]
