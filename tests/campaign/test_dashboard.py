@@ -79,6 +79,43 @@ class ConsoleProgressReporterTests(unittest.TestCase):
         # Should NOT contain the summary separator
         self.assertNotIn("---", output)
 
+    def test_case_line_uses_result_profile_and_strategy(self) -> None:
+        buf = self._capture()
+        try:
+            reporter = ConsoleProgressReporter(
+                total_cases=10, campaign_id="test2b", summary_interval=100
+            )
+            summary = CampaignSummary(total=1, normal=1)
+            spec = CaseSpec(
+                case_id=0,
+                seed=0,
+                method="INVITE",
+                profile="legacy",
+                layer="wire",
+                strategy="default",
+            )
+            result = CaseResult(
+                case_id=0,
+                seed=0,
+                method="INVITE",
+                profile="parser_breaker",
+                layer="wire",
+                strategy="final_crlf_loss",
+                verdict="normal",
+                reason="test normal",
+                elapsed_ms=42.0,
+                reproduction_cmd="uv run fuzzer ...",
+                timestamp=0.0,
+                response_code=180,
+            )
+            reporter.on_case_complete(spec, result, summary)
+            output = buf.getvalue()
+        finally:
+            self._restore()
+
+        self.assertIn("parser_breaker:wire/final_crlf_loss", output)
+        self.assertNotIn("legacy:wire/default", output)
+
     def test_crash_verdict_prints_alert(self) -> None:
         buf = self._capture()
         try:
