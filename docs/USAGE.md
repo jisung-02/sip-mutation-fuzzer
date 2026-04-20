@@ -37,6 +37,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 
 # 퍼징 설정
 --methods <LIST>            # SIP 메서드 (OPTIONS,INVITE,MESSAGE,...)
+--profile <NAME>            # 변이 프로필 (legacy,delivery_preserving,ims_specific,parser_breaker)
 --layer model,wire,byte     # 변이 레이어 선택
 --strategy <LIST>           # 변이 전략 (identity,default,state_breaker,safe,
                             # header_targeted,header_whitespace_noise,
@@ -85,6 +86,32 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 - `native`에서는 응답 확인 기준이 평문 wire 가독성이 아니라 observer가 합성한 SIP 응답과 `observer_events`다.
 - `native`에서는 outer wire 기준으로 ESP가 보일 가능성이 높아서 Wireshark에 평문 SIP가 바로 보이지 않을 수 있다.
 
+## 🎚️ Mutation Profile Axis
+
+`--profile`은 mutator가 어떤 성격의 변이를 선택할지 정하는 축이며, sender mode(`--mode softphone` / `--mode real-ue-direct`)와 독립적이다. 같은 `mode`라도 profile이 달라지면 기본 strategy 선택과 허용되는 mutation 경로가 달라진다.
+
+| Profile | 의미 |
+| --- | --- |
+| `legacy` | 기존 동작과 가장 가까운 호환성 프로필. 기존 시나리오와 회귀 검증에 적합하다. |
+| `delivery_preserving` | 전달 가능성을 최대한 유지하면서 약한 변이를 적용한다. 라우팅/전달 경로를 크게 흔들지 않는 분석용이다. |
+| `ims_specific` | IMS/3GPP 헤더, alias, routing 정보를 의식한 프로필이다. 실제 UE와 IMS 헤더 구조를 함께 볼 때 유용하다. |
+| `parser_breaker` | CRLF, length, tail truncation 같은 파서 경계 조건을 노리는 프로필이다. |
+
+예시는 아래와 같다.
+
+```bash
+# IMS 헤더/alias 중심 변이: real-UE 경로에서도 자연스럽게 사용 가능
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+  --impi 001010000123511 --mt-invite-template a31 \
+  --methods INVITE --profile ims_specific --layer wire --strategy default \
+  --max-cases 10
+
+# 파서 경계 조건 집중: softphone 대상에서도 동일하게 적용 가능
+uv run fuzzer campaign run --target-host 127.0.0.1 \
+  --methods INVITE --profile parser_breaker --layer wire,byte \
+  --strategy default --max-cases 20
+```
+
 ## 🎯 주요 시나리오
 
 ### 1. 빠른 기능 테스트
@@ -94,7 +121,8 @@ uv run fuzzer campaign run --target-host 127.0.0.1 --methods OPTIONS --max-cases
 
 # A31 connectivity 테스트  
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --strategy identity --max-cases 1
+  --impi 001010000123511 --mt-invite-template a31 --profile legacy \
+  --strategy identity --max-cases 1
 ```
 
 ### 2. 표준 변이 퍼징
@@ -102,12 +130,12 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 # 소프트폰: 전체 메서드 + 모든 레이어
 uv run fuzzer campaign run --target-host 192.168.1.100 \
   --methods OPTIONS,INVITE,MESSAGE,REGISTER \
-  --layer model,wire,byte --strategy default --max-cases 500
+  --profile legacy --layer model,wire,byte --strategy default --max-cases 500
 
 # A31: INVITE 집중 + 바이트 변이
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
   --impi 001010000123511 --mt-invite-template a31 \
-  --methods INVITE --layer byte --strategy default --max-cases 200
+  --methods INVITE --profile ims_specific --layer byte --strategy default --max-cases 200
 ```
 
 ### 3. 고급 분석 (pcap + adb)
@@ -115,7 +143,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 # 완전한 데이터 수집
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
   --impi 001010000123511 --mt-invite-template a31 \
-  --layer wire,byte --strategy default --max-cases 100 \
+  --profile delivery_preserving --layer wire,byte --strategy default --max-cases 100 \
   --pcap --pcap-interface br-volte --pcap-dir results/pcaps \
   --adb --adb-serial SM_A315F_12345 \
   --output results/full_analysis.jsonl
@@ -125,7 +153,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ```bash
 # 특정 시드로 재현
 uv run fuzzer campaign run --target-host 127.0.0.1 \
-  --methods INVITE --layer wire --strategy default \
+  --methods INVITE --profile parser_breaker --layer wire --strategy default \
   --seed-start 12345 --max-cases 1
 
 # 특정 케이스 replay
@@ -254,15 +282,18 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ```bash
 # 1. 연결성 확인
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --strategy identity --max-cases 1
+  --impi 001010000123511 --mt-invite-template a31 --profile legacy \
+  --strategy identity --max-cases 1
 
 # 2. 소규모 테스트
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --strategy default --max-cases 10
+  --impi 001010000123511 --mt-invite-template a31 --profile ims_specific \
+  --strategy default --max-cases 10
 
 # 3. 본격 퍼징
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
-  --impi 001010000123511 --mt-invite-template a31 --strategy default --max-cases 1000 \
+  --impi 001010000123511 --mt-invite-template a31 --profile delivery_preserving \
+  --strategy default --max-cases 1000 \
   --pcap --adb --adb-serial <SERIAL>
 ```
 
@@ -280,7 +311,7 @@ for LAYER in wire byte; do
     uv run fuzzer campaign run \
         --mode real-ue-direct --target-msisdn 111111 \
         --impi 001010000123511 --mt-invite-template a31 \
-        --layer $LAYER --strategy default --max-cases 2000 \
+        --profile parser_breaker --layer $LAYER --strategy default --max-cases 2000 \
         --output $OUTPUT_DIR/campaign_$LAYER.jsonl \
         --pcap-dir $OUTPUT_DIR/pcaps_$LAYER \
         --timeout 3 --cooldown 0.1 &

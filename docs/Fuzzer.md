@@ -63,7 +63,9 @@ Poet (입력 생성기) → Courier (전달자) → Oracle (판정기)
     - 비트 플립, 랜덤 바이트 삽입 등 가장 무차별적인 방식
     - 프로토콜 의미를 모르는 파서 버그를 찾는 데 특화
 
-퍼징은 재현성이 중요, 동일한 시드와 전략에서는 동일한 패킷이 나와야 버그의 재현이 가능
+퍼징은 재현성이 중요, 동일한 `profile/layer/strategy/seed` 조합에서는 동일한 패킷이 나와야 버그의 재현이 가능
+
+`profile`은 기본 strategy 선택까지 포함하는 mutator 정책 축이므로, 결과 로그에는 선택된 profile과 그에 따라 해석된 resolved strategy가 함께 남아야 함
 
 → 이때 시드의 예시? ~~~~~
 
@@ -103,11 +105,11 @@ Courier 계층은 아래 네 가지 기능을 지원해야함
 
 다수의 케이스를 자동으로 돌리는 루프 관리자 역할의 모듈
 
-각 케이스는 `method / layer / strategy / seed` 조합으로 정의되어 재현이 가능해야함
+각 케이스는 `method / profile / layer / strategy / seed` 조합으로 정의되어 재현이 가능해야함
 
 - **자동화된 루프**: 수백~수천 케이스를 사람 개입 없이 실행
-- **케이스 명세(Spec)**: 각 케이스는 method/layer/strategy/seed의 조합으로 정의. 재현 가능해야 함
-- **결과 저장 (Crash-safe)**: 캠페인 중 크래시가 나도 이미 수집된 결과가 보존되어야 함. JSONL 형식이 적합 (append-only) → 캠페인 중간에 크래시가 나도 이미 수집된 결과는 보존
+- **케이스 명세(Spec)**: 각 케이스는 method/profile/layer/strategy/seed의 조합으로 정의. 재현 가능해야 함
+- **결과 저장 (Crash-safe)**: 캠페인 중 크래시가 나도 이미 수집된 결과가 보존되어야 함. JSONL 형식이 적합 (append-only) → 캠페인 중간에 크래시가 나도 이미 수집된 결과는 보존. 결과 레코드에는 `profile`, resolved `strategy`, `mutation_ops`, `details`, `reproduction_cmd`가 함께 저장되어 재현과 분석을 동시에 지원해야 함
 - **재현 명령 생성**: 각 케이스마다 동일 입력을 재현하는 CLI 명령을 저장
 
 ### 3.5 분석 및 보고 (Report)

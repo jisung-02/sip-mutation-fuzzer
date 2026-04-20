@@ -13,7 +13,7 @@ graph TB
     Executor --> Oracle[OracleEngine]
     
     Generator --> Template[MT Template]
-    Mutator --> |model/wire/byte| Mutation[MutatedCase]
+    Mutator --> |profile/layer/strategy| Mutation[MutatedCase]
     Sender --> |UDP/TCP| Target[UE/Softphone]
     Target --> |SIP Response| Oracle
     Oracle --> Verdict[normal/suspicious/crash]
@@ -36,13 +36,16 @@ graph TB
 - **특징**: softphone과 real-ue-direct 모드 분기 처리
 
 #### `CaseGenerator`
-- **역할**: 테스트 케이스 조합 생성 (method × layer × strategy)
+- **역할**: 테스트 케이스 조합 생성 (method × profile × layer × strategy)
 - **지원 조합**:
   ```python
   methods: OPTIONS, INVITE, MESSAGE, REGISTER, ...
+  profiles: legacy, delivery_preserving, ims_specific, parser_breaker
   layers: model, wire, byte
   strategies: identity, default, state_breaker
   ```
+  - `profile`은 mutator 정책 축이고, `mode`는 sender 경로 축이다.
+  - 따라서 `softphone`와 `real-ue-direct` 모두 같은 profile을 사용할 수 있으며, mode는 전송 방식만 바꾼다.
 
 #### `CampaignConfig`
 - **역할**: 전체 설정 중앙화 + validation
@@ -162,7 +165,7 @@ elif ipsec_mode == "bypass":
 ```
 CLI Input → CampaignConfig → TargetEndpoint{host, port}
     ↓
-CaseGenerator → (method, layer, strategy) combinations
+CaseGenerator → (method, profile, layer, strategy) combinations
     ↓  
 SIPGenerator → PacketModel → SIPMutator → MutatedCase
     ↓
@@ -204,6 +207,8 @@ TargetEndpoint (auto-resolution + validation)
     ↓
 실제 실행 컴포넌트들
 ```
+
+`profile`과 `mode`는 서로 독립적이다. `profile`은 mutator가 어떤 변이 규칙을 적용할지 정하고, `mode`는 sender가 어떤 전송 경로를 사용할지 정한다.
 
 ### 자동 Resolution 체인
 ```python
