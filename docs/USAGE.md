@@ -37,8 +37,9 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 - 실제 의미는 `baseline_scope`로 읽어야 한다.
 - 현재 `INVITE`만 `real_ue_baseline` 이다.
 - `ACK`, `BYE`, `CANCEL`, `INFO`, `PRACK`, `REFER`, `UPDATE`는 `invite_dialog` 범위에서의 honest runtime path 다.
-- `MESSAGE`, `OPTIONS`는 `stateless` runtime path 다.
-- `NOTIFY`, `PUBLISH`, `REGISTER`, `SUBSCRIBE`는 현재 `generator_complete`이며, coherent generation/mutation 은 되지만 runtime prerequisite state 는 아직 저장소 범위 밖이다.
+- `MESSAGE`, `OPTIONS`, `SUBSCRIBE`는 `stateless` runtime path 다.
+- `NOTIFY`, `PUBLISH`, `REGISTER`는 현재 `generator_complete`이며, coherent generation/mutation 은 되지만 runtime prerequisite state 는 아직 저장소 범위 밖이다.
+- `real-ue-direct`에서 `--mt-invite-template`를 써도 dialog가 필요한 runtime-complete 메서드는 standalone MT path 로 덮어쓰지 않고, 각 dialog setup path 를 우선 사용한다.
 
 요약 표:
 
@@ -46,8 +47,8 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 | --- | --- |
 | `runtime_complete` + `real_ue_baseline` | `INVITE` |
 | `runtime_complete` + `invite_dialog` | `ACK`, `BYE`, `CANCEL`, `INFO`, `PRACK`, `REFER`, `UPDATE` |
-| `runtime_complete` + `stateless` | `MESSAGE`, `OPTIONS` |
-| `generator_complete` + `generator_only` | `NOTIFY`, `PUBLISH`, `REGISTER`, `SUBSCRIBE` |
+| `runtime_complete` + `stateless` | `MESSAGE`, `OPTIONS`, `SUBSCRIBE` |
+| `generator_complete` + `generator_only` | `NOTIFY`, `PUBLISH`, `REGISTER` |
 
 세부 기준과 notes 는 [`docs/프로토콜/SIP-메시지-완성도-매트릭스.md`](프로토콜/SIP-메시지-완성도-매트릭스.md)를 단일 기준으로 본다.
 

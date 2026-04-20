@@ -65,7 +65,7 @@ uv run fuzzer request OPTIONS
 response 생성:
 
 ```bash
-uv run fuzzer response 200 INVITE --context '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":7}'
+uv run fuzzer response 200 INVITE --context '{"call_id":"a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org","local_tag":"ue-tag","local_cseq":7}'
 ```
 
 환경 변수 기반 기본값 변경:
@@ -107,7 +107,7 @@ uv run fuzzer request OPTIONS | uv run fuzzer mutate packet --strategy header_ch
 
 ```bash
 uv run fuzzer mutate request OPTIONS --strategy state_breaker
-uv run fuzzer mutate response 200 INVITE --context '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":7}'
+uv run fuzzer mutate response 200 INVITE --context '{"call_id":"a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org","local_tag":"ue-tag","local_cseq":7}'
 ```
 
 사용자에게 기본적으로 노출할 옵션은 아래와 같다.

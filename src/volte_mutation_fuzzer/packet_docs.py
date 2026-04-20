@@ -9,6 +9,20 @@ PROTOCOL_DOCS_DIR = ROOT / "docs" / "프로토콜"
 REQUEST_DOC_PATH = PROTOCOL_DOCS_DIR / "요청-패킷-예시.md"
 RESPONSE_DOC_PATH = PROTOCOL_DOCS_DIR / "응답-패킷-예시.md"
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+PROXY_HOST = f"pcscf.{IMS_DOMAIN}"
+EDGE_HOST = f"edge.{IMS_DOMAIN}"
+UE_HOST = f"ue.{IMS_DOMAIN}"
+REGISTRAR_HOST = f"registrar.{IMS_DOMAIN}"
+PRESENCE_HOST = f"presence.{IMS_DOMAIN}"
+CALLER_AOR = f"sip:222222@{IMS_DOMAIN}"
+CALLER_CONTACT = "sip:222222@10.20.20.9"
+CALLEE_AOR = f"sip:111111@{UE_HOST}"
+NETWORK_AOR = f"sip:network@{IMS_DOMAIN}"
+TRANSFER_TARGET_AOR = f"sip:333333@{IMS_DOMAIN}"
+REFERRER_AOR = f"sip:referrer@{IMS_DOMAIN}"
+IMS_WEB_ROOT = f"https://{PROXY_HOST}"
+
 REQUEST_FIELD_ORDER = [
     "via",
     "max_forwards",
@@ -177,11 +191,11 @@ RESPONSE_EXTRA_FIELDS: dict[int, list[str]] = {
 }
 
 METHOD_REQUEST_URIS: dict[SIPMethod, str] = {
-    SIPMethod.REGISTER: "sip:registrar.ue.example.com",
-    SIPMethod.OPTIONS: "sip:ue.example.com",
-    SIPMethod.MESSAGE: "sip:ue@example.com",
-    SIPMethod.PUBLISH: "sip:presence.ue.example.com",
-    SIPMethod.SUBSCRIBE: "sip:presence.ue.example.com",
+    SIPMethod.REGISTER: f"sip:{REGISTRAR_HOST}",
+    SIPMethod.OPTIONS: f"sip:{UE_HOST}",
+    SIPMethod.MESSAGE: CALLEE_AOR,
+    SIPMethod.PUBLISH: f"sip:{PRESENCE_HOST}",
+    SIPMethod.SUBSCRIBE: f"sip:{PRESENCE_HOST}",
 }
 
 METHOD_BODY: dict[SIPMethod, tuple[str, str]] = {
@@ -192,7 +206,7 @@ METHOD_BODY: dict[SIPMethod, tuple[str, str]] = {
     SIPMethod.INVITE: (
         "application/sdp",
         "v=0\r\n"
-        "o=- 0 0 IN IP4 caller.example.com\r\n"
+        "o=- 0 0 IN IP4 172.22.0.16\r\n"
         "s=-\r\n"
         "c=IN IP4 192.0.2.10\r\n"
         "t=0 0\r\n"
@@ -201,16 +215,18 @@ METHOD_BODY: dict[SIPMethod, tuple[str, str]] = {
     SIPMethod.MESSAGE: ("text/plain", "Hello from SIP MESSAGE\r\n"),
     SIPMethod.NOTIFY: (
         "application/pidf+xml",
-        '<?xml version="1.0"?>\r\n<presence entity="sip:callee@ue.example.com"/>\r\n',
+        '<?xml version="1.0"?>\r\n'
+        f'<presence entity="{CALLEE_AOR}"/>\r\n',
     ),
     SIPMethod.PUBLISH: (
         "application/pidf+xml",
-        '<?xml version="1.0"?>\r\n<presence entity="sip:caller@example.com"/>\r\n',
+        '<?xml version="1.0"?>\r\n'
+        f'<presence entity="{CALLER_AOR}"/>\r\n',
     ),
     SIPMethod.UPDATE: (
         "application/sdp",
         "v=0\r\n"
-        "o=- 1 1 IN IP4 caller.example.com\r\n"
+        "o=- 1 1 IN IP4 172.22.0.16\r\n"
         "s=-\r\n"
         "c=IN IP4 192.0.2.10\r\n"
         "t=0 0\r\n"
@@ -222,7 +238,7 @@ RESPONSE_BODY: dict[int, tuple[str, str]] = {
     183: (
         "application/sdp",
         "v=0\r\n"
-        "o=- 0 0 IN IP4 ims.example.com\r\n"
+        "o=- 0 0 IN IP4 172.22.0.20\r\n"
         "s=-\r\n"
         "c=IN IP4 198.51.100.20\r\n"
         "t=0 0\r\n"
@@ -231,7 +247,7 @@ RESPONSE_BODY: dict[int, tuple[str, str]] = {
     200: (
         "application/sdp",
         "v=0\r\n"
-        "o=- 0 0 IN IP4 ims.example.com\r\n"
+        "o=- 0 0 IN IP4 172.22.0.20\r\n"
         "s=-\r\n"
         "c=IN IP4 198.51.100.20\r\n"
         "t=0 0\r\n"
@@ -239,7 +255,7 @@ RESPONSE_BODY: dict[int, tuple[str, str]] = {
     ),
     380: (
         "text/plain",
-        "Alternative service available via sip:service@example.com\r\n",
+        f"Alternative service available via sip:service@{IMS_DOMAIN}\r\n",
     ),
 }
 
@@ -265,7 +281,8 @@ COMMON_RFC_REFERENCES = [
 
 
 def markdown_code(text: str) -> str:
-    return f"```text\n{text.rstrip()}\n```"
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+    return f"```text\n{normalized}\n```"
 
 
 def render_reference_section() -> str:
@@ -277,7 +294,7 @@ def render_reference_section() -> str:
 
 
 def sample_request_uri(method: SIPMethod) -> str:
-    return METHOD_REQUEST_URIS.get(method, "sip:callee@ue.example.com")
+    return METHOD_REQUEST_URIS.get(method, CALLEE_AOR)
 
 
 def sample_response_method(definition) -> SIPMethod:
@@ -350,29 +367,29 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     status_code = context.get("status_code")
 
     if field_name == "via":
-        return f"Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-{slug}"
+        return f"Via: SIP/2.0/UDP {PROXY_HOST};branch=z9hG4bK-{slug}"
     if field_name == "max_forwards":
         return "Max-Forwards: 70"
     if field_name == "from":
         if context["kind"] == "request":
-            return 'From: "Caller" <sip:caller@example.com>;tag=from-tag'
-        return 'From: "UE" <sip:ue@example.com>;tag=ue-tag'
+            return f'From: "Caller" <{CALLER_AOR}>;tag=from-tag'
+        return f'From: "UE" <{CALLEE_AOR}>;tag=ue-tag'
     if field_name == "to":
         if context["kind"] == "request":
-            return "To: <sip:callee@ue.example.com>"
-        return 'To: "Network" <sip:network@ims.example.com>;tag=net-tag'
+            return f"To: <{CALLEE_AOR}>"
+        return f'To: "Network" <{NETWORK_AOR}>;tag=net-tag'
     if field_name == "call_id":
-        return f"Call-ID: {slug}@example.com"
+        return f"Call-ID: {slug}@{PROXY_HOST}"
     if field_name == "cseq":
         return f"CSeq: 1 {method.value}"
     if field_name == "contact":
         if context["kind"] == "request":
-            return "Contact: <sip:caller@caller.example.com>"
-        return "Contact: <sip:network@ims.example.com>"
+            return f"Contact: <{CALLER_CONTACT}>"
+        return f"Contact: <{NETWORK_AOR}>"
     if field_name == "route":
-        return "Route: <sip:edge.example.com;lr>"
+        return f"Route: <sip:{EDGE_HOST};lr>"
     if field_name == "record_route":
-        return "Record-Route: <sip:proxy.example.com;lr>"
+        return f"Record-Route: <sip:{PROXY_HOST};lr>"
     if field_name == "supported":
         if status_code == 494:
             return "Supported: sec-agree"
@@ -400,7 +417,7 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "alert_info":
         return "Alert-Info: <urn:service:alerting>"
     if field_name == "call_info":
-        return "Call-Info: <https://example.com/call-info>;purpose=info"
+        return f"Call-Info: <{IMS_WEB_ROOT}/call-info>;purpose=info"
     if field_name == "event":
         if method == SIPMethod.PUBLISH:
             return "Event: presence"
@@ -430,37 +447,37 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "sip_if_match":
         return "SIP-If-Match: etag-1"
     if field_name == "refer_to":
-        return "Refer-To: <sip:transfer-target@example.com>"
+        return f"Refer-To: <{TRANSFER_TARGET_AOR}>"
     if field_name == "referred_by":
-        return "Referred-By: <sip:referrer@example.com>"
+        return f"Referred-By: <{REFERRER_AOR}>"
     if field_name == "refer_sub":
         return "Refer-Sub: false"
     if field_name == "target_dialog":
-        return "Target-Dialog: dialog-1234@example.com;local-tag=ltag;remote-tag=rtag"
+        return f"Target-Dialog: dialog-1234@{PROXY_HOST};local-tag=ltag;remote-tag=rtag"
     if field_name == "path":
-        return "Path: <sip:path.example.com;lr>"
+        return f"Path: <sip:path.{IMS_DOMAIN};lr>"
     if field_name == "privacy":
         return "Privacy: id"
     if field_name == "p_asserted_identity":
-        return "P-Asserted-Identity: <sip:caller@example.com>"
+        return f"P-Asserted-Identity: <{CALLER_AOR}>"
     if field_name == "reason":
         return 'Reason: SIP ;cause=200 ;text="Normal call clearing"'
     if field_name == "subject":
         return "Subject: SIP MESSAGE test"
     if field_name == "organization":
-        return "Organization: Example Carrier"
+        return "Organization: Open5GS IMS Lab"
     if field_name == "priority":
         return "Priority: normal"
     if field_name == "user_agent":
         return "User-Agent: VolteMutationFuzzer/0.1"
     if field_name == "warning":
-        return 'Warning: 399 proxy.example.com "Informational warning"'
+        return f'Warning: 399 {PROXY_HOST} "Informational warning"'
     if field_name == "retry_after":
         return "Retry-After: 120"
     if field_name == "proxy_authenticate":
-        return 'Proxy-Authenticate: Digest realm="example.com", nonce="nonce-1"'
+        return f'Proxy-Authenticate: Digest realm="{IMS_DOMAIN}", nonce="nonce-1"'
     if field_name == "www_authenticate":
-        return 'WWW-Authenticate: Digest realm="example.com", nonce="nonce-1"'
+        return f'WWW-Authenticate: Digest realm="{IMS_DOMAIN}", nonce="nonce-1"'
     if field_name == "authentication_info":
         return 'Authentication-Info: nextnonce="nonce-2"'
     if field_name == "min_expires":
@@ -472,17 +489,17 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "security_server":
         return "Security-Server: ipsec-3gpp;alg=hmac-md5-96;prot=esp;mod=trans"
     if field_name == "service_route":
-        return "Service-Route: <sip:pcscf.example.com;lr>"
+        return f"Service-Route: <sip:{PROXY_HOST};lr>"
     if field_name == "unsupported":
         return "Unsupported: foo-ext"
     if field_name == "error_info":
-        return "Error-Info: <https://example.com/error-info>"
+        return f"Error-Info: <{IMS_WEB_ROOT}/error-info>"
     if field_name == "geolocation_error":
         return "Geolocation-Error: 100 locationValueError"
     if field_name == "alert_msg_error":
         return "AlertMsg-Error: 300 unsupported-alerting"
     if field_name == "permission_missing":
-        return "Permission-Missing: <sip:callee@example.com>"
+        return f"Permission-Missing: <{CALLEE_AOR}>"
     if field_name == "timestamp":
         return "Timestamp: 1710000000.0"
     if field_name == "server":
@@ -573,12 +590,12 @@ def render_request_docs() -> str:
         "## 공통 요청 골격",
         "",
         markdown_code(
-            "INVITE sip:callee@ue.example.com SIP/2.0\n"
-            "Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-generic\n"
+            f"INVITE {CALLEE_AOR} SIP/2.0\n"
+            f"Via: SIP/2.0/UDP {PROXY_HOST};branch=z9hG4bK-generic\n"
             "Max-Forwards: 70\n"
-            'From: "Caller" <sip:caller@example.com>;tag=from-tag\n'
-            "To: <sip:callee@ue.example.com>\n"
-            "Call-ID: generic-request@example.com\n"
+            f'From: "Caller" <{CALLER_AOR}>;tag=from-tag\n'
+            f"To: <{CALLEE_AOR}>\n"
+            f"Call-ID: generic-request@{PROXY_HOST}\n"
             "CSeq: 1 INVITE\n"
             "Content-Length: 0\n"
         ),
@@ -643,10 +660,10 @@ def render_response_docs() -> str:
         "",
         markdown_code(
             "SIP/2.0 200 OK\n"
-            "Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-generic\n"
-            'From: "UE" <sip:ue@example.com>;tag=ue-tag\n'
-            'To: "Network" <sip:network@ims.example.com>;tag=net-tag\n'
-            "Call-ID: generic-response@example.com\n"
+            f"Via: SIP/2.0/UDP {PROXY_HOST};branch=z9hG4bK-generic\n"
+            f'From: "UE" <{CALLEE_AOR}>;tag=ue-tag\n'
+            f'To: "Network" <{NETWORK_AOR}>;tag=net-tag\n'
+            f"Call-ID: generic-response@{PROXY_HOST}\n"
             "CSeq: 1 INVITE\n"
             "Content-Length: 0\n"
         ),

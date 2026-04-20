@@ -1205,6 +1205,98 @@ class CampaignExecutorTests(unittest.TestCase):
         dialog_mock.assert_called_once()
         build_packet_mock.assert_not_called()
 
+    def test_execute_case_routes_real_ue_bye_to_dialog_executor_even_with_mt_template(
+        self,
+    ) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("BYE",),
+            max_cases=1,
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            mt_invite_template="a31",
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="BYE",
+            layer="model",
+            strategy="default",
+        )
+        expected = CaseResult(
+            case_id=0,
+            seed=0,
+            method="BYE",
+            layer="model",
+            strategy="default",
+            verdict="normal",
+            reason="ok",
+            elapsed_ms=5.0,
+            reproduction_cmd="uv run fuzzer ...",
+            timestamp=1.0,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_execute_dialog_case",
+            return_value=expected,
+        ) as dialog_mock, unittest.mock.patch.object(
+            executor,
+            "_execute_mt_template_case",
+        ) as mt_mock:
+            result = executor._execute_case(spec)
+
+        self.assertIs(result, expected)
+        dialog_mock.assert_called_once()
+        mt_mock.assert_not_called()
+
+    def test_execute_case_keeps_real_ue_invite_on_mt_template_path(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("INVITE",),
+            max_cases=1,
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            mt_invite_template="a31",
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="model",
+            strategy="default",
+        )
+        expected = CaseResult(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="model",
+            strategy="default",
+            verdict="normal",
+            reason="ok",
+            elapsed_ms=5.0,
+            reproduction_cmd="uv run fuzzer ...",
+            timestamp=1.0,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_execute_mt_template_case",
+            return_value=expected,
+        ) as mt_mock, unittest.mock.patch.object(
+            executor,
+            "_execute_dialog_case",
+        ) as dialog_mock:
+            result = executor._execute_case(spec)
+
+        self.assertIs(result, expected)
+        mt_mock.assert_called_once()
+        dialog_mock.assert_not_called()
+
     def test_execute_case_routes_info_to_dialog_executor(self) -> None:
         cfg = self._make_config(
             "127.0.0.1",

@@ -43,8 +43,8 @@ SIP 요청 메서드 지원은 단순히 "구현됨"으로 읽지 않는다. 현
 
 - `INVITE`는 `runtime_complete + real_ue_baseline`
 - `ACK/BYE/CANCEL/INFO/PRACK/REFER/UPDATE`는 `runtime_complete + invite_dialog`
-- `MESSAGE/OPTIONS`는 `runtime_complete + stateless`
-- `NOTIFY/PUBLISH/REGISTER/SUBSCRIBE`는 `generator_complete + generator_only`
+- `MESSAGE/OPTIONS/SUBSCRIBE`는 `runtime_complete + stateless`
+- `NOTIFY/PUBLISH/REGISTER`는 `generator_complete + generator_only`
 
 ### 1. Campaign Layer (캠페인 실행)
 
@@ -88,7 +88,7 @@ SIP 요청 메서드 지원은 단순히 "구현됨"으로 읽지 않는다. 현
 - **역할**: 실제 capture 기반 완전한 3GPP MT-INVITE 생성
 - **슬롯**: 18개 동적 매개변수 (IMPI, port_pc/port_ps, Call-ID 등)
 - **렌더링**: `build_default_slots()` → `render_mt_invite()`
-- **범위**: 현재 real-UE baseline 주력 경로는 `INVITE`다. 비-INVITE 메서드도 MT packet builder 경로는 존재하지만, 각 메서드의 honest claim 범위는 completeness registry의 `baseline_scope`로 읽어야 한다.
+- **범위**: 현재 real-UE baseline 주력 경로는 `INVITE`다. `--mt-invite-template`가 켜져 있어도 dialog가 필요한 runtime-complete 메서드는 해당 dialog setup path 를 우선하고, standalone MT packet path 는 `INVITE` 및 stateless real-UE request 렌더링에 머문다.
 
 ### 3. Mutator Layer (변이 엔진)
 

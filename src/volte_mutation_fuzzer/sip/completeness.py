@@ -116,10 +116,10 @@ PACKET_COMPLETENESS: dict[SIPMethod, PacketCompletion] = {
         note="Generator coverage exists, but runtime handling is not modeled yet.",
     ),
     SIPMethod.SUBSCRIBE: PacketCompletion(
-        tier=PacketCompletionTier.generator_complete,
-        runtime_path=PacketRuntimePath.unsupported,
-        baseline_scope=PacketBaselineScope.generator_only,
-        note="Generator coverage exists; runtime support is not modeled yet.",
+        tier=PacketCompletionTier.runtime_complete,
+        runtime_path=PacketRuntimePath.stateless,
+        baseline_scope=PacketBaselineScope.stateless,
+        note="Initial SUBSCRIBE transactions can be exercised directly in runtime flows.",
     ),
     SIPMethod.UPDATE: PacketCompletion(
         tier=PacketCompletionTier.runtime_complete,

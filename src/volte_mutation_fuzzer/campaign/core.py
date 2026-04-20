@@ -717,6 +717,14 @@ class CampaignExecutor:
         mutated: MutatedCase | None = None
 
         try:
+            scenario = None
+            if spec.response_code is None:
+                scenario = self._dialog_scenario_for_runtime_method(spec.method)
+                if scenario is not None:
+                    return self._execute_dialog_case(
+                        spec, scenario, timestamp, case_started_monotonic
+                    )
+
             # MT template path (real-ue-direct with 3GPP format)
             if (
                 self._mt_template_text is not None
@@ -725,14 +733,6 @@ class CampaignExecutor:
                 return self._execute_mt_template_case(
                     spec, timestamp, case_started_monotonic
                 )
-
-            # If this method requires a dialog, use DialogOrchestrator
-            if spec.response_code is None:
-                scenario = self._dialog_scenario_for_runtime_method(spec.method)
-                if scenario is not None:
-                    return self._execute_dialog_case(
-                        spec, scenario, timestamp, case_started_monotonic
-                    )
 
             packet = self._build_packet(spec)
             mutated = self._mutator.mutate(

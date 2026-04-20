@@ -22,7 +22,7 @@
 | PUBLISH | generator_complete | unsupported | generator_only | Generator coverage exists, but runtime support is not modeled yet. |
 | REFER | runtime_complete | invite_dialog | invite_dialog | Uses the INVITE dialog referral path and stays bodyless by default unless explicitly overridden. |
 | REGISTER | generator_complete | unsupported | generator_only | Generator coverage exists, but runtime handling is not modeled yet. |
-| SUBSCRIBE | generator_complete | unsupported | generator_only | Generator coverage exists, but the honest runtime prerequisite subscription/service state is not modeled yet. |
+| SUBSCRIBE | runtime_complete | stateless | stateless | Initial SUBSCRIBE transactions can be exercised directly in runtime flows; immediate follow-up NOTIFY handling is still target-dependent. |
 | UPDATE | runtime_complete | invite_dialog | invite_dialog | Uses the established INVITE dialog update path. |
 
 ## Registry Notes

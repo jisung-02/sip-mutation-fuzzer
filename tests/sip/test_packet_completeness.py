@@ -84,9 +84,9 @@ class PacketCompletenessTests(unittest.TestCase):
                 "generator_only",
             ),
             SIPMethod.SUBSCRIBE: (
-                PacketCompletionTier.generator_complete,
-                "unsupported",
-                "generator_only",
+                PacketCompletionTier.runtime_complete,
+                "stateless",
+                "stateless",
             ),
             SIPMethod.UPDATE: (
                 PacketCompletionTier.runtime_complete,
@@ -111,6 +111,7 @@ class PacketCompletenessTests(unittest.TestCase):
                 SIPMethod.CANCEL,
                 SIPMethod.INFO,
                 SIPMethod.MESSAGE,
+                SIPMethod.SUBSCRIBE,
                 SIPMethod.OPTIONS,
                 SIPMethod.PRACK,
                 SIPMethod.REFER,
@@ -136,7 +137,6 @@ class PacketCompletenessTests(unittest.TestCase):
                 SIPMethod.NOTIFY,
                 SIPMethod.PUBLISH,
                 SIPMethod.REGISTER,
-                SIPMethod.SUBSCRIBE,
             },
         )
 

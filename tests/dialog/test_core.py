@@ -87,7 +87,10 @@ class TestInviteDialogBye(unittest.TestCase):
         target = _make_target(self.server.host, self.server.port)
         orchestrator = DialogOrchestrator(generator, mutator, target)
         step = DialogStep(method="BYE", role="send", is_fuzz_target=True)
-        packet = SimpleNamespace(call_id="call-1", cseq=SimpleNamespace(sequence=1))
+        packet = SimpleNamespace(
+            call_id="a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org",
+            cseq=SimpleNamespace(sequence=1),
+        )
         mutated = SimpleNamespace(
             profile="delivery_preserving",
             strategy="final_crlf_loss",
@@ -128,7 +131,10 @@ class TestInviteDialogBye(unittest.TestCase):
         target = _make_target(self.server.host, self.server.port)
         orchestrator = DialogOrchestrator(generator, mutator, target)
         step = DialogStep(method="BYE", role="send", is_fuzz_target=True)
-        packet = SimpleNamespace(call_id="call-1", cseq=SimpleNamespace(sequence=1))
+        packet = SimpleNamespace(
+            call_id="a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org",
+            cseq=SimpleNamespace(sequence=1),
+        )
         mutated = SimpleNamespace(
             profile="delivery_preserving",
             strategy="final_crlf_loss",
@@ -678,7 +684,7 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
             status_code=200,
             reason_phrase="OK",
             headers={
-                "call-id": "other-call@example.com",
+                "call-id": "other-call@pcscf.ims.mnc001.mcc001.3gppnetwork.org",
                 "cseq": "5 OPTIONS",
             },
             body="",

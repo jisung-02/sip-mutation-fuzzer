@@ -121,6 +121,22 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.verdict, "unknown")
         self.assertEqual(self._methods_seen(server), ["OPTIONS"])
 
+    def test_execute_case_keeps_subscribe_on_stateless_path(self) -> None:
+        server = DialogUDPResponder(
+            responses_by_method={"SUBSCRIBE": make_200_ok_generic("SUBSCRIBE")}
+        )
+        server.start()
+        self.addCleanup(server.close)
+
+        executor = CampaignExecutor(
+            self._make_config(server.host, server.port, methods=("SUBSCRIBE",))
+        )
+
+        result = executor._execute_case(self._make_case_spec("SUBSCRIBE"))
+
+        self.assertNotEqual(result.verdict, "unknown")
+        self.assertEqual(self._methods_seen(server), ["SUBSCRIBE"])
+
     def test_execute_case_routes_prack_through_early_dialog_path(self) -> None:
         server = DialogUDPResponder(
             responses_by_method={
