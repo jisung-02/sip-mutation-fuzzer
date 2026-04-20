@@ -587,6 +587,42 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
             any(start <= byte_index < end for _name, start, end in header_ranges)
         )
 
+    def test_mutate_editable_ims_specific_default_byte_falls_back_without_ims_headers(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=2,
+                layer="byte",
+                profile="ims_specific",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "ims_specific")
+        self.assertEqual(case.strategy, "header_targeted")
+        self.assertEqual(case.final_layer, "byte")
+        self.assertEqual(len(case.records), 1)
+        self.assertIsNotNone(case.packet_bytes)
+
+        generic_ranges = mutator._collect_header_byte_ranges(message.render().encode("utf-8"))
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(
+            any(start <= byte_index < end for _header_name, start, end in generic_ranges)
+        )
+        self.assertNotEqual(case.packet_bytes, message.render().encode("utf-8"))
+
     def test_same_seed_produces_same_wire_mutation(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()

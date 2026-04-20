@@ -447,6 +447,10 @@ class SIPMutator:
                     current_bytes.data,
                     config.profile,
                 )
+                if not header_ranges:
+                    raise ValueError(
+                        "byte header_targeted requires at least one mutable header"
+                    )
                 available_targets = tuple(
                     MutationTarget(layer="byte", path=f"byte[{index}]")
                     for _header_name, start, end in header_ranges
@@ -1577,21 +1581,24 @@ class SIPMutator:
                     current_bytes.data,
                     config.profile,
                 )
-                if header_ranges:
-                    _header_name, start, end = header_ranges[
-                        rng.randrange(len(header_ranges))
-                    ]
-                    # Pick a byte within this header's value range
-                    if start < end:
-                        byte_idx = rng.randrange(start, end)
-                        byte_target = MutationTarget(
-                            layer="byte", path=f"byte[{byte_idx}]"
-                        )
-                        operator = "flip_byte"
-                        current_bytes, record = self._apply_byte_operator(
-                            current_bytes, byte_target, operator, rng
-                        )
-                        records.append(record)
+                if not header_ranges:
+                    raise ValueError(
+                        "byte header_targeted requires at least one mutable header"
+                    )
+                _header_name, start, end = header_ranges[
+                    rng.randrange(len(header_ranges))
+                ]
+                # Pick a byte within this header's value range
+                if start < end:
+                    byte_idx = rng.randrange(start, end)
+                    byte_target = MutationTarget(
+                        layer="byte", path=f"byte[{byte_idx}]"
+                    )
+                    operator = "flip_byte"
+                    current_bytes, record = self._apply_byte_operator(
+                        current_bytes, byte_target, operator, rng
+                    )
+                    records.append(record)
             else:
                 used_paths: set[str] = set()
                 is_safe = config.strategy == "safe"
@@ -1750,11 +1757,12 @@ class SIPMutator:
         if profile != "ims_specific":
             return header_ranges
 
-        return [
+        ims_header_ranges = [
             header_range
             for header_range in header_ranges
             if header_range[0].casefold() in IMS_PROFILE_HEADER_NAMES
         ]
+        return ims_header_ranges or header_ranges
 
     def _build_canonical_wire_target(
         self,
