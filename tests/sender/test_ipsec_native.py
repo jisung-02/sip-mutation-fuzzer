@@ -9,6 +9,14 @@ from volte_mutation_fuzzer.sender.real_ue import (
     ResolvedNativeIPsecSession,
 )
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
+REALISTIC_REQUEST_URI = "sip:111111@10.20.20.8:8100"
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_NEIGHBOR_CALL_ID = "a84b4c76e66710a@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_VIA_BRANCH = "z9hG4bK-abc123"
+REALISTIC_NEIGHBOR_BRANCH = "z9hG4bK-abc1234"
+
 
 class NativeIPsecCorrelationTests(unittest.TestCase):
     def test_extract_correlation_from_wire_text_parses_headers(self) -> None:
@@ -17,19 +25,19 @@ class NativeIPsecCorrelationTests(unittest.TestCase):
         )
 
         artifact = SendArtifact.from_wire_text(
-            "INVITE sip:ue@example.com SIP/2.0\r\n"
-            "Call-ID: call-123\r\n"
+            f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+            f"Call-ID: {REALISTIC_CALL_ID}\r\n"
             "CSeq: 42 INVITE\r\n"
-            "Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-abc123\r\n"
+            f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch={REALISTIC_VIA_BRANCH}\r\n"
             "\r\n"
         )
 
         correlation = extract_correlation_from_artifact(artifact)
 
-        self.assertEqual(correlation.call_id, "call-123")
+        self.assertEqual(correlation.call_id, REALISTIC_CALL_ID)
         self.assertEqual(correlation.cseq_method, "INVITE")
         self.assertEqual(correlation.cseq_sequence, 42)
-        self.assertEqual(correlation.via_branch, "z9hG4bK-abc123")
+        self.assertEqual(correlation.via_branch, REALISTIC_VIA_BRANCH)
         self.assertEqual(correlation.confidence, "high")
 
     def test_extract_correlation_from_malformed_bytes_falls_back_low_confidence(
@@ -165,7 +173,7 @@ class NativeIPsecObserverTests(unittest.TestCase):
             confidence="low",
         )
         log_output = (
-            "SIP/2.0 200 OK Call-ID: unrelated CSeq: 9 INVITE Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-unrelated\n"
+            f"SIP/2.0 200 OK Call-ID: unrelated CSeq: 9 INVITE Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-unrelated\n"
         )
 
         def fake_run(*args, **kwargs):
@@ -204,15 +212,15 @@ class NativeIPsecObserverTests(unittest.TestCase):
         )
 
         correlation = ArtifactCorrelation(
-            call_id="call-123",
+            call_id=REALISTIC_CALL_ID,
             cseq_method="INVITE",
             cseq_sequence=42,
-            via_branch="z9hG4bK-abc123",
+            via_branch=REALISTIC_VIA_BRANCH,
             confidence="high",
         )
         log_output = (
-            "SIP/2.0 200 OK Call-ID: call-1234 CSeq: 42 INVITE "
-            "Via: SIP/2.0/UDP 172.22.0.21:5103;branch=z9hG4bK-abc1234\n"
+            f"SIP/2.0 200 OK Call-ID: {REALISTIC_NEIGHBOR_CALL_ID} CSeq: 42 INVITE "
+            f"Via: SIP/2.0/UDP 172.22.0.21:5103;branch={REALISTIC_NEIGHBOR_BRANCH}\n"
         )
 
         def fake_run(*args, **kwargs):
@@ -251,14 +259,14 @@ class NativeIPsecObserverTests(unittest.TestCase):
         )
 
         correlation = ArtifactCorrelation(
-            call_id="call-123",
+            call_id=REALISTIC_CALL_ID,
             cseq_method="INVITE",
             cseq_sequence=42,
-            via_branch="z9hG4bK-abc123",
+            via_branch=REALISTIC_VIA_BRANCH,
             confidence="high",
         )
         log_output = (
-            "SIP/2.0 200 OK Call-ID: call-123 CSeq: 42 INVITE Via: SIP/2.0/UDP 172.22.0.21:5103;branch=z9hG4bK-abc123\n"
+            f"SIP/2.0 200 OK Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE Via: SIP/2.0/UDP 172.22.0.21:5103;branch={REALISTIC_VIA_BRANCH}\n"
         )
 
         def fake_run(*args, **kwargs):
@@ -292,9 +300,9 @@ class NativeIPsecObserverTests(unittest.TestCase):
         self.assertEqual(
             observations[0].headers,
             {
-                "call-id": "call-123",
+                "call-id": REALISTIC_CALL_ID,
                 "cseq": "42 INVITE",
-                "via": "SIP/2.0/UDP 172.22.0.21:5103;branch=z9hG4bK-abc123",
+                "via": f"SIP/2.0/UDP 172.22.0.21:5103;branch={REALISTIC_VIA_BRANCH}",
             },
         )
         self.assertEqual(observations[0].source, "pcscf-log")
@@ -306,15 +314,15 @@ class NativeIPsecObserverTests(unittest.TestCase):
         )
 
         correlation = ArtifactCorrelation(
-            call_id="call-123",
+            call_id=REALISTIC_CALL_ID,
             cseq_method="INVITE",
             cseq_sequence=42,
-            via_branch="z9hG4bK-abc123",
+            via_branch=REALISTIC_VIA_BRANCH,
             confidence="high",
         )
         log_output = (
-            "SIP/2.0 180 Ringing Call-ID: call-123 CSeq: 42 INVITE Via: branch=z9hG4bK-abc123\n"
-            "SIP/2.0 200 OK Call-ID: call-123 CSeq: 42 INVITE Via: branch=z9hG4bK-abc123\n"
+            f"SIP/2.0 180 Ringing Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE Via: branch={REALISTIC_VIA_BRANCH}\n"
+            f"SIP/2.0 200 OK Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE Via: branch={REALISTIC_VIA_BRANCH}\n"
         )
 
         def fake_run(*args, **kwargs):
@@ -358,18 +366,18 @@ class NativeIPsecObserverTests(unittest.TestCase):
         )
 
         correlation = ArtifactCorrelation(
-            call_id="call-123",
+            call_id=REALISTIC_CALL_ID,
             cseq_method="INVITE",
             cseq_sequence=42,
             via_branch=None,
             confidence="high",
         )
         provisional_output = (
-            "SIP/2.0 180 Ringing Call-ID: call-123 CSeq: 42 INVITE\n"
+            f"SIP/2.0 180 Ringing Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE\n"
         )
         final_output = (
-            "SIP/2.0 180 Ringing Call-ID: call-123 CSeq: 42 INVITE\n"
-            "SIP/2.0 200 OK Call-ID: call-123 CSeq: 42 INVITE\n"
+            f"SIP/2.0 180 Ringing Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE\n"
+            f"SIP/2.0 200 OK Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE\n"
         )
         outputs = [provisional_output, final_output]
 
@@ -410,7 +418,7 @@ class NativeIPsecObserverTests(unittest.TestCase):
         )
 
         correlation = ArtifactCorrelation(
-            call_id="call-123",
+            call_id=REALISTIC_CALL_ID,
             cseq_method="INVITE",
             cseq_sequence=42,
             via_branch=None,
@@ -447,7 +455,7 @@ class NativeIPsecObserverTests(unittest.TestCase):
         )
 
         correlation = ArtifactCorrelation(
-            call_id="call-123",
+            call_id=REALISTIC_CALL_ID,
             cseq_method="INVITE",
             cseq_sequence=42,
             via_branch=None,
@@ -503,11 +511,14 @@ class NativeIPsecSendTests(unittest.TestCase):
                 src_port=5103,
                 dst_ip="10.20.20.8",
                 dst_port=8100,
-                payload=b"INVITE sip:ue@example.com SIP/2.0\r\n\r\n",
+                payload=f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode("utf-8"),
                 timeout_seconds=1.0,
             )
 
-        self.assertEqual(result.payload_size, len(b"INVITE sip:ue@example.com SIP/2.0\r\n\r\n"))
+        self.assertEqual(
+            result.payload_size,
+            len(f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode("utf-8")),
+        )
         self.assertIn("native-ipsec:send:ok", result.observer_events)
         self.assertIn(
             "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100",
@@ -532,7 +543,7 @@ class NativeIPsecSendTests(unittest.TestCase):
                     src_port=5103,
                     dst_ip="10.20.20.8",
                     dst_port=8100,
-                    payload=b"INVITE sip:ue@example.com SIP/2.0\r\n\r\n",
+                    payload=f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode("utf-8"),
                     timeout_seconds=1.0,
                 )
 

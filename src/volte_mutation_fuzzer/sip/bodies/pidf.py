@@ -49,8 +49,13 @@ class PIdfBody(SIPBody):
     @classmethod
     def default_instance(cls, **kwargs: object) -> Self:
         defaults: dict[str, object] = {
-            "entity": "sip:alice@example.com",
-            "tuples": (PIdfTuple(id="t1", contact_uri="sip:alice@example.com"),),
+            "entity": "sip:111111@ims.mnc001.mcc001.3gppnetwork.org",
+            "tuples": (
+                PIdfTuple(
+                    id="t1",
+                    contact_uri="sip:111111@ims.mnc001.mcc001.3gppnetwork.org",
+                ),
+            ),
         }
         defaults.update(kwargs)
         return cls.model_validate(defaults)

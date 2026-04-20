@@ -68,15 +68,19 @@ class DialogInfoBody(SIPBody):
     @classmethod
     def default_instance(cls, **kwargs: object) -> Self:
         defaults: dict[str, object] = {
-            "entity": "sip:alice@example.com",
+            "entity": "sip:111111@ims.mnc001.mcc001.3gppnetwork.org",
             "dialogs": (
                 Dialog(
                     id="dialog-1",
-                    call_id="call-1",
-                    local_tag="local-1",
-                    remote_tag="remote-1",
-                    local=DialogParticipant(identity="sip:alice@example.com"),
-                    remote=DialogParticipant(identity="sip:bob@example.com"),
+                    call_id="a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org",
+                    local_tag="9fxced76sl",
+                    remote_tag="873294202",
+                    local=DialogParticipant(
+                        identity="sip:111111@ims.mnc001.mcc001.3gppnetwork.org"
+                    ),
+                    remote=DialogParticipant(
+                        identity="sip:remote@ims.mnc001.mcc001.3gppnetwork.org"
+                    ),
                 ),
             ),
         }

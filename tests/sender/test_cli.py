@@ -9,6 +9,17 @@ from volte_mutation_fuzzer.generator.cli import app
 from volte_mutation_fuzzer.sender.contracts import SendReceiveResult, TargetEndpoint
 from volte_mutation_fuzzer.sender.real_ue import ResolvedRealUETarget, RouteCheckResult
 
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+REALISTIC_CONTEXT_JSON = (
+    f'{{"call_id":"{REALISTIC_CALL_ID}","local_tag":"{REALISTIC_LOCAL_TAG}","local_cseq":1}}'
+)
+REALISTIC_OPTIONS_WIRE = "OPTIONS sip:111111@10.20.20.8:8100 SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+REALISTIC_MT_INVITE = (
+    "INVITE sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~1 SIP/2.0\r\n"
+    "Content-Length: 0\r\n\r\n"
+)
+
 
 class SIPSenderCLITests(unittest.TestCase):
     def setUp(self) -> None:
@@ -57,7 +68,7 @@ class SIPSenderCLITests(unittest.TestCase):
                 "200",
                 "OPTIONS",
                 "--context",
-                '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":1}',
+                REALISTIC_CONTEXT_JSON,
                 "--target-host",
                 responder.host,
                 "--target-port",
@@ -104,7 +115,7 @@ class SIPSenderCLITests(unittest.TestCase):
                             "200",
                             "OPTIONS",
                             "--context",
-                            '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":1}',
+                            REALISTIC_CONTEXT_JSON,
                             "--target-host",
                             responder.host,
                             "--target-port",
@@ -146,7 +157,7 @@ class SIPSenderCLITests(unittest.TestCase):
                             "200",
                             "OPTIONS",
                             "--context",
-                            '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":1}',
+                            REALISTIC_CONTEXT_JSON,
                             "--mode",
                             "real-ue-direct",
                             "--target-msisdn",
@@ -214,7 +225,7 @@ class SIPSenderCLITests(unittest.TestCase):
                 "--timeout",
                 "0.5",
             ],
-            input="OPTIONS sip:ue@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+            input=REALISTIC_OPTIONS_WIRE,
         )
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -243,7 +254,7 @@ class SIPSenderCLITests(unittest.TestCase):
                 "--timeout",
                 "0.5",
             ],
-            input="OPTIONS sip:ue@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+            input=REALISTIC_OPTIONS_WIRE,
         )
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -268,7 +279,7 @@ class SIPSenderCLITests(unittest.TestCase):
                 "--timeout",
                 "0.5",
             ],
-            input="OPTIONS sip:ue@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+            input=REALISTIC_OPTIONS_WIRE,
         )
 
         self.assertNotEqual(result.exit_code, 0)
@@ -302,7 +313,7 @@ class SIPSenderCLITests(unittest.TestCase):
                             "--timeout",
                             "0.5",
                         ],
-                        input="OPTIONS sip:ue@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+                        input=REALISTIC_OPTIONS_WIRE,
                     )
 
                 self.assertEqual(result.exit_code, 0, msg=result.output)
@@ -458,7 +469,7 @@ class SIPSenderCLITests(unittest.TestCase):
         with (
             patch(
                 "volte_mutation_fuzzer.generator.mt_packet.build_mt_packet",
-                return_value="INVITE sip:111111@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+                return_value=REALISTIC_MT_INVITE,
             ),
             patch(
                 "volte_mutation_fuzzer.sender.real_ue.RealUEDirectResolver.resolve",
@@ -525,7 +536,7 @@ class SIPSenderCLITests(unittest.TestCase):
                 with (
                     patch(
                         "volte_mutation_fuzzer.generator.mt_packet.build_mt_packet",
-                        return_value="INVITE sip:111111@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+                        return_value=REALISTIC_MT_INVITE,
                     ),
                     patch(
                         "volte_mutation_fuzzer.sender.real_ue.RealUEDirectResolver.resolve",

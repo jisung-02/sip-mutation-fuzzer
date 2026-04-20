@@ -15,6 +15,11 @@ from volte_mutation_fuzzer.sender.real_ue import RouteCheckResult
 from volte_mutation_fuzzer.sip.common import SIPMethod
 from tests.sender._server import TCPResponder, UDPResponder
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
+REALISTIC_REQUEST_URI = "sip:111111@10.20.20.8:8100"
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+
 
 class SIPSenderReactorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -27,12 +32,14 @@ class SIPSenderReactorTests(unittest.TestCase):
     def test_send_packet_udp_returns_success_with_correlation_key(self) -> None:
         responder = UDPResponder(
             responses=(
-                b"SIP/2.0 200 OK\r\n"
-                b"Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-1\r\n"
-                b"Call-ID: call-1\r\n"
-                b"CSeq: 1 OPTIONS\r\n"
-                b"Content-Length: 0\r\n"
-                b"\r\n",
+                (
+                    "SIP/2.0 200 OK\r\n"
+                    f"Via: SIP/2.0/UDP {PCSCF_HOST};branch=z9hG4bK-1\r\n"
+                    f"Call-ID: {REALISTIC_CALL_ID}\r\n"
+                    "CSeq: 1 OPTIONS\r\n"
+                    "Content-Length: 0\r\n"
+                    "\r\n"
+                ).encode("utf-8"),
             )
         )
         responder.start()
@@ -55,14 +62,18 @@ class SIPSenderReactorTests(unittest.TestCase):
     def test_send_udp_collect_all_responses_keeps_provisional_and_final(self) -> None:
         responder = UDPResponder(
             responses=(
-                b"SIP/2.0 180 Ringing\r\n"
-                b"Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-1\r\n"
-                b"Content-Length: 0\r\n"
-                b"\r\n",
-                b"SIP/2.0 486 Busy Here\r\n"
-                b"Via: SIP/2.0/UDP proxy.example.com;branch=z9hG4bK-1\r\n"
-                b"Content-Length: 0\r\n"
-                b"\r\n",
+                (
+                    "SIP/2.0 180 Ringing\r\n"
+                    f"Via: SIP/2.0/UDP {PCSCF_HOST};branch=z9hG4bK-1\r\n"
+                    "Content-Length: 0\r\n"
+                    "\r\n"
+                ).encode("utf-8"),
+                (
+                    "SIP/2.0 486 Busy Here\r\n"
+                    f"Via: SIP/2.0/UDP {PCSCF_HOST};branch=z9hG4bK-1\r\n"
+                    "Content-Length: 0\r\n"
+                    "\r\n"
+                ).encode("utf-8"),
             ),
             delay_seconds=0.01,
         )
@@ -109,7 +120,7 @@ class SIPSenderReactorTests(unittest.TestCase):
 
         result = self.reactor.send_artifact(
             SendArtifact.from_wire_text(
-                "OPTIONS sip:ue@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+                f"OPTIONS {REALISTIC_REQUEST_URI} SIP/2.0\r\nContent-Length: 0\r\n\r\n"
             ),
             TargetEndpoint(
                 host=responder.host,
@@ -137,8 +148,8 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.addCleanup(responder.close)
 
         wire_text = (
-            "OPTIONS sip:ue@example.com SIP/2.0\r\n"
-            "Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-1\r\n"
+            f"OPTIONS {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-1\r\n"
             "Contact: <sip:attacker@203.0.113.10:5090>\r\n"
             "Content-Length: 0\r\n\r\n"
         )
@@ -172,7 +183,6 @@ class SIPSenderReactorTests(unittest.TestCase):
             )
         )
 
-
     @patch(
         "volte_mutation_fuzzer.sender.core.check_route_to_target",
         return_value=RouteCheckResult(False, "no route to host"),
@@ -182,8 +192,8 @@ class SIPSenderReactorTests(unittest.TestCase):
     ) -> None:
         result = self.reactor.send_artifact(
             SendArtifact.from_wire_text(
-                "OPTIONS sip:ue@example.com SIP/2.0\r\n"
-                "Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-1\r\n"
+                f"OPTIONS {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+                f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-1\r\n"
                 "Content-Length: 0\r\n\r\n"
             ),
             TargetEndpoint(
@@ -201,10 +211,10 @@ class SIPSenderReactorTests(unittest.TestCase):
 
     def test_send_real_ue_direct_native_uses_native_ipsec_observer_path(self) -> None:
         artifact = SendArtifact.from_wire_text(
-            "INVITE sip:ue@example.com SIP/2.0\r\n"
-            "Call-ID: call-123\r\n"
+            f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+            f"Call-ID: {REALISTIC_CALL_ID}\r\n"
             "CSeq: 42 INVITE\r\n"
-            "Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-abc123\r\n"
+            f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-abc123\r\n"
             "Contact: <sip:attacker@203.0.113.10:5090>\r\n"
             "Content-Length: 0\r\n"
             "\r\n"
@@ -473,10 +483,10 @@ class SIPSenderReactorTests(unittest.TestCase):
         self,
     ) -> None:
         artifact = SendArtifact.from_wire_text(
-            "INVITE sip:ue@example.com SIP/2.0\r\n"
-            "Call-ID: call-123\r\n"
+            f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+            f"Call-ID: {REALISTIC_CALL_ID}\r\n"
             "CSeq: 42 INVITE\r\n"
-            "Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-abc123\r\n"
+            f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-abc123\r\n"
             "Content-Length: 0\r\n"
             "\r\n"
         )

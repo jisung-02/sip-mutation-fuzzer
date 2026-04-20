@@ -5,6 +5,8 @@ from volte_mutation_fuzzer.sip.bodies.message_summary import (
     VoiceMessageSummary,
 )
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+
 
 class MessageSummaryBodyTests(unittest.TestCase):
     def test_render_and_default_instance(self) -> None:
@@ -16,7 +18,10 @@ class MessageSummaryBodyTests(unittest.TestCase):
             "application/simple-message-summary",
         )
         self.assertIn("Messages-Waiting: yes\r\n", rendered)
-        self.assertIn("Message-Account: sip:voicemail@example.com\r\n", rendered)
+        self.assertIn(
+            f"Message-Account: sip:voicemail@{IMS_DOMAIN}\r\n",
+            rendered,
+        )
         self.assertIn("Voice-Message: 0/0\r\n", rendered)
 
     def test_default_instance_accepts_voice_override(self) -> None:

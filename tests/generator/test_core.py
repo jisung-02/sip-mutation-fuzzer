@@ -21,6 +21,15 @@ from volte_mutation_fuzzer.sip.responses import (
     RESPONSE_MODELS_BY_CODE,
 )
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
+EDGE_HOST = f"edge.{IMS_DOMAIN}"
+OVERRIDE_HOST = f"override.{IMS_DOMAIN}"
+UE_HOST = f"ue.{IMS_DOMAIN}"
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+REALISTIC_REMOTE_TAG = "873294202"
+
 
 class SIPGeneratorSignatureTests(unittest.TestCase):
     def test_init_sets_settings_and_uses_default_catalog(self) -> None:
@@ -40,7 +49,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertIsInstance(packet, OptionsRequest)
         self.assertEqual(packet.method, SIPMethod.OPTIONS)
         assert isinstance(packet.request_uri, SIPURI)
-        self.assertEqual(packet.request_uri.host, "example.com")
+        self.assertEqual(packet.request_uri.host, UE_HOST)
         self.assertEqual(packet.cseq.sequence, 1)
         self.assertEqual(packet.cseq.method, SIPMethod.OPTIONS)
 
@@ -48,7 +57,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self,
     ) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        context = DialogContext(local_tag="ue-tag")
+        context = DialogContext(local_tag=REALISTIC_LOCAL_TAG)
 
         with self.assertRaisesRegex(ValueError, "Matching INVITE transaction exists."):
             generator.generate_request(RequestSpec(method=SIPMethod.ACK), context)
@@ -61,8 +70,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     def test_generate_response_returns_valid_response_instance(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
         )
 
@@ -74,7 +83,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertIsInstance(packet, RESPONSE_MODELS_BY_CODE[200])
         self.assertEqual(packet.status_code, 200)
         self.assertEqual(packet.reason_phrase, "OK")
-        self.assertEqual(packet.call_id, "call-1")
+        self.assertEqual(packet.call_id, REALISTIC_CALL_ID)
         self.assertEqual(packet.cseq.sequence, 7)
         self.assertEqual(packet.cseq.method, SIPMethod.INVITE)
         self.assertEqual(packet.to.parameters["tag"], context.remote_tag)
@@ -83,7 +92,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self,
     ) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        context = DialogContext(local_tag="ue-tag", local_cseq=1)
+        context = DialogContext(local_tag=REALISTIC_LOCAL_TAG, local_cseq=1)
 
         with self.assertRaisesRegex(
             ValueError,
@@ -116,8 +125,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     def test_generate_response_surfaces_catalog_related_method_failures(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=1,
         )
 
@@ -225,15 +234,15 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
         self.assertEqual(packet.method, SIPMethod.OPTIONS)
         assert isinstance(packet.request_uri, SIPURI)
-        self.assertEqual(packet.request_uri.host, "example.com")
+        self.assertEqual(packet.request_uri.host, UE_HOST)
         self.assertEqual(packet.cseq.sequence, 1)
         self.assertEqual(packet.cseq.method, SIPMethod.OPTIONS)
         self.assertEqual(packet.user_agent, "volte-mutation-fuzzer/0.1.0")
-        self.assertEqual(packet.via[0].host, "proxy.example.com")
+        self.assertEqual(packet.via[0].host, PCSCF_HOST)
 
     def test_build_request_defaults_updates_context_for_stateful_requests(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        context = DialogContext(local_tag="ue-tag")
+        context = DialogContext(local_tag=REALISTIC_LOCAL_TAG)
 
         defaults = generator._build_request_defaults(
             RequestSpec(method=SIPMethod.INVITE),
@@ -247,7 +256,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertIsInstance(context.request_uri, SIPURI)
         self.assertEqual(packet.call_id, context.call_id)
         self.assertEqual(packet.from_.parameters["tag"], context.remote_tag)
-        self.assertEqual(packet.to.parameters["tag"], "ue-tag")
+        self.assertEqual(packet.to.parameters["tag"], REALISTIC_LOCAL_TAG)
         self.assertEqual(packet.cseq.sequence, 1)
         self.assertEqual(len(packet.contact), 1)
 
@@ -257,14 +266,14 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         for method, model in REQUEST_MODELS_BY_METHOD.items():
             with self.subTest(method=method):
                 context = DialogContext(
-                    call_id="call-1",
-                    local_tag="ue-tag",
-                    remote_tag="remote-tag",
+                    call_id=REALISTIC_CALL_ID,
+                    local_tag=REALISTIC_LOCAL_TAG,
+                    remote_tag=REALISTIC_REMOTE_TAG,
                     local_cseq=3,
                     request_uri=SIPURI(
                         scheme="sip",
-                        user="ue001",
-                        host="device.example.net",
+                        user="001010000123511",
+                        host=UE_HOST,
                     ),
                 )
 
@@ -294,8 +303,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     ) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
         )
 
@@ -346,13 +355,13 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     ) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
             route_set=(
                 NameAddress(
                     display_name="Edge Proxy",
-                    uri=SIPURI(scheme="sip", host="proxy.example.net"),
+                    uri=SIPURI(scheme="sip", host=EDGE_HOST),
                 ),
             ),
         )
@@ -367,10 +376,10 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.status_code, 200)
         self.assertEqual(packet.reason_phrase, "OK")
         self.assertEqual(packet.from_.display_name, "UE")
-        self.assertEqual(packet.from_.parameters["tag"], "ue-tag")
+        self.assertEqual(packet.from_.parameters["tag"], REALISTIC_LOCAL_TAG)
         self.assertEqual(packet.to.display_name, "Remote")
         self.assertEqual(packet.to.parameters["tag"], context.remote_tag)
-        self.assertEqual(packet.call_id, "call-1")
+        self.assertEqual(packet.call_id, REALISTIC_CALL_ID)
         self.assertEqual(packet.cseq.sequence, 7)
         self.assertEqual(packet.cseq.method, SIPMethod.INVITE)
         self.assertEqual(packet.server, "volte-mutation-fuzzer/0.1.0")
@@ -390,14 +399,14 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                     else SIPMethod.OPTIONS
                 )
                 context = DialogContext(
-                    call_id="call-1",
-                    local_tag="ue-tag",
-                    remote_tag="remote-tag",
+                    call_id=REALISTIC_CALL_ID,
+                    local_tag=REALISTIC_LOCAL_TAG,
+                    remote_tag=REALISTIC_REMOTE_TAG,
                     local_cseq=3,
                     route_set=(
                         NameAddress(
                             display_name="Edge Proxy",
-                            uri=SIPURI(scheme="sip", host="proxy.example.net"),
+                            uri=SIPURI(scheme="sip", host=EDGE_HOST),
                         ),
                     ),
                 )
@@ -413,7 +422,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
                 self.assertEqual(packet.status_code, status_code)
                 self.assertEqual(packet.reason_phrase, definition.reason_phrase)
-                self.assertEqual(packet.call_id, "call-1")
+                self.assertEqual(packet.call_id, REALISTIC_CALL_ID)
                 self.assertEqual(packet.cseq.sequence, 3)
                 self.assertEqual(packet.cseq.method, related_method)
 
@@ -445,7 +454,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         )
         replacement_from = NameAddress(
             display_name="Override Remote",
-            uri=SIPURI(scheme="sip", user="override", host="override.example.net"),
+            uri=SIPURI(scheme="sip", user="override", host=OVERRIDE_HOST),
             parameters={"tag": "override-tag"},
         )
 
@@ -455,7 +464,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertNotIn("from", merged)
         self.assertEqual(packet.from_.display_name, "Override Remote")
         assert isinstance(packet.from_.uri, SIPURI)
-        self.assertEqual(packet.from_.uri.host, "override.example.net")
+        self.assertEqual(packet.from_.uri.host, OVERRIDE_HOST)
         self.assertEqual(packet.from_.parameters["tag"], "override-tag")
 
     def test_apply_overrides_normalizes_wire_header_names_case_insensitively(
@@ -467,7 +476,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         )
         replacement_from = NameAddress(
             display_name="Override Remote",
-            uri=SIPURI(scheme="sip", user="override", host="override.example.net"),
+            uri=SIPURI(scheme="sip", user="override", host=OVERRIDE_HOST),
             parameters={"tag": "override-tag"},
         )
 
@@ -514,16 +523,18 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             with self.subTest(precondition=precondition, context="incomplete"):
                 with self.assertRaisesRegex(ValueError, precondition):
                     generator._validate_preconditions(
-                        context=DialogContext(call_id="call-1", local_tag="ue-tag"),
+                        context=DialogContext(
+                            call_id=REALISTIC_CALL_ID, local_tag=REALISTIC_LOCAL_TAG
+                        ),
                         preconditions=(precondition,),
                     )
 
             with self.subTest(precondition=precondition, context="complete"):
                 generator._validate_preconditions(
                     context=DialogContext(
-                        call_id="call-1",
-                        local_tag="ue-tag",
-                        remote_tag="remote-tag",
+                        call_id=REALISTIC_CALL_ID,
+                        local_tag=REALISTIC_LOCAL_TAG,
+                        remote_tag=REALISTIC_REMOTE_TAG,
                     ),
                     preconditions=(precondition,),
                 )
@@ -546,20 +557,20 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
             with self.subTest(precondition=precondition, context="incomplete"):
                 with self.assertRaisesRegex(ValueError, precondition):
                     generator._validate_preconditions(
-                        context=DialogContext(call_id="call-1"),
+                        context=DialogContext(call_id=REALISTIC_CALL_ID),
                         preconditions=(precondition,),
                     )
 
             with self.subTest(precondition=precondition, context="complete"):
                 generator._validate_preconditions(
                     context=DialogContext(
-                        call_id="call-1",
-                        local_tag="ue-tag",
-                        remote_tag="remote-tag",
+                        call_id=REALISTIC_CALL_ID,
+                        local_tag=REALISTIC_LOCAL_TAG,
+                        remote_tag=REALISTIC_REMOTE_TAG,
                         request_uri=SIPURI(
                             scheme="sip",
-                            user="ue001",
-                            host="device.example.net",
+                            user="001010000123511",
+                            host=UE_HOST,
                         ),
                     ),
                     preconditions=(precondition,),
@@ -598,29 +609,31 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         with self.subTest(context="missing-call-id"):
             with self.assertRaisesRegex(ValueError, response_precondition):
                 generator._validate_preconditions(
-                    context=DialogContext(local_tag="ue-tag", local_cseq=1),
+                    context=DialogContext(local_tag=REALISTIC_LOCAL_TAG, local_cseq=1),
                     preconditions=(response_precondition,),
                 )
 
         with self.subTest(context="missing-local-tag"):
             with self.assertRaisesRegex(ValueError, response_precondition):
                 generator._validate_preconditions(
-                    context=DialogContext(call_id="call-1", local_cseq=1),
+                    context=DialogContext(call_id=REALISTIC_CALL_ID, local_cseq=1),
                     preconditions=(response_precondition,),
                 )
 
         with self.subTest(context="missing-local-cseq"):
             with self.assertRaisesRegex(ValueError, response_precondition):
                 generator._validate_preconditions(
-                    context=DialogContext(call_id="call-1", local_tag="ue-tag"),
+                    context=DialogContext(
+                        call_id=REALISTIC_CALL_ID, local_tag=REALISTIC_LOCAL_TAG
+                    ),
                     preconditions=(response_precondition,),
                 )
 
         with self.subTest(context="complete"):
             generator._validate_preconditions(
                 context=DialogContext(
-                    call_id="call-1",
-                    local_tag="ue-tag",
+                    call_id=REALISTIC_CALL_ID,
+                    local_tag=REALISTIC_LOCAL_TAG,
                     local_cseq=1,
                 ),
                 preconditions=(response_precondition,),
@@ -637,7 +650,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
     def test_request_defaults_populate_optional_headers_for_invite(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        context = DialogContext(local_tag="ue-tag")
+        context = DialogContext(local_tag=REALISTIC_LOCAL_TAG)
 
         defaults = generator._build_request_defaults(
             RequestSpec(method=SIPMethod.INVITE),
@@ -690,8 +703,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     def test_response_defaults_populate_optional_headers_for_invite_180(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
         )
 
@@ -715,9 +728,9 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     def test_request_defaults_populate_contact_for_bye(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
-            remote_tag="remote-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
             local_cseq=1,
             remote_cseq=1,
         )
@@ -733,7 +746,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
     def test_overrides_take_precedence_over_optional_defaults(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
-        context = DialogContext(local_tag="ue-tag")
+        context = DialogContext(local_tag=REALISTIC_LOCAL_TAG)
 
         packet = generator.generate_request(
             RequestSpec(
@@ -757,8 +770,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
     ) -> None:
         generator = SIPGenerator(GeneratorSettings())
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
         )
 

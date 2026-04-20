@@ -6,6 +6,8 @@ from volte_mutation_fuzzer.generator.optional_defaults import (
 )
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
+PCSCF_HOST = "pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+
 
 class OptionalDefaultsTests(unittest.TestCase):
     def test_common_request_optionals_present_for_all_methods(self) -> None:
@@ -58,7 +60,7 @@ class OptionalDefaultsTests(unittest.TestCase):
         defaults = get_request_optional_defaults(SIPMethod.REGISTER)
 
         self.assertEqual(defaults["expires"], 3600)
-        self.assertEqual(defaults["path"], ("sip:proxy.example.com;lr",))
+        self.assertEqual(defaults["path"], (f"sip:{PCSCF_HOST};lr",))
 
     def test_cancel_request_has_reason_but_not_require_or_proxy_require(self) -> None:
         defaults = get_request_optional_defaults(SIPMethod.CANCEL)

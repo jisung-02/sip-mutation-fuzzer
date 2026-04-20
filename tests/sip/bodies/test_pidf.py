@@ -3,6 +3,8 @@ import xml.etree.ElementTree as ET
 
 from volte_mutation_fuzzer.sip.bodies.pidf import PIdfBody, PIdfTuple
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+
 
 class PIdfBodyTests(unittest.TestCase):
     def test_render_and_default_instance(self) -> None:
@@ -17,7 +19,7 @@ class PIdfBodyTests(unittest.TestCase):
         assert tuple_element is not None
         self.assertEqual(tuple_element.attrib["id"], "t1")
         self.assertIn("<basic>open</basic>", rendered)
-        self.assertIn("<contact>sip:alice@example.com</contact>", rendered)
+        self.assertIn(f"<contact>sip:111111@{IMS_DOMAIN}</contact>", rendered)
 
     def test_default_instance_accepts_tuple_override(self) -> None:
         body = PIdfBody.default_instance(

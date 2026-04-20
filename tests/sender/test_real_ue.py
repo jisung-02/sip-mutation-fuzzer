@@ -14,6 +14,10 @@ from volte_mutation_fuzzer.sender.real_ue import (
     resolve_native_ipsec_session,
 )
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
+REALISTIC_REQUEST_URI = "sip:111111@10.20.20.8:8100"
+
 
 class RealUEDirectHelperTests(unittest.TestCase):
     def test_resolver_prefers_kamctl_contact_for_msisdn(self) -> None:
@@ -73,8 +77,8 @@ class RealUEDirectHelperTests(unittest.TestCase):
 
     def test_prepare_real_ue_direct_payload_rewrites_wire_routing_headers(self) -> None:
         wire_text = (
-            "OPTIONS sip:ue@example.com SIP/2.0\r\n"
-            "Via: SIP/2.0/UDP proxy.example.com:5060;branch=z9hG4bK-1\r\n"
+            f"OPTIONS {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-1\r\n"
             "Contact: <sip:attacker@203.0.113.10:5090>\r\n"
             "Content-Length: 0\r\n\r\n"
         )
@@ -100,7 +104,9 @@ class RealUEDirectHelperTests(unittest.TestCase):
         )
 
     def test_prepare_real_ue_direct_payload_keeps_bytes_unmodified(self) -> None:
-        original = b"INVITE sip:ue@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+        original = (
+            f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\nContent-Length: 0\r\n\r\n"
+        ).encode("utf-8")
         payload, events = prepare_real_ue_direct_payload(
             SendArtifact.from_packet_bytes(original),
             local_host="127.0.0.1",

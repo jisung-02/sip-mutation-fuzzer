@@ -3,6 +3,11 @@ from volte_mutation_fuzzer.generator.contracts import DialogContext
 from volte_mutation_fuzzer.sender.contracts import SocketObservation
 from volte_mutation_fuzzer.sip.common import SIPURI
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+UE_URI = f"sip:111111@{IMS_DOMAIN}"
+ROUTE_1 = f"sip:pcscf1.{IMS_DOMAIN};lr"
+ROUTE_2 = f"sip:pcscf2.{IMS_DOMAIN};lr"
+
 
 def _make_observation(headers: dict[str, str]) -> SocketObservation:
     return SocketObservation(
@@ -18,19 +23,19 @@ def _make_observation(headers: dict[str, str]) -> SocketObservation:
 
 class TestExtractToTag:
     def test_extracts_to_tag(self) -> None:
-        obs = _make_observation({"To": "<sip:ue@example.com>;tag=abc123"})
+        obs = _make_observation({"To": f"<{UE_URI}>;tag=abc123"})
         ctx = DialogContext(call_id="c1", remote_tag="uac-tag")
         result = extract_dialog_state(obs, ctx)
         assert result.local_tag == "abc123"
 
     def test_to_tag_with_display_name(self) -> None:
-        obs = _make_observation({"To": '"UE" <sip:ue@example.com>;tag=xyz789'})
+        obs = _make_observation({"To": f'"UE" <{UE_URI}>;tag=xyz789'})
         ctx = DialogContext(call_id="c1", remote_tag="uac-tag")
         extract_dialog_state(obs, ctx)
         assert ctx.local_tag == "xyz789"
 
     def test_missing_to_tag_leaves_none(self) -> None:
-        obs = _make_observation({"To": "<sip:ue@example.com>"})
+        obs = _make_observation({"To": f"<{UE_URI}>"})
         ctx = DialogContext(call_id="c1", remote_tag="uac-tag")
         extract_dialog_state(obs, ctx)
         assert ctx.local_tag is None
@@ -58,7 +63,7 @@ class TestExtractContactUri:
         assert ctx.request_uri.port == 5070
 
     def test_missing_contact_leaves_none(self) -> None:
-        obs = _make_observation({"To": "<sip:ue@example.com>;tag=t1"})
+        obs = _make_observation({"To": f"<{UE_URI}>;tag=t1"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         assert ctx.request_uri is None
@@ -72,7 +77,7 @@ class TestExtractContactUri:
 
 class TestExtractRecordRoute:
     def test_single_record_route(self) -> None:
-        obs = _make_observation({"Record-Route": "<sip:proxy1@example.com;lr>"})
+        obs = _make_observation({"Record-Route": f"<{ROUTE_1}>"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         assert len(ctx.route_set) == 1
@@ -81,19 +86,16 @@ class TestExtractRecordRoute:
         # Record-Route is ordered from first proxy to last (UAC→UAS direction)
         # Route set must be reversed for UAC use (RFC 3261 §12.1.2)
         obs = _make_observation(
-            {"Record-Route": "<sip:p1@example.com;lr>,<sip:p2@example.com;lr>"}
+            {"Record-Route": f"<{ROUTE_1}>,<{ROUTE_2}>"}
         )
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         assert len(ctx.route_set) == 2
         assert isinstance(ctx.route_set[0], SIPURI)
-        # p2 should be first after reversal
-        assert (
-            ctx.route_set[0].host == "p2@example.com" or ctx.route_set[0].user == "p2"
-        )
+        assert ctx.route_set[0].host == f"pcscf2.{IMS_DOMAIN}"
 
     def test_no_record_route_leaves_empty(self) -> None:
-        obs = _make_observation({"To": "<sip:ue@example.com>;tag=t1"})
+        obs = _make_observation({"To": f"<{UE_URI}>;tag=t1"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         assert ctx.route_set == ()
@@ -101,7 +103,7 @@ class TestExtractRecordRoute:
 
 class TestExtractDialogStateReturnsContext:
     def test_returns_same_context_object(self) -> None:
-        obs = _make_observation({"To": "<sip:ue@example.com>;tag=abc"})
+        obs = _make_observation({"To": f"<{UE_URI}>;tag=abc"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         returned = extract_dialog_state(obs, ctx)
         assert returned is ctx

@@ -65,7 +65,7 @@ _METHOD_REQUEST_OPTIONALS: dict[SIPMethod, dict[str, Any]] = {
     },
     SIPMethod.REGISTER: {
         "expires": 3600,
-        "path": ("sip:proxy.example.com;lr",),
+        "path": ("sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr",),
         "recv_info": ("g.3gpp.iari-ref",),
     },
     SIPMethod.PUBLISH: {

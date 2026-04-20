@@ -6,6 +6,9 @@ from typer.testing import CliRunner
 
 from volte_mutation_fuzzer.generator.cli import app
 
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+
 
 class SIPGeneratorCLITests(unittest.TestCase):
     def setUp(self) -> None:
@@ -35,7 +38,13 @@ class SIPGeneratorCLITests(unittest.TestCase):
                 "200",
                 "INVITE",
                 "--context",
-                '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":7}',
+                (
+                    '{"call_id":"'
+                    f"{REALISTIC_CALL_ID}"
+                    '","local_tag":"'
+                    f"{REALISTIC_LOCAL_TAG}"
+                    '","local_cseq":7}'
+                ),
             ],
         )
 
@@ -43,7 +52,7 @@ class SIPGeneratorCLITests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status_code"], 200)
         self.assertEqual(payload["reason_phrase"], "OK")
-        self.assertEqual(payload["call_id"], "call-1")
+        self.assertEqual(payload["call_id"], REALISTIC_CALL_ID)
         self.assertEqual(payload["cseq"]["sequence"], 7)
         self.assertEqual(payload["cseq"]["method"], "INVITE")
 

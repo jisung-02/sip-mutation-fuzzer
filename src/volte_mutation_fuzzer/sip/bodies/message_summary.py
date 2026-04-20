@@ -18,7 +18,9 @@ class MessageSummaryBody(SIPBody):
     content_type: ClassVar[str] = "application/simple-message-summary"
 
     messages_waiting: bool = True
-    message_account: str = Field(default="sip:voicemail@example.com", min_length=1)
+    message_account: str = Field(
+        default="sip:voicemail@ims.mnc001.mcc001.3gppnetwork.org", min_length=1
+    )
     voice_message: VoiceMessageSummary | None = Field(
         default_factory=VoiceMessageSummary
     )

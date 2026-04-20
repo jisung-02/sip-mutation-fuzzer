@@ -54,11 +54,11 @@ class ConferenceInfoBody(SIPBody):
     @classmethod
     def default_instance(cls, **kwargs: object) -> Self:
         defaults: dict[str, object] = {
-            "entity": "sip:conf@example.com",
+            "entity": "sip:conference@ims.mnc001.mcc001.3gppnetwork.org",
             "users": (
                 ConferenceUser(
-                    entity="sip:alice@example.com",
-                    display_text="Alice",
+                    entity="sip:111111@ims.mnc001.mcc001.3gppnetwork.org",
+                    display_text="UE 111111",
                 ),
             ),
         }

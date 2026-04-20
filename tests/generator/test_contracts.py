@@ -13,54 +13,64 @@ from volte_mutation_fuzzer.generator import (
 )
 from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
+UE_HOST = f"ue.{IMS_DOMAIN}"
+EDGE_HOST = f"edge.{IMS_DOMAIN}"
+ALT_IMS_DOMAIN = "ims.mnc999.mcc999.3gppnetwork.org"
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_REINVITE_CALL_ID = "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+REALISTIC_REMOTE_TAG = "873294202"
+
 
 class GeneratorSettingsTests(unittest.TestCase):
     def test_from_env_uses_defaults_when_env_is_empty(self) -> None:
         settings = GeneratorSettings.from_env({})
 
         self.assertEqual(settings.target_ue_name, "UE")
-        self.assertEqual(settings.via_host, "proxy.example.com")
+        self.assertEqual(settings.via_host, PCSCF_HOST)
         self.assertEqual(settings.via_port, 5060)
         self.assertEqual(settings.transport, "UDP")
         self.assertEqual(settings.user_agent, "volte-mutation-fuzzer/0.1.0")
         self.assertEqual(settings.from_user, "remote")
-        self.assertEqual(settings.to_user, "ue")
-        self.assertEqual(settings.request_uri_user, "ue")
+        self.assertEqual(settings.to_user, "111111")
+        self.assertEqual(settings.request_uri_user, "111111")
 
     def test_from_env_reads_prefixed_values_and_normalizes_text(self) -> None:
         settings = GeneratorSettings.from_env(
             {
                 "VMF_GENERATOR_TARGET_UE_NAME": " Pixel-9-Pro ",
-                "VMF_GENERATOR_VIA_HOST": " ims.example.net ",
+                "VMF_GENERATOR_VIA_HOST": f" {ALT_IMS_DOMAIN} ",
                 "VMF_GENERATOR_VIA_PORT": " 5080 ",
                 "VMF_GENERATOR_TRANSPORT": " tls-sctp ",
                 "VMF_GENERATOR_USER_AGENT": " fuzz/0.2 ",
                 "VMF_GENERATOR_FROM_DISPLAY_NAME": " P-CSCF ",
                 "VMF_GENERATOR_FROM_USER": " scscf ",
-                "VMF_GENERATOR_FROM_HOST": " ims.example.net ",
+                "VMF_GENERATOR_FROM_HOST": f" {ALT_IMS_DOMAIN} ",
                 "VMF_GENERATOR_TO_DISPLAY_NAME": " Victim UE ",
-                "VMF_GENERATOR_TO_USER": " ue001 ",
-                "VMF_GENERATOR_TO_HOST": " device.example.net ",
-                "VMF_GENERATOR_REQUEST_URI_USER": " ue001 ",
-                "VMF_GENERATOR_REQUEST_URI_HOST": " device.example.net ",
+                "VMF_GENERATOR_TO_USER": " 001010000123511 ",
+                "VMF_GENERATOR_TO_HOST": f" {UE_HOST} ",
+                "VMF_GENERATOR_REQUEST_URI_USER": " 001010000123511 ",
+                "VMF_GENERATOR_REQUEST_URI_HOST": f" {UE_HOST} ",
                 "VMF_GENERATOR_CONTACT_DISPLAY_NAME": " ",
                 "VMF_GENERATOR_CONTACT_USER": " proxy-contact ",
-                "VMF_GENERATOR_CONTACT_HOST": " edge.example.net ",
+                "VMF_GENERATOR_CONTACT_HOST": f" {EDGE_HOST} ",
                 "VMF_GENERATOR_CONTACT_PORT": " 5090 ",
             }
         )
 
         self.assertEqual(settings.target_ue_name, "Pixel-9-Pro")
-        self.assertEqual(settings.via_host, "ims.example.net")
+        self.assertEqual(settings.via_host, ALT_IMS_DOMAIN)
         self.assertEqual(settings.via_port, 5080)
         self.assertEqual(settings.transport, "TLS-SCTP")
         self.assertEqual(settings.user_agent, "fuzz/0.2")
         self.assertEqual(settings.from_display_name, "P-CSCF")
         self.assertEqual(settings.to_display_name, "Victim UE")
-        self.assertEqual(settings.request_uri_host, "device.example.net")
+        self.assertEqual(settings.request_uri_host, UE_HOST)
         self.assertIsNone(settings.contact_display_name)
         self.assertEqual(settings.contact_user, "proxy-contact")
-        self.assertEqual(settings.contact_host, "edge.example.net")
+        self.assertEqual(settings.contact_host, EDGE_HOST)
         self.assertEqual(settings.contact_port, 5090)
 
     def test_from_env_rejects_blank_required_string(self) -> None:
@@ -70,7 +80,7 @@ class GeneratorSettingsTests(unittest.TestCase):
     def test_from_env_auto_loads_dotenv_when_no_env_mapping_is_given(self) -> None:
         with TemporaryDirectory() as temp_dir, chdir(temp_dir):
             Path(".env").write_text(
-                "VMF_GENERATOR_REQUEST_URI_HOST=ims.example.net\n"
+                f"VMF_GENERATOR_REQUEST_URI_HOST={ALT_IMS_DOMAIN}\n"
                 "VMF_GENERATOR_TRANSPORT=tcp\n",
                 encoding="utf-8",
             )
@@ -78,24 +88,24 @@ class GeneratorSettingsTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 settings = GeneratorSettings.from_env()
 
-        self.assertEqual(settings.request_uri_host, "ims.example.net")
+        self.assertEqual(settings.request_uri_host, ALT_IMS_DOMAIN)
         self.assertEqual(settings.transport, "TCP")
 
     def test_from_env_prefers_process_env_over_dotenv_values(self) -> None:
         with TemporaryDirectory() as temp_dir, chdir(temp_dir):
             Path(".env").write_text(
-                "VMF_GENERATOR_REQUEST_URI_HOST=ims.example.net\n",
+                f"VMF_GENERATOR_REQUEST_URI_HOST={ALT_IMS_DOMAIN}\n",
                 encoding="utf-8",
             )
 
             with patch.dict(
                 os.environ,
-                {"VMF_GENERATOR_REQUEST_URI_HOST": "override.example.net"},
+                {"VMF_GENERATOR_REQUEST_URI_HOST": UE_HOST},
                 clear=True,
             ):
                 settings = GeneratorSettings.from_env()
 
-        self.assertEqual(settings.request_uri_host, "override.example.net")
+        self.assertEqual(settings.request_uri_host, UE_HOST)
 
 
 class DialogContextTests(unittest.TestCase):
@@ -112,16 +122,16 @@ class DialogContextTests(unittest.TestCase):
 
     def test_normalizes_identifiers_and_advances_sequences(self) -> None:
         context = DialogContext(
-            call_id=" call-1 ",
-            local_tag=" ue-tag ",
-            remote_tag=" remote-tag ",
+            call_id=f" {REALISTIC_CALL_ID} ",
+            local_tag=f" {REALISTIC_LOCAL_TAG} ",
+            remote_tag=f" {REALISTIC_REMOTE_TAG} ",
             local_cseq=4,
             remote_cseq=9,
         )
 
-        self.assertEqual(context.call_id, "call-1")
-        self.assertEqual(context.local_tag, "ue-tag")
-        self.assertEqual(context.remote_tag, "remote-tag")
+        self.assertEqual(context.call_id, REALISTIC_CALL_ID)
+        self.assertEqual(context.local_tag, REALISTIC_LOCAL_TAG)
+        self.assertEqual(context.remote_tag, REALISTIC_REMOTE_TAG)
         self.assertTrue(context.has_dialog)
         self.assertEqual(context.next_local_cseq(), 5)
         self.assertEqual(context.local_cseq, 5)
@@ -130,13 +140,13 @@ class DialogContextTests(unittest.TestCase):
 
     def test_fork_for_reinvite_preserves_context_state(self) -> None:
         route = NameAddress(
-            uri=SIPURI(scheme="sip", user="proxy", host="ims.example.net")
+            uri=SIPURI(scheme="sip", user="pcscf", host=PCSCF_HOST)
         )
-        request_uri = SIPURI(scheme="sip", user="ue001", host="device.example.net")
+        request_uri = SIPURI(scheme="sip", user="001010000123511", host=UE_HOST)
         context = DialogContext(
-            call_id="call-2",
-            local_tag="ue-tag",
-            remote_tag="remote-tag",
+            call_id=REALISTIC_REINVITE_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
             local_cseq=3,
             remote_cseq=7,
             route_set=(route,),
@@ -149,7 +159,7 @@ class DialogContextTests(unittest.TestCase):
         self.assertIsNot(reinvite_context, context)
         self.assertFalse(context.is_reinvite)
         self.assertTrue(reinvite_context.is_reinvite)
-        self.assertEqual(reinvite_context.call_id, "call-2")
+        self.assertEqual(reinvite_context.call_id, REALISTIC_REINVITE_CALL_ID)
         self.assertEqual(reinvite_context.route_set, (route,))
         self.assertEqual(reinvite_context.request_uri, request_uri)
         self.assertTrue(reinvite_context.is_registered)
@@ -198,7 +208,7 @@ class RequestSpecTests(unittest.TestCase):
 class ResponseSpecTests(unittest.TestCase):
     def test_normalizes_scenario_and_copies_overrides(self) -> None:
         source_overrides = {
-            "contact": [{"uri": {"scheme": "sip", "host": "ims.example.net"}}]
+            "contact": [{"uri": {"scheme": "sip", "host": PCSCF_HOST}}]
         }
         spec = ResponseSpec.model_validate(
             {

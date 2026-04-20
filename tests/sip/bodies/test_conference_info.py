@@ -6,6 +6,8 @@ from volte_mutation_fuzzer.sip.bodies.conference_info import (
     ConferenceUser,
 )
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+
 
 class ConferenceInfoBodyTests(unittest.TestCase):
     def test_render_and_default_instance(self) -> None:
@@ -25,12 +27,12 @@ class ConferenceInfoBodyTests(unittest.TestCase):
         body = ConferenceInfoBody.default_instance(
             users=(
                 ConferenceUser(
-                    entity="sip:bob@example.com",
+                    entity=f"sip:222222@{IMS_DOMAIN}",
                     display_text="Bob",
                     status="on-hold",
                 ),
             )
         )
 
-        self.assertIn('entity="sip:bob@example.com"', body.render())
+        self.assertIn(f'entity="sip:222222@{IMS_DOMAIN}"', body.render())
         self.assertIn("<status>on-hold</status>", body.render())

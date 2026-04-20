@@ -79,20 +79,24 @@ def _extract_method(data: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 _CRLF = "\r\n"
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REMOTE_URI = f"sip:remote@{IMS_DOMAIN}"
+UE_URI = f"sip:111111@{IMS_DOMAIN}"
 
 
 def make_200_ok(
-    call_id: str = "test-call-id",
+    call_id: str = REALISTIC_CALL_ID,
     to_tag: str = "uas-tag-abc",
-    contact: str = "sip:ue@127.0.0.1:5060",
+    contact: str = "sip:111111@127.0.0.1:5060",
     cseq: str = "1 INVITE",
 ) -> bytes:
     """Build a minimal 200 OK response bytes for INVITE."""
     msg = (
         f"SIP/2.0 200 OK{_CRLF}"
         f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bKtest{_CRLF}"
-        f"From: <sip:remote@example.com>;tag=uac-tag{_CRLF}"
-        f"To: <sip:ue@example.com>;tag={to_tag}{_CRLF}"
+        f"From: <{REMOTE_URI}>;tag=uac-tag{_CRLF}"
+        f"To: <{UE_URI}>;tag={to_tag}{_CRLF}"
         f"Call-ID: {call_id}{_CRLF}"
         f"CSeq: {cseq}{_CRLF}"
         f"Contact: <{contact}>{_CRLF}"
@@ -103,15 +107,15 @@ def make_200_ok(
 
 
 def make_180_ringing(
-    call_id: str = "test-call-id",
+    call_id: str = REALISTIC_CALL_ID,
     cseq: str = "1 INVITE",
 ) -> bytes:
     """Build a minimal 180 Ringing response bytes."""
     msg = (
         f"SIP/2.0 180 Ringing{_CRLF}"
         f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bKtest{_CRLF}"
-        f"From: <sip:remote@example.com>;tag=uac-tag{_CRLF}"
-        f"To: <sip:ue@example.com>{_CRLF}"
+        f"From: <{REMOTE_URI}>;tag=uac-tag{_CRLF}"
+        f"To: <{UE_URI}>{_CRLF}"
         f"Call-ID: {call_id}{_CRLF}"
         f"CSeq: {cseq}{_CRLF}"
         f"Content-Length: 0{_CRLF}"
@@ -125,9 +129,9 @@ def make_486_busy() -> bytes:
     msg = (
         f"SIP/2.0 486 Busy Here{_CRLF}"
         f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bKtest{_CRLF}"
-        f"From: <sip:remote@example.com>;tag=uac-tag{_CRLF}"
-        f"To: <sip:ue@example.com>;tag=busy-tag{_CRLF}"
-        f"Call-ID: test-call-id{_CRLF}"
+        f"From: <{REMOTE_URI}>;tag=uac-tag{_CRLF}"
+        f"To: <{UE_URI}>;tag=busy-tag{_CRLF}"
+        f"Call-ID: {REALISTIC_CALL_ID}{_CRLF}"
         f"CSeq: 1 INVITE{_CRLF}"
         f"Content-Length: 0{_CRLF}"
         f"{_CRLF}"
@@ -140,9 +144,9 @@ def make_200_ok_generic(method: str = "BYE") -> bytes:
     msg = (
         f"SIP/2.0 200 OK{_CRLF}"
         f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bKtest{_CRLF}"
-        f"From: <sip:remote@example.com>;tag=uac-tag{_CRLF}"
-        f"To: <sip:ue@example.com>;tag=uas-tag-abc{_CRLF}"
-        f"Call-ID: test-call-id{_CRLF}"
+        f"From: <{REMOTE_URI}>;tag=uac-tag{_CRLF}"
+        f"To: <{UE_URI}>;tag=uas-tag-abc{_CRLF}"
+        f"Call-ID: {REALISTIC_CALL_ID}{_CRLF}"
         f"CSeq: 2 {method}{_CRLF}"
         f"Content-Length: 0{_CRLF}"
         f"{_CRLF}"

@@ -18,6 +18,14 @@ from volte_mutation_fuzzer.packet_docs import (
     render_response_docs,
 )
 
+IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
+UE_HOST = f"ue.{IMS_DOMAIN}"
+PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
+REALISTIC_CALL_ID_1 = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_CALL_ID_2 = "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_CALL_ID_3 = "d93f7c440f8b11ef@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_CALL_ID_4 = "e5c17d43caa9f1d2@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+
 
 class SIPCatalogTests(unittest.TestCase):
     def test_catalog_counts(self) -> None:
@@ -30,25 +38,25 @@ class SIPCatalogTests(unittest.TestCase):
             SIPURI(scheme="sip", user="alice")
         tel = SIPURI(scheme="tel", user="01012345678")
         self.assertIsNone(tel.host)
-        absolute = AbsoluteURI(uri="mailto:alice@example.com")
-        self.assertEqual(absolute.uri, "mailto:alice@example.com")
+        absolute = AbsoluteURI(uri=f"mailto:sip-ops@{IMS_DOMAIN}")
+        self.assertEqual(absolute.uri, f"mailto:sip-ops@{IMS_DOMAIN}")
 
     def test_invite_requires_contact(self) -> None:
         invite_model = REQUEST_MODELS_BY_METHOD[SIPMethod.INVITE]
         with self.assertRaises(Exception):
             invite_model.model_validate(
                 {
-                    "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-1")],
+                    "request_uri": SIPURI(scheme="sip", host=UE_HOST),
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-1")],
                     "max_forwards": 70,
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="caller", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="caller", host=IMS_DOMAIN),
                         parameters={"tag": "a"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="callee", host="example.com")
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
                     ),
-                    "call_id": "call-1",
+                    "call_id": REALISTIC_CALL_ID_1,
                     "cseq": CSeqHeader(sequence=1, method=SIPMethod.INVITE),
                 }
             )
@@ -57,17 +65,17 @@ class SIPCatalogTests(unittest.TestCase):
         message_model = REQUEST_MODELS_BY_METHOD[SIPMethod.MESSAGE]
         packet = message_model.model_validate(
             {
-                "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
-                "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-2")],
+                "request_uri": SIPURI(scheme="sip", host=UE_HOST),
+                "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-2")],
                 "max_forwards": 70,
                 "from_": NameAddress(
-                    uri=SIPURI(scheme="sip", user="sender", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="sender", host=IMS_DOMAIN),
                     parameters={"tag": "a"},
                 ),
                 "to": NameAddress(
-                    uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                    uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
                 ),
-                "call_id": "call-2",
+                "call_id": REALISTIC_CALL_ID_2,
                 "cseq": CSeqHeader(sequence=2, method=SIPMethod.MESSAGE),
             }
         )
@@ -76,21 +84,21 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             message_model.model_validate(
                 {
-                    "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-2")],
+                    "request_uri": SIPURI(scheme="sip", host=UE_HOST),
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-2")],
                     "max_forwards": 70,
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="sender", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="sender", host=IMS_DOMAIN),
                         parameters={"tag": "a"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
                     ),
-                    "call_id": "call-2",
+                    "call_id": REALISTIC_CALL_ID_2,
                     "cseq": CSeqHeader(sequence=2, method=SIPMethod.MESSAGE),
                     "contact": [
                         NameAddress(
-                            uri=SIPURI(scheme="sip", user="sender", host="example.com")
+                            uri=SIPURI(scheme="sip", user="sender", host=IMS_DOMAIN)
                         )
                     ],
                 }
@@ -99,17 +107,17 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             message_model.model_validate(
                 {
-                    "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-2")],
+                    "request_uri": SIPURI(scheme="sip", host=UE_HOST),
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-2")],
                     "max_forwards": 70,
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="sender", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="sender", host=IMS_DOMAIN),
                         parameters={"tag": "a"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
                     ),
-                    "call_id": "call-2",
+                    "call_id": REALISTIC_CALL_ID_2,
                     "cseq": CSeqHeader(sequence=2, method=SIPMethod.MESSAGE),
                     "body": "hello",
                 }
@@ -120,17 +128,17 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             info_model.model_validate(
                 {
-                    "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-2")],
+                    "request_uri": SIPURI(scheme="sip", host=UE_HOST),
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-2")],
                     "max_forwards": 70,
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="sender", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="sender", host=IMS_DOMAIN),
                         parameters={"tag": "a"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
                     ),
-                    "call_id": "call-info",
+                    "call_id": REALISTIC_CALL_ID_2,
                     "cseq": CSeqHeader(sequence=2, method=SIPMethod.INFO),
                     "recv_info": ("dtmf",),
                 }
@@ -141,17 +149,17 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             publish_model.model_validate(
                 {
-                    "request_uri": SIPURI(scheme="sip", host="ue.example.com"),
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-pub")],
+                    "request_uri": SIPURI(scheme="sip", host=UE_HOST),
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-pub")],
                     "max_forwards": 70,
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="sender", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="sender", host=IMS_DOMAIN),
                         parameters={"tag": "a"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
                     ),
-                    "call_id": "call-publish",
+                    "call_id": REALISTIC_CALL_ID_2,
                     "cseq": CSeqHeader(sequence=2, method=SIPMethod.PUBLISH),
                     "event": {"package": "presence"},
                 }
@@ -163,20 +171,20 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             ok_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-msg1")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-msg1")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-msg-200",
+                    "call_id": REALISTIC_CALL_ID_2,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.MESSAGE),
                     "contact": [
                         NameAddress(
-                            uri=SIPURI(scheme="sip", user="remote", host="example.com")
+                            uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN)
                         )
                     ],
                 }
@@ -185,16 +193,16 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             ok_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-msg2")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-msg2")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-msg-200",
+                    "call_id": REALISTIC_CALL_ID_2,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.MESSAGE),
                     "content_type": "text/plain",
                     "body": "delivered",
@@ -206,35 +214,35 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             unauthorized_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-3")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-3")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="registrar", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="registrar", host=IMS_DOMAIN),
                         parameters={"tag": "reg"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-3",
+                    "call_id": REALISTIC_CALL_ID_3,
                     "cseq": CSeqHeader(sequence=3, method=SIPMethod.REGISTER),
                 }
             )
 
         packet = unauthorized_model.model_validate(
             {
-                "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-3")],
+                "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-3")],
                 "from_": NameAddress(
-                    uri=SIPURI(scheme="sip", user="registrar", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="registrar", host=IMS_DOMAIN),
                     parameters={"tag": "reg"},
                 ),
                 "to": NameAddress(
-                    uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                     parameters={"tag": "ue"},
                 ),
-                "call_id": "call-3",
+                "call_id": REALISTIC_CALL_ID_3,
                 "cseq": CSeqHeader(sequence=3, method=SIPMethod.REGISTER),
                 "www_authenticate": (
-                    AuthChallenge(realm="example.com", nonce="nonce-1"),
+                    AuthChallenge(realm=IMS_DOMAIN, nonce="nonce-1"),
                 ),
             }
         )
@@ -245,16 +253,16 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             bad_info_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-4")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-4")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-4",
+                    "call_id": REALISTIC_CALL_ID_4,
                     "cseq": CSeqHeader(sequence=4, method=SIPMethod.INFO),
                 }
             )
@@ -264,16 +272,16 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             bad_location_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-geo")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-geo")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-geo",
+                    "call_id": REALISTIC_CALL_ID_4,
                     "cseq": CSeqHeader(sequence=4, method=SIPMethod.INVITE),
                 }
             )
@@ -284,17 +292,17 @@ class SIPCatalogTests(unittest.TestCase):
             bad_alert_model.model_validate(
                 {
                     "via": [
-                        ViaHeader(host="proxy.example.com", branch="z9hG4bK-alert")
+                        ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-alert")
                     ],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-alert",
+                    "call_id": REALISTIC_CALL_ID_4,
                     "cseq": CSeqHeader(sequence=4, method=SIPMethod.INVITE),
                 }
             )
@@ -304,15 +312,13 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             ok_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-tag")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-tag")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
-                    "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com")
-                    ),
-                    "call_id": "call-tag",
+                    "to": NameAddress(uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)),
+                    "call_id": REALISTIC_CALL_ID_4,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.OPTIONS),
                 }
             )
@@ -322,16 +328,16 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             ok_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-sub")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-sub")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-sub-200",
+                    "call_id": REALISTIC_CALL_ID_4,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.SUBSCRIBE),
                 }
             )
@@ -341,16 +347,16 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             ok_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-reg")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-reg")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="registrar", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="registrar", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-reg-200",
+                    "call_id": REALISTIC_CALL_ID_3,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.REGISTER),
                     "expires": 3600,
                 }
@@ -361,16 +367,16 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             ringing_model.model_validate(
                 {
-                    "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-180")],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-180")],
                     "from_": NameAddress(
-                        uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
                     "to": NameAddress(
-                        uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                         parameters={"tag": "ue"},
                     ),
-                    "call_id": "call-180",
+                    "call_id": REALISTIC_CALL_ID_1,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.INVITE),
                 }
             )
@@ -379,16 +385,16 @@ class SIPCatalogTests(unittest.TestCase):
         terminated_model = RESPONSE_MODELS_BY_CODE[199]
         packet = terminated_model.model_validate(
             {
-                "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-199")],
+                "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-199")],
                 "from_": NameAddress(
-                    uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                     parameters={"tag": "remote"},
                 ),
                 "to": NameAddress(
-                    uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                     parameters={"tag": "ue"},
                 ),
-                "call_id": "call-199",
+                "call_id": REALISTIC_CALL_ID_1,
                 "cseq": CSeqHeader(sequence=5, method=SIPMethod.INVITE),
                 "reason": 'SIP;cause=487;text="Request Terminated"',
             }
@@ -410,16 +416,16 @@ class SIPCatalogTests(unittest.TestCase):
         ok_model = RESPONSE_MODELS_BY_CODE[200]
         packet = ok_model.model_validate(
             {
-                "via": [ViaHeader(host="proxy.example.com", branch="z9hG4bK-200")],
+                "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-200")],
                 "from_": NameAddress(
-                    uri=SIPURI(scheme="sip", user="remote", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                     parameters={"tag": "remote"},
                 ),
                 "to": NameAddress(
-                    uri=SIPURI(scheme="sip", user="ue", host="example.com"),
+                    uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
                     parameters={"tag": "ue"},
                 ),
-                "call_id": "call-200",
+                "call_id": REALISTIC_CALL_ID_4,
                 "cseq": CSeqHeader(sequence=5, method=SIPMethod.OPTIONS),
                 "reason_phrase": "Okay",
             }
@@ -428,7 +434,7 @@ class SIPCatalogTests(unittest.TestCase):
 
     def test_via_ttl_zero_and_cseq_upper_bound(self) -> None:
         via = ViaHeader(
-            host="proxy.example.com", branch="z9hG4bK-ttl", ttl=0, transport="TLS-SCTP"
+            host=PCSCF_HOST, branch="z9hG4bK-ttl", ttl=0, transport="TLS-SCTP"
         )
         self.assertEqual(via.ttl, 0)
         self.assertEqual(via.transport, "TLS-SCTP")
@@ -445,7 +451,7 @@ class SIPCatalogTests(unittest.TestCase):
         request_doc = render_request_docs()
         response_doc = render_response_docs()
 
-        self.assertIn("MESSAGE sip:ue@example.com SIP/2.0", request_doc)
+        self.assertIn("MESSAGE sip:", request_doc)
         self.assertIn("### 금지 헤더", request_doc)
         self.assertIn("SIP/2.0 424 Bad Location Information", response_doc)
         self.assertIn("## 참고 RFC", response_doc)

@@ -39,23 +39,27 @@ class GeneratorSettings(BaseModel):
     }
 
     target_ue_name: str = Field(default="UE", min_length=1)
-    via_host: str = Field(default="proxy.example.com", min_length=1)
+    via_host: str = Field(
+        default="pcscf.ims.mnc001.mcc001.3gppnetwork.org", min_length=1
+    )
     via_port: int | None = Field(default=5060, ge=1, le=65535)
     transport: str = Field(default="UDP", min_length=1)
     user_agent: str = Field(default="volte-mutation-fuzzer/0.1.0", min_length=1)
 
     from_display_name: str | None = "Remote"
     from_user: str = Field(default="remote", min_length=1)
-    from_host: str = Field(default="example.com", min_length=1)
+    from_host: str = Field(default="ims.mnc001.mcc001.3gppnetwork.org", min_length=1)
     from_port: int | None = Field(default=None, ge=1, le=65535)
 
     to_display_name: str | None = "UE"
-    to_user: str = Field(default="ue", min_length=1)
-    to_host: str = Field(default="example.com", min_length=1)
+    to_user: str = Field(default="111111", min_length=1)
+    to_host: str = Field(default="ims.mnc001.mcc001.3gppnetwork.org", min_length=1)
     to_port: int | None = Field(default=None, ge=1, le=65535)
 
-    request_uri_user: str | None = "ue"
-    request_uri_host: str = Field(default="example.com", min_length=1)
+    request_uri_user: str | None = "111111"
+    request_uri_host: str = Field(
+        default="ue.ims.mnc001.mcc001.3gppnetwork.org", min_length=1
+    )
     request_uri_port: int | None = Field(default=None, ge=1, le=65535)
 
     contact_display_name: str | None = None

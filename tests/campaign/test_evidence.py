@@ -8,6 +8,8 @@ from pathlib import Path
 from volte_mutation_fuzzer.campaign.contracts import CaseResult
 from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
 
+REALISTIC_EVIDENCE_INVITE = "INVITE sip:111111@10.20.20.8:8100 SIP/2.0\r\n\r\n"
+
 
 def _make_result(
     case_id: int = 0,
@@ -39,7 +41,7 @@ class EvidenceCollectorTests(unittest.TestCase):
 
             evidence_dir = collector.collect(
                 result,
-                sent_payload="INVITE sip:test@example.com SIP/2.0\r\n\r\n",
+                sent_payload=REALISTIC_EVIDENCE_INVITE,
             )
 
             self.assertIsNotNone(evidence_dir)

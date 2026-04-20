@@ -67,12 +67,12 @@ class ReginfoBody(SIPBody):
         defaults: dict[str, object] = {
             "registrations": (
                 Registration(
-                    aor="sip:alice@example.com",
+                    aor="sip:111111@ims.mnc001.mcc001.3gppnetwork.org",
                     id="reg-1",
                     contacts=(
                         RegContact(
                             id="contact-1",
-                            uri="sip:alice@example.com",
+                            uri="sip:111111@ims.mnc001.mcc001.3gppnetwork.org",
                         ),
                     ),
                 ),
