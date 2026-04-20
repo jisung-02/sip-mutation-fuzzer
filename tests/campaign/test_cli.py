@@ -32,11 +32,14 @@ def _make_config(host: str = "127.0.0.1", port: int = 5060) -> CampaignConfig:
     )
 
 
-def _make_case_result(case_id: int = 0, verdict: str = "normal") -> CaseResult:
+def _make_case_result(
+    case_id: int = 0, verdict: str = "normal", profile: str = "legacy"
+) -> CaseResult:
     return CaseResult(
         case_id=case_id,
         seed=case_id,
         method="OPTIONS",
+        profile=profile,
         layer="model",
         strategy="default",
         verdict=verdict,
@@ -247,6 +250,8 @@ class CampaignRunCLITests(unittest.TestCase):
                     "5060",
                     "--methods",
                     "OPTIONS",
+                    "--profile",
+                    "legacy,legacy",
                     "--layer",
                     "model",
                     "--max-cases",
@@ -434,6 +439,65 @@ class CampaignReplayCLITests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, msg=result.output)
             payload = json.loads(result.stdout)
             self.assertIn("verdict", payload)
+
+    def test_replay_command_preserves_case_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "campaign.jsonl"
+            config = CampaignConfig(
+                target_host="127.0.0.1",
+                methods=("OPTIONS",),
+                layers=("wire",),
+                strategies=("default",),
+                profiles=("parser_breaker",),
+                max_cases=1,
+                timeout_seconds=0.5,
+                cooldown_seconds=0.0,
+                check_process=False,
+            )
+            campaign = CampaignResult(
+                campaign_id="replay-profile",
+                started_at="2026-01-01T00:00:00Z",
+                status="completed",
+                config=config,
+            )
+            store = ResultStore(path)
+            store.write_header(campaign)
+            store.append(_make_case_result(0, profile="parser_breaker"))
+            store.write_footer(campaign)
+
+            captured: dict[str, object] = {}
+
+            def _build_executor(*args, **kwargs):
+                executor = Mock()
+                executor._execute_case.return_value = CaseResult(
+                    case_id=0,
+                    seed=0,
+                    method="OPTIONS",
+                    profile="parser_breaker",
+                    layer="wire",
+                    strategy="default",
+                    verdict="normal",
+                    reason="ok",
+                    elapsed_ms=1.0,
+                    reproduction_cmd="uv run fuzzer ...",
+                    timestamp=1.0,
+                )
+                captured["executor"] = executor
+                return executor
+
+            with patch(
+                "volte_mutation_fuzzer.campaign.core.CampaignExecutor",
+                side_effect=_build_executor,
+            ):
+                result = self.runner.invoke(
+                    app,
+                    ["campaign", "replay", str(path), "--case-id", "0"],
+                )
+
+            self.assertEqual(result.exit_code, 0, msg=result.output)
+            executor = captured["executor"]
+            spec = executor._execute_case.call_args.args[0]
+            self.assertEqual(spec.profile, "parser_breaker")
 
     def test_replay_missing_case_id_exits_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

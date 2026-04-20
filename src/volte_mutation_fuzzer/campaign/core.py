@@ -716,6 +716,7 @@ class CampaignExecutor:
                 packet,
                 MutationConfig(
                     seed=spec.seed,
+                    profile=spec.profile,
                     strategy=spec.strategy,
                     layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
                 ),
@@ -762,6 +763,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 mutation_ops=mutation_ops,
@@ -796,6 +798,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 verdict="unknown",
@@ -991,6 +994,7 @@ class CampaignExecutor:
                     case_id=spec.case_id,
                     seed=spec.seed,
                     method=spec.method,
+                    profile=spec.profile,
                     layer=spec.layer,
                     strategy=spec.strategy,
                     verdict="unknown",
@@ -1018,6 +1022,7 @@ class CampaignExecutor:
                 editable,
                 MutationConfig(
                     seed=spec.seed,
+                    profile=spec.profile,
                     strategy=spec.strategy,
                     layer=cast(
                         Literal["model", "wire", "byte", "auto"], effective_layer
@@ -1124,6 +1129,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 mutation_ops=mutation_ops,
@@ -1158,6 +1164,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 verdict="unknown",
@@ -1190,6 +1197,7 @@ class CampaignExecutor:
             f"{' --preserve-via' if cfg.preserve_via else ''}"
             f"{' --preserve-contact' if cfg.preserve_contact else ''}"
             f" --methods {spec.method}"
+            f" --profile {spec.profile}"
             f" --layer {spec.layer}"
             f" --strategy {spec.strategy}"
             f" --seed-start {spec.seed}"
@@ -1231,6 +1239,7 @@ class CampaignExecutor:
         orchestrator = DialogOrchestrator(self._generator, self._mutator, self._target)
         mutation_config = MutationConfig(
             seed=spec.seed,
+            profile=spec.profile,
             strategy=spec.strategy,
             layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
         )
@@ -1254,6 +1263,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 verdict="unknown",
@@ -1271,6 +1281,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 verdict="unknown",
@@ -1291,6 +1302,7 @@ class CampaignExecutor:
                 case_id=spec.case_id,
                 seed=spec.seed,
                 method=spec.method,
+                profile=spec.profile,
                 layer=spec.layer,
                 strategy=spec.strategy,
                 verdict="unknown",
@@ -1324,6 +1336,7 @@ class CampaignExecutor:
             case_id=spec.case_id,
             seed=spec.seed,
             method=spec.method,
+            profile=spec.profile,
             layer=spec.layer,
             strategy=spec.strategy,
             mutation_ops=(),
@@ -1405,6 +1418,7 @@ class CampaignExecutor:
             return (
                 f"uv run fuzzer mutate response {spec.response_code} {related_method}"
                 f" --context '{context}'"
+                f" --profile {spec.profile}"
                 f" --strategy {spec.strategy}"
                 f" --layer {spec.layer}"
                 f" --seed {spec.seed}"
@@ -1417,6 +1431,7 @@ class CampaignExecutor:
             )
         return (
             f"uv run fuzzer mutate request {spec.method}"
+            f" --profile {spec.profile}"
             f" --strategy {spec.strategy}"
             f" --layer {spec.layer}"
             f" --seed {spec.seed}"

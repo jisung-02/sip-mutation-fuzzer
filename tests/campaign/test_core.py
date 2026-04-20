@@ -955,6 +955,79 @@ class CampaignExecutorTests(unittest.TestCase):
                     expected_profile,
                 )
 
+    def test_execute_case_propagates_profile_into_mutation_and_result(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("OPTIONS",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            profile="parser_breaker",
+            method="OPTIONS",
+            layer="wire",
+            strategy="final_crlf_loss",
+        )
+        send_result = SendReceiveResult(
+            target=TargetEndpoint(host="127.0.0.1", port=5060),
+            artifact_kind="wire",
+            bytes_sent=120,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=100.1,
+            send_completed_at=100.2,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_build_packet",
+            return_value=object(),
+        ), unittest.mock.patch.object(
+            executor._mutator,
+            "mutate",
+            return_value=SimpleNamespace(
+                original_packet=object(),
+                mutated_packet=object(),
+                wire_text="SIP/2.0 200 OK\r\n\r\n",
+                packet_bytes=None,
+                records=(),
+                seed=0,
+                profile="parser_breaker",
+                strategy="final_crlf_loss",
+                final_layer="wire",
+            ),
+        ) as mutate_mock, unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            return_value=send_result,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=12.5,
+                process_alive=True,
+            ),
+        ):
+            result = executor._execute_case(spec)
+
+        mutation_config = mutate_mock.call_args.args[1]
+        self.assertEqual(mutation_config.profile, "parser_breaker")
+        self.assertEqual(result.profile, "parser_breaker")
+        self.assertIn("--profile parser_breaker", result.reproduction_cmd)
+
     def test_execute_case_uses_light_snapshot_profile_for_normal_verdict(self) -> None:
         cfg = self._make_config(
             "127.0.0.1",
@@ -1169,6 +1242,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         cmd = cases[0].reproduction_cmd
         self.assertIn("fuzzer mutate request", cmd)
+        self.assertIn("--profile legacy", cmd)
         self.assertIn("--seed", cmd)
         self.assertIn(responder.host, cmd)
 
@@ -1213,10 +1287,12 @@ class CampaignExecutorTests(unittest.TestCase):
             method="INVITE",
             layer="wire",
             strategy="default",
+            profile="delivery_preserving",
         )
         cmd = executor._build_mt_template_reproduction_cmd(spec)
 
         self.assertIn("--ipsec-mode bypass", cmd)
+        self.assertIn("--profile delivery_preserving", cmd)
         self.assertIn("--mt-local-port 15100", cmd)
 
     def test_reproduction_cmd_uses_msisdn_when_target_host_missing(self) -> None:

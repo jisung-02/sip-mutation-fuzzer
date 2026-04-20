@@ -40,11 +40,11 @@ class SIPMutatorCLITests(unittest.TestCase):
                 "--profile",
                 "parser_breaker",
                 "--layer",
-                "model",
+                "wire",
                 "--seed",
                 "7",
                 "--strategy",
-                "default",
+                "final_crlf_loss",
             ],
             input=baseline_json,
         )
@@ -52,11 +52,13 @@ class SIPMutatorCLITests(unittest.TestCase):
         payload = self.parse_output(result)
 
         self.assertEqual(payload["profile"], "parser_breaker")
-        self.assertEqual(payload["final_layer"], "model")
-        self.assertEqual(payload["strategy"], "default")
+        self.assertEqual(payload["final_layer"], "wire")
+        self.assertEqual(payload["strategy"], "final_crlf_loss")
         self.assertEqual(payload["seed"], 7)
         self.assertEqual(payload["original_packet"]["method"], "OPTIONS")
-        self.assertIn("mutated_packet", payload)
+        self.assertIn("wire_text", payload)
+        self.assertTrue(payload["wire_text"].endswith("\r\n"))
+        self.assertFalse(payload["wire_text"].endswith("\r\n\r\n"))
         self.assertGreaterEqual(len(payload["records"]), 1)
 
     def test_request_command_generates_and_mutates_request_packet(self) -> None:

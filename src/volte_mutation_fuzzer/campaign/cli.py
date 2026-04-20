@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor, ResultStore
+from volte_mutation_fuzzer.mutator.profile_catalog import normalize_profile_name
 
 IpsecMode = Literal["null", "bypass", "native", "ipsec"]
 _IPSEC_MODES: tuple[str, ...] = get_args(IpsecMode)
@@ -28,6 +29,19 @@ def _parse_csv(raw: str | None) -> tuple[str, ...] | None:
     if raw is None:
         return None
     return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _parse_profiles(raw: str | None) -> tuple[str, ...] | None:
+    items = _parse_csv(raw)
+    if items is None:
+        return None
+
+    normalized: list[str] = []
+    for item in items:
+        profile = normalize_profile_name(item)
+        if profile not in normalized:
+            normalized.append(profile)
+    return tuple(normalized) if normalized else None
 
 
 def _parse_response_codes(raw: str | None) -> tuple[int, ...] | None:
@@ -238,9 +252,13 @@ def run_command(
     ] = 10,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
-    profiles = _parse_csv(profile) or ("legacy",)
+    profiles = _parse_profiles(profile) or ("legacy",)
     if strategy is None:
-        strategies = ("default", "state_breaker") if profiles == ("legacy",) else ("default",)
+        strategies = (
+            ("default", "state_breaker")
+            if profiles == ("legacy",)
+            else ("default",)
+        )
     else:
         strategies = _parse_csv(strategy) or ()
     layers = _parse_csv(layer) or ("model", "wire", "byte")
@@ -448,6 +466,7 @@ def replay_command(
     spec = CaseSpec(
         case_id=case.case_id,
         seed=case.seed,
+        profile=case.profile,
         method=case.method,
         layer=case.layer,
         strategy=case.strategy,
