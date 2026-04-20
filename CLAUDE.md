@@ -15,6 +15,8 @@
 - `mode` 와 `profile` 은 독립 축이다. `mode` 는 sender/실행 경로, `profile` 은 mutator 정책 축이다.
 - `--strategy default` 는 요청값이고, 실제 실행/저장/재현은 `profile + layer + seed` 로 해석된 concrete strategy 기준으로 읽는다.
 - `mutator` CLI 의 `--layer auto` 는 profile-aware 로 동작한다. non-legacy profile 도 compatible layer 를 자동 선택한다.
+- 캠페인 명령 세트나 복붙용 예시를 만들 때는 보통 `--impi` 를 기본 추천하지 않는다. 현재 운영 가정은 `VMF_IMPI` 또는 resolver 가 안정적으로 IMPI 를 제공하는 환경이다.
+- `--impi` 는 IMPI resolution 디버깅, 환경 독립적인 self-contained 재현 명령, 또는 사용자가 명시적으로 요구한 경우에만 붙이는 쪽을 기본으로 한다.
 - profile 축이나 campaign/report/persistence 를 건드릴 때는 아래 파일을 먼저 읽는다.
   - `src/volte_mutation_fuzzer/mutator/profile_catalog.py`
   - `src/volte_mutation_fuzzer/mutator/core.py`
@@ -40,7 +42,6 @@ Samsung Galaxy A31 등 실제 UE를 대상으로 한 MT-INVITE 변이 퍼징을 
 uv run fuzzer campaign run \
   --mode real-ue-direct \
   --target-msisdn 111111 \
-  --impi 001010000123511 \
   --methods INVITE --layer wire --strategy identity \
   --mt-invite-template a31 \
   --ipsec-mode null \

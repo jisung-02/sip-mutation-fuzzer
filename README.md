@@ -7,6 +7,7 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 
 ## 문서 구조
 - [docs/AI_AGENT_GUIDE.md](docs/AI_AGENT_GUIDE.md): AI/에이전트용 우선순위, 문서 읽기 순서, skill 추천, mutation profile 축 가이드
+- [docs/AI_AGENT_GUIDE_EXPLAINED.md](docs/AI_AGENT_GUIDE_EXPLAINED.md): 위 AI 가이드가 왜 필요한지 사람이 이해하기 위한 설명 문서
 - [docs/README.md](docs/README.md): 전체 문서 인덱스
 - [docs/기획/PRD.md](docs/기획/PRD.md): 프로젝트 목표, 범위, 요구사항, 완료 기준
 - [docs/기획/GENERATOR_PRD.md](docs/기획/GENERATOR_PRD.md): Generator 상세 설계 문서

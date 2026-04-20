@@ -5,6 +5,7 @@
 | 문서 | 설명 |
 |------|------|
 | [`AI_AGENT_GUIDE.md`](AI_AGENT_GUIDE.md) | AI/에이전트용 온보딩, 우선순위, skill 추천, mutation profile 축 해설 |
+| [`AI_AGENT_GUIDE_EXPLAINED.md`](AI_AGENT_GUIDE_EXPLAINED.md) | 위 AI 가이드를 사람이 읽기 쉽게 풀어쓴 설명 문서 |
 | [`프로젝트-개요.md`](프로젝트-개요.md) | 프로젝트 소개, 아키텍처, 모듈 요약, CLI, 개발 환경 |
 | [`구현-문서.md`](구현-문서.md) | 모듈별 설계 배경, 동작 방식, 코드 구조 상세 |
 | [`Fuzzer.md`](Fuzzer.md) | 퍼저 이론, SIP 프로토콜 퍼저 고려사항, 공격면 분류 (그룹 A~K) |
