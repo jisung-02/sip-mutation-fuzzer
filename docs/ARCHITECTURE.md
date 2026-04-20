@@ -87,11 +87,21 @@ Original Input
 - **`mutate_editable()`**: EditableSIPMessage 입력 (MT template용)
 
 #### 변이 전략
+이 표는 개념 요약이며, 실제로 선택 가능한 concrete strategy는 `profile`과 `layer`에 따라 달라진다.
+
 | Strategy | 설명 | 용도 |
 |----------|------|------|
-| **identity** | 무변이 (원본 그대로) | baseline/oracle |
-| **default** | 기본 변이 (랜덤 필드 수정) | 일반 퍼징 |
-| **state_breaker** | 상태 기반 공격 변이 | 고급 시나리오 |
+| **identity** | 원본을 그대로 유지하는 baseline 전략 | 연결성 확인, oracle baseline |
+| **default** | profile이 layer별 기본 concrete strategy를 해석하도록 요청하는 전략 | 일반 퍼징, profile-aware 기본값 |
+| **safe** | 전달 가능성을 최대한 보존하는 완화된 변이 | delivery_preserving 계열 |
+| **header_targeted** | 특정 헤더를 중심으로 바이트 변이를 유도 | byte layer의 표적 변이 |
+| **header_whitespace_noise** | 헤더 주변 공백/탭을 흔드는 wire 변이 | parser/proxy 경계 테스트 |
+| **final_crlf_loss** | 마지막 CRLF를 손상시키는 wire 변이 | parser_breaker 계열 |
+| **duplicate_content_length_conflict** | 상충하는 Content-Length를 만드는 wire 변이 | parser_breaker 계열 |
+| **tail_chop_1** | 마지막 1바이트를 잘라내는 byte 변이 | tail truncation 재현 |
+| **tail_garbage** | 짧은 suffix를 덧붙이는 byte 변이 | parser confusion 유도 |
+| **alias_port_desync** | IMS alias/port 정합성을 비트는 wire 변이 | IMS-specific 경로 |
+| **state_breaker** | 상태 기반 공격 변이 | model layer의 고급 시나리오 |
 
 ### 4. Sender Layer (송신 엔진)
 
@@ -99,7 +109,7 @@ Original Input
 - **역할**: 다양한 전송 방식 통합
 - **지원 모드**:
   - `softphone`: 직접 UDP/TCP 송신
-  - `real-ue-direct`: UE 대상 특수 처리
+  - `real-ue-direct`: UE 대상 특수 처리와 template/resolve-driven 흐름
 
 #### Real-UE-Direct 경로
 ```python
@@ -212,7 +222,7 @@ TargetEndpoint (auto-resolution + validation)
 실제 실행 컴포넌트들
 ```
 
-`profile`과 `mode`는 서로 독립적이다. `profile`은 mutator가 어떤 변이 규칙을 적용할지 정하고, `mode`는 sender가 어떤 전송 경로를 사용할지 정한다.
+`profile`과 `mode`는 서로 독립적이다. `profile`은 mutator가 어떤 변이 규칙과 기본 concrete strategy를 선택할지 정하고, `mode`는 sender와 주변 실행 흐름이 어떤 경로를 사용할지 정한다.
 
 ### 자동 Resolution 체인
 ```python
