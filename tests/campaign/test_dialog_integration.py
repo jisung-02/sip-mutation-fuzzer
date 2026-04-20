@@ -12,6 +12,26 @@ from tests.dialog._dialog_server import (
 
 
 class CampaignDialogIntegrationTests(unittest.TestCase):
+    @staticmethod
+    def _make_183_session_progress(*, reliable: bool = False, rseq: int = 73) -> bytes:
+        reliable_headers = ""
+        if reliable:
+            reliable_headers = f"Require: 100rel\r\nRSeq: {rseq}\r\n"
+        return (
+            "SIP/2.0 183 Session Progress\r\n"
+            "Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bKtest\r\n"
+            "From: <sip:remote@ims.mnc001.mcc001.3gppnetwork.org>;tag=uac-tag\r\n"
+            "To: <sip:111111@ims.mnc001.mcc001.3gppnetwork.org>;tag=early-183\r\n"
+            "Call-ID: a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org\r\n"
+            "CSeq: 41 INVITE\r\n"
+            "Contact: <sip:111111@127.0.0.1:5070;transport=udp>\r\n"
+            "Record-Route: <sip:pcscf1.ims.mnc001.mcc001.3gppnetwork.org;lr>,"
+            "<sip:pcscf2.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            f"{reliable_headers}"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        ).encode("utf-8")
+
     def _make_config(self, host: str, port: int, **kwargs) -> CampaignConfig:
         tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(tmpdir.cleanup)
@@ -100,3 +120,70 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
 
         self.assertNotEqual(result.verdict, "unknown")
         self.assertEqual(self._methods_seen(server), ["OPTIONS"])
+
+    def test_execute_case_routes_prack_through_early_dialog_path(self) -> None:
+        server = DialogUDPResponder(
+            responses_by_method={
+                "INVITE": self._make_183_session_progress(reliable=True, rseq=73),
+                "PRACK": make_200_ok_generic("PRACK"),
+            }
+        )
+        server.start()
+        self.addCleanup(server.close)
+
+        executor = CampaignExecutor(
+            self._make_config(server.host, server.port, methods=("PRACK",))
+        )
+
+        result = executor._execute_case(self._make_case_spec("PRACK"))
+
+        self.assertNotEqual(result.verdict, "unknown")
+        self.assertEqual(self._methods_seen(server), ["INVITE", "PRACK"])
+        prack_payload = server.received_payloads[-1].decode("utf-8", errors="replace")
+        self.assertIn("PRACK sip:111111@127.0.0.1:5070", prack_payload)
+        self.assertIn("To: \"UE\" <sip:111111@ims.mnc001.mcc001.3gppnetwork.org>;tag=early-183", prack_payload)
+        self.assertIn("RAck: 73 41 INVITE", prack_payload)
+        self.assertIn(
+            "Route: sip:pcscf2.ims.mnc001.mcc001.3gppnetwork.org;lr",
+            prack_payload,
+        )
+
+    def test_execute_case_rejects_non_reliable_prack_setup(self) -> None:
+        server = DialogUDPResponder(
+            responses_by_method={
+                "INVITE": self._make_183_session_progress(reliable=False),
+            }
+        )
+        server.start()
+        self.addCleanup(server.close)
+
+        executor = CampaignExecutor(
+            self._make_config(server.host, server.port, methods=("PRACK",))
+        )
+
+        result = executor._execute_case(self._make_case_spec("PRACK"))
+
+        self.assertEqual(result.verdict, "unknown")
+        self.assertIn("dialog setup failed", result.reason)
+        self.assertEqual(self._methods_seen(server), ["INVITE"])
+
+    def test_execute_case_routes_info_through_dialog_path(self) -> None:
+        server = DialogUDPResponder(
+            responses_by_method={
+                "INVITE": make_200_ok(contact="sip:111111@127.0.0.1:5071"),
+                "ACK": b"",
+                "INFO": make_200_ok_generic("INFO"),
+                "BYE": make_200_ok_generic("BYE"),
+            }
+        )
+        server.start()
+        self.addCleanup(server.close)
+
+        executor = CampaignExecutor(
+            self._make_config(server.host, server.port, methods=("INFO",))
+        )
+
+        result = executor._execute_case(self._make_case_spec("INFO"))
+
+        self.assertNotEqual(result.verdict, "unknown")
+        self.assertEqual(self._methods_seen(server), ["INVITE", "ACK", "INFO", "BYE"])

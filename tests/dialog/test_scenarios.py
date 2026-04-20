@@ -87,6 +87,16 @@ class TestInviteDialogScenarioStructure:
         assert len(scenario.teardown_steps) == 1
         assert scenario.teardown_steps[0].method == "BYE"
 
+    def test_info_sets_default_info_package_metadata(self) -> None:
+        scenario = scenario_for_method("INFO")
+        assert scenario is not None
+        assert scenario.fuzz_step.info_package == "dtmf"
+
+    def test_refer_stays_bodyless_by_default(self) -> None:
+        scenario = scenario_for_method("REFER")
+        assert scenario is not None
+        assert scenario.fuzz_step.body_kind is None
+
 
 class TestInviteCancelScenarioStructure:
     def test_cancel_setup_has_invite_only(self) -> None:

@@ -17,6 +17,7 @@ from volte_mutation_fuzzer.sip.requests import (
     InviteRequest,
     NotifyRequest,
     OptionsRequest,
+    PrackRequest,
     SubscribeRequest,
 )
 from volte_mutation_fuzzer.sip.responses import (
@@ -272,6 +273,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                     local_tag=REALISTIC_LOCAL_TAG,
                     remote_tag=REALISTIC_REMOTE_TAG,
                     local_cseq=3,
+                    reliable_invite_rseq=17,
+                    reliable_invite_cseq=3,
                     request_uri=SIPURI(
                         scheme="sip",
                         user="001010000123511",
@@ -326,6 +329,62 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         assert packet.body is not None
         self.assertIn("Signal=", packet.body)
         self.assertIn("Duration=160", packet.body)
+
+    def test_generate_request_defaults_real_ue_info_to_dtmf_body_and_package(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings(mode="real-ue-direct"))
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
+            local_cseq=2,
+            remote_cseq=1,
+            request_uri=SIPURI(
+                scheme="sip",
+                user="001010000123511",
+                host=UE_HOST,
+            ),
+        )
+
+        packet = generator.generate_request(
+            RequestSpec(method=SIPMethod.INFO),
+            context,
+        )
+
+        assert isinstance(packet, InfoRequest)
+        self.assertEqual(packet.info_package, "dtmf")
+        self.assertEqual(packet.content_type, "application/dtmf-relay")
+        assert packet.body is not None
+        self.assertIn("Signal=", packet.body)
+        self.assertIn("Duration=160", packet.body)
+
+    def test_generate_request_prack_uses_reliable_provisional_rack_state(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
+            local_cseq=2,
+            remote_cseq=1,
+            request_uri=SIPURI(
+                scheme="sip",
+                user="001010000123511",
+                host=UE_HOST,
+            ),
+            reliable_invite_rseq=77,
+            reliable_invite_cseq=41,
+        )
+
+        packet = generator.generate_request(
+            RequestSpec(method=SIPMethod.PRACK),
+            context,
+        )
+
+        assert isinstance(packet, PrackRequest)
+        self.assertEqual(packet.rack.response_num, 77)
+        self.assertEqual(packet.rack.cseq_num, 41)
+        self.assertEqual(packet.rack.method, SIPMethod.INVITE)
 
     def test_generate_request_honors_explicit_body_kind_before_event_inference(
         self,
@@ -628,7 +687,6 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         generator = SIPGenerator(GeneratorSettings())
         advisory_preconditions = (
             "Active subscription or implicit REFER subscription exists.",
-            "Reliable provisional response was sent.",
             "UE acts as a publication target/service.",
             "UE acts like a registrar or registration service.",
             "UE supports the targeted event package.",
@@ -640,6 +698,26 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
                     context=None,
                     preconditions=(precondition,),
                 )
+
+    def test_validate_preconditions_requires_reliable_provisional_state_for_prack(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        precondition = "Reliable provisional response was sent."
+
+        with self.assertRaisesRegex(ValueError, precondition):
+            generator._validate_preconditions(
+                context=None,
+                preconditions=(precondition,),
+            )
+
+        generator._validate_preconditions(
+            context=DialogContext(
+                reliable_invite_rseq=73,
+                reliable_invite_cseq=41,
+            ),
+            preconditions=(precondition,),
+        )
 
     def test_validate_preconditions_requires_originating_request_context_for_response_rules(
         self,

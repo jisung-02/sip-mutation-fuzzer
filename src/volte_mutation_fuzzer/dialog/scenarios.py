@@ -14,12 +14,16 @@ _STATELESS_METHODS = frozenset(
     {"OPTIONS", "INVITE", "MESSAGE", "REGISTER", "SUBSCRIBE", "PUBLISH", "NOTIFY"}
 )
 
+_INFO_DEFAULT_PACKAGE = "dtmf"
+
 
 def _build_invite_dialog(method: str) -> DialogScenario:
     """INVITE→200 OK→ACK→[target]→expect any → BYE (unless target is BYE)."""
     teardown: tuple[DialogStep, ...] = ()
     if method != "BYE":
         teardown = (DialogStep(method="BYE", role="send"),)
+
+    info_package = _INFO_DEFAULT_PACKAGE if method == "INFO" else None
 
     return DialogScenario(
         scenario_type=DialogScenarioType.invite_dialog,
@@ -37,6 +41,7 @@ def _build_invite_dialog(method: str) -> DialogScenario:
             method=method,
             role="send",
             is_fuzz_target=True,
+            info_package=info_package,
         ),
         teardown_steps=teardown,
     )

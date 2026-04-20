@@ -1,4 +1,7 @@
-from volte_mutation_fuzzer.dialog.state_extractor import extract_dialog_state
+from volte_mutation_fuzzer.dialog.state_extractor import (
+    extract_dialog_state,
+    extract_dialog_state_from_responses,
+)
 from volte_mutation_fuzzer.generator.contracts import DialogContext
 from volte_mutation_fuzzer.sender.contracts import SocketObservation
 from volte_mutation_fuzzer.sip.common import SIPURI
@@ -9,15 +12,21 @@ ROUTE_1 = f"sip:pcscf1.{IMS_DOMAIN};lr"
 ROUTE_2 = f"sip:pcscf2.{IMS_DOMAIN};lr"
 
 
-def _make_observation(headers: dict[str, str]) -> SocketObservation:
+def _make_observation(
+    headers: dict[str, str],
+    *,
+    status_code: int = 200,
+    reason_phrase: str = "OK",
+    classification: str = "success",
+) -> SocketObservation:
     return SocketObservation(
-        status_code=200,
-        reason_phrase="OK",
+        status_code=status_code,
+        reason_phrase=reason_phrase,
         headers={k.casefold(): v for k, v in headers.items()},
         body="",
         raw_text="",
         raw_size=0,
-        classification="success",
+        classification=classification,
     )
 
 
@@ -107,3 +116,92 @@ class TestExtractDialogStateReturnsContext:
         ctx = DialogContext(call_id="c1", remote_tag="t")
         returned = extract_dialog_state(obs, ctx)
         assert returned is ctx
+
+
+class TestExtractEarlyDialogFromProvisionalInviteResponse:
+    def test_extracts_183_dialog_state(self) -> None:
+        obs = _make_observation(
+            {
+                "To": f"<{UE_URI}>;tag=early-tag-183",
+                "Contact": "<sip:ue@10.0.0.9:5088;transport=udp>",
+                "Record-Route": f"<{ROUTE_1}>,<{ROUTE_2}>",
+            },
+            status_code=183,
+            reason_phrase="Session Progress",
+            classification="provisional",
+        )
+        ctx = DialogContext(call_id="c1", remote_tag="uac-tag")
+
+        extract_dialog_state(obs, ctx)
+
+        assert ctx.local_tag == "early-tag-183"
+        assert isinstance(ctx.request_uri, SIPURI)
+        assert ctx.request_uri.host == "10.0.0.9"
+        assert ctx.request_uri.port == 5088
+        assert ctx.request_uri.parameters == {"transport": "udp"}
+        assert len(ctx.route_set) == 2
+        assert isinstance(ctx.route_set[0], SIPURI)
+        assert ctx.route_set[0].host == f"pcscf2.{IMS_DOMAIN}"
+        assert ctx.route_set[0].parameters == {"lr": None}
+
+    def test_preserves_richer_183_state_when_later_180_is_poorer(self) -> None:
+        responses = (
+            _make_observation(
+                {},
+                status_code=100,
+                reason_phrase="Trying",
+                classification="provisional",
+            ),
+            _make_observation(
+                {
+                    "To": f"<{UE_URI}>;tag=early-tag-183",
+                    "Contact": "<sip:ue@10.0.0.9:5088;transport=udp>",
+                    "Record-Route": f"<{ROUTE_1}>,<{ROUTE_2}>",
+                },
+                status_code=183,
+                reason_phrase="Session Progress",
+                classification="provisional",
+            ),
+            _make_observation(
+                {"To": f"<{UE_URI}>;tag=early-tag-183"},
+                status_code=180,
+                reason_phrase="Ringing",
+                classification="provisional",
+            ),
+        )
+        ctx = DialogContext(call_id="c1", remote_tag="uac-tag")
+
+        extract_dialog_state_from_responses(responses, ctx)
+
+        assert ctx.local_tag == "early-tag-183"
+        assert isinstance(ctx.request_uri, SIPURI)
+        assert ctx.request_uri.host == "10.0.0.9"
+        assert ctx.request_uri.port == 5088
+        assert ctx.request_uri.parameters == {"transport": "udp"}
+        assert len(ctx.route_set) == 2
+        assert isinstance(ctx.route_set[0], SIPURI)
+        assert ctx.route_set[0].host == f"pcscf2.{IMS_DOMAIN}"
+        assert ctx.route_set[0].parameters == {"lr": None}
+
+    def test_extracts_reliable_provisional_rseq_and_invite_cseq(self) -> None:
+        responses = (
+            _make_observation(
+                {
+                    "To": f"<{UE_URI}>;tag=rel-183",
+                    "Contact": "<sip:ue@10.0.0.9:5088;transport=udp>",
+                    "Record-Route": f"<{ROUTE_1}>,<{ROUTE_2}>",
+                    "Require": "100rel",
+                    "RSeq": "73",
+                    "CSeq": "41 INVITE",
+                },
+                status_code=183,
+                reason_phrase="Session Progress",
+                classification="provisional",
+            ),
+        )
+        ctx = DialogContext(call_id="c1", remote_tag="uac-tag")
+
+        extract_dialog_state_from_responses(responses, ctx)
+
+        assert ctx.reliable_invite_rseq == 73
+        assert ctx.reliable_invite_cseq == 41

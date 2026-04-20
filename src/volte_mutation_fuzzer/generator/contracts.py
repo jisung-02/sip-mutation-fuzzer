@@ -190,6 +190,8 @@ class DialogContext(BaseModel):
     remote_tag: str | None = Field(default=None, min_length=1)
     local_cseq: int = Field(default=0, ge=0, lt=2**31)
     remote_cseq: int = Field(default=0, ge=0, lt=2**31)
+    reliable_invite_rseq: int | None = Field(default=None, ge=1, lt=2**31)
+    reliable_invite_cseq: int | None = Field(default=None, ge=1, lt=2**31)
     route_set: tuple[NameAddress | URIReference, ...] = ()
     request_uri: URIReference | None = None
     is_registered: bool = False

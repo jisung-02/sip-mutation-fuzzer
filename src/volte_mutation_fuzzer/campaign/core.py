@@ -58,6 +58,11 @@ from volte_mutation_fuzzer.sender.core import SIPSenderReactor
 from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver, check_ipsec_sa_alive
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
+from volte_mutation_fuzzer.sip.completeness import (
+    PacketCompletionTier,
+    PacketRuntimePath,
+    get_packet_completion,
+)
 from volte_mutation_fuzzer.sip.render import render_packet
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
@@ -73,6 +78,15 @@ _CANCEL_RETRY_INTERVAL: float = 0.5  # seconds between retries
 _CANCEL_TEARDOWN_TIMEOUT: float = 2.0  # extra cooldown when teardown fails
 
 logger = logging.getLogger(__name__)
+
+_DIALOG_RUNTIME_PATHS: frozenset[PacketRuntimePath] = frozenset(
+    {
+        PacketRuntimePath.invite_dialog,
+        PacketRuntimePath.invite_ack,
+        PacketRuntimePath.invite_cancel,
+        PacketRuntimePath.invite_prack,
+    }
+)
 
 
 # layer별 지원 전략 매핑 — mutator/core.py _validate_supported_strategy와 동기화
@@ -685,6 +699,14 @@ class CampaignExecutor:
         except Exception as exc:
             logger.warning("failed to drain pending pcap txt exports: %s", exc)
 
+    def _dialog_scenario_for_runtime_method(self, method: str):
+        completion = get_packet_completion(SIPMethod(method))
+        if completion.tier is not PacketCompletionTier.runtime_complete:
+            return None
+        if completion.runtime_path not in _DIALOG_RUNTIME_PATHS:
+            return None
+        return scenario_for_method(method)
+
     def _execute_case(self, spec: CaseSpec) -> CaseResult:
         config = self._config
         timestamp = time.time()
@@ -706,7 +728,7 @@ class CampaignExecutor:
 
             # If this method requires a dialog, use DialogOrchestrator
             if spec.response_code is None:
-                scenario = scenario_for_method(spec.method)
+                scenario = self._dialog_scenario_for_runtime_method(spec.method)
                 if scenario is not None:
                     return self._execute_dialog_case(
                         spec, scenario, timestamp, case_started_monotonic

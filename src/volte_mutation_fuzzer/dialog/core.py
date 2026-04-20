@@ -6,10 +6,13 @@ import time
 from volte_mutation_fuzzer.dialog.contracts import (
     DialogExchangeResult,
     DialogScenario,
+    DialogScenarioType,
     DialogStep,
     DialogStepResult,
 )
-from volte_mutation_fuzzer.dialog.state_extractor import extract_dialog_state
+from volte_mutation_fuzzer.dialog.state_extractor import (
+    extract_dialog_state_from_responses,
+)
 from volte_mutation_fuzzer.generator.contracts import DialogContext, RequestSpec
 from volte_mutation_fuzzer.generator.core import SIPGenerator
 from volte_mutation_fuzzer.mutator.contracts import MutationConfig, MutatedCase
@@ -77,14 +80,36 @@ class DialogOrchestrator:
                         error=result.error or "setup step failed",
                     )
 
-                # After receiving a 2xx response to INVITE, extract dialog state
-                if (
-                    step.method == "INVITE"
-                    and result.send_result is not None
-                    and result.send_result.final_response is not None
-                    and result.send_result.final_response.classification == "success"
-                ):
-                    extract_dialog_state(result.send_result.final_response, context)
+                if step.method == "INVITE" and result.send_result is not None:
+                    if (
+                        scenario.scenario_type == DialogScenarioType.invite_prack
+                        and any(
+                            observation.classification != "provisional"
+                            for observation in result.send_result.responses
+                        )
+                    ):
+                        return DialogExchangeResult(
+                            scenario_type=scenario.scenario_type,
+                            setup_results=tuple(setup_results),
+                            setup_succeeded=False,
+                            error="final INVITE response already received for PRACK",
+                        )
+
+                    extract_dialog_state_from_responses(
+                        result.send_result.responses,
+                        context,
+                    )
+
+                    if (
+                        scenario.scenario_type == DialogScenarioType.invite_prack
+                        and context.reliable_invite_rseq is None
+                    ):
+                        return DialogExchangeResult(
+                            scenario_type=scenario.scenario_type,
+                            setup_results=tuple(setup_results),
+                            setup_succeeded=False,
+                            error="reliable provisional response required for PRACK",
+                        )
 
             # --- Fuzz phase ---
             fuzz_step_idx = len(setup_results)

@@ -234,9 +234,18 @@ class SIPGenerator:
             )
 
         if spec.method == SIPMethod.PRACK:
+            if (
+                context is None
+                or context.reliable_invite_rseq is None
+                or context.reliable_invite_cseq is None
+            ):
+                raise ValueError(
+                    "Reliable provisional response was sent. request generation "
+                    "requires reliable provisional INVITE state with RSeq/CSeq."
+                )
             defaults["rack"] = RAckHeader(
-                response_num=1,
-                cseq_num=max(context.local_cseq, 1) if context is not None else 1,
+                response_num=context.reliable_invite_rseq,
+                cseq_num=context.reliable_invite_cseq,
                 method=SIPMethod.INVITE,
             )
 
@@ -263,6 +272,7 @@ class SIPGenerator:
         if is_real_ue:
             # 3GPP IMS defaults — replaces softphone optional headers and SDP
             self._apply_3gpp_defaults(defaults, spec)
+            self._apply_real_ue_request_defaults(defaults, spec)
         else:
             # Softphone-only optional headers
             optional = get_request_optional_defaults(spec.method)
@@ -309,6 +319,40 @@ class SIPGenerator:
             return None
         stripped = info_package.strip()
         return stripped or None
+
+    def _apply_real_ue_request_defaults(
+        self,
+        defaults: dict[str, Any],
+        spec: RequestSpec,
+    ) -> None:
+        if spec.method != SIPMethod.INFO:
+            return
+
+        optional = get_request_optional_defaults(spec.method)
+        info_package = spec.info_package
+        if info_package is None:
+            optional_info_package = optional.get("info_package")
+            if isinstance(optional_info_package, str):
+                info_package = optional_info_package
+        if info_package is not None:
+            defaults.setdefault("info_package", info_package)
+
+        if "body" in defaults or "body" in (spec.overrides or {}):
+            return
+
+        body_ctx = BodyContext(
+            method=spec.method,
+            body_kind=spec.body_kind,
+            info_package=info_package,
+            sms_over_ip=spec.sms_over_ip,
+        )
+        body_model = self._body_factory.create(body_ctx)
+        if body_model is None:
+            return
+
+        defaults["body"] = body_model.render()
+        defaults["content_type"] = body_model.content_type
+        defaults["content_length"] = len(defaults["body"].encode("utf-8"))
 
     def _build_response_defaults(
         self,
@@ -522,6 +566,17 @@ class SIPGenerator:
                 continue
 
             if precondition in _ADVISORY_PRECONDITIONS:
+                if precondition == "Reliable provisional response was sent.":
+                    has_reliable_provisional = (
+                        context is not None
+                        and context.reliable_invite_rseq is not None
+                        and context.reliable_invite_cseq is not None
+                    )
+                    if not has_reliable_provisional:
+                        raise ValueError(
+                            f"{precondition} request generation requires reliable "
+                            "provisional INVITE state with RSeq/CSeq."
+                        )
                 continue
 
             if precondition in _RESPONSE_PRECONDITIONS:

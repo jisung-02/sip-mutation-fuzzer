@@ -1163,6 +1163,90 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(result.profile, "parser_breaker")
         self.assertIn("--profile parser_breaker", result.reproduction_cmd)
 
+    def test_execute_case_routes_prack_to_dialog_executor(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("PRACK",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="PRACK",
+            layer="model",
+            strategy="default",
+        )
+        expected = CaseResult(
+            case_id=0,
+            seed=0,
+            method="PRACK",
+            layer="model",
+            strategy="default",
+            verdict="normal",
+            reason="ok",
+            elapsed_ms=5.0,
+            reproduction_cmd="uv run fuzzer ...",
+            timestamp=1.0,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_execute_dialog_case",
+            return_value=expected,
+        ) as dialog_mock, unittest.mock.patch.object(
+            executor,
+            "_build_packet",
+        ) as build_packet_mock:
+            result = executor._execute_case(spec)
+
+        self.assertIs(result, expected)
+        dialog_mock.assert_called_once()
+        build_packet_mock.assert_not_called()
+
+    def test_execute_case_routes_info_to_dialog_executor(self) -> None:
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("INFO",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INFO",
+            layer="model",
+            strategy="default",
+        )
+        expected = CaseResult(
+            case_id=0,
+            seed=0,
+            method="INFO",
+            layer="model",
+            strategy="default",
+            verdict="normal",
+            reason="ok",
+            elapsed_ms=5.0,
+            reproduction_cmd="uv run fuzzer ...",
+            timestamp=1.0,
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_execute_dialog_case",
+            return_value=expected,
+        ) as dialog_mock, unittest.mock.patch.object(
+            executor,
+            "_build_packet",
+        ) as build_packet_mock:
+            result = executor._execute_case(spec)
+
+        self.assertIs(result, expected)
+        dialog_mock.assert_called_once()
+        build_packet_mock.assert_not_called()
+
     def test_execute_case_uses_resolved_profile_and_strategy_from_mutator_output(self) -> None:
         cfg = self._make_config(
             "127.0.0.1",
