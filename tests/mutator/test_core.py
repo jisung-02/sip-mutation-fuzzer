@@ -434,6 +434,66 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         assert case.wire_text is not None
         self.assertTrue(case.wire_text.startswith("OPTIONS "))
 
+    def test_mutate_resolves_profile_default_strategy_for_wire_case(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config = MutationConfig(
+            seed=102,
+            layer="wire",
+            profile="parser_breaker",
+            strategy="default",
+        )
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        self.assertEqual(first_case.profile, "parser_breaker")
+        self.assertEqual(second_case.profile, "parser_breaker")
+        self.assertIn(
+            first_case.strategy,
+            {"final_crlf_loss", "duplicate_content_length_conflict"},
+        )
+        self.assertEqual(first_case.strategy, second_case.strategy)
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_mutate_editable_resolves_profile_default_strategy_for_wire_case(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+        config = MutationConfig(
+            seed=102,
+            layer="wire",
+            profile="parser_breaker",
+            strategy="default",
+        )
+
+        first_case = mutator.mutate_editable(message, config)
+        second_case = mutator.mutate_editable(message, config)
+
+        self.assertEqual(first_case.profile, "parser_breaker")
+        self.assertEqual(second_case.profile, "parser_breaker")
+        self.assertIn(
+            first_case.strategy,
+            {"final_crlf_loss", "duplicate_content_length_conflict"},
+        )
+        self.assertEqual(first_case.strategy, second_case.strategy)
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
     def test_same_seed_produces_same_wire_mutation(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
@@ -807,6 +867,42 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         self.assertIsNotNone(case.mutated_packet)
         self.assertIsNone(case.wire_text)
 
+    def test_ims_specific_profiles_prefer_ims_headers_for_wire_and_byte_targets(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        wire_targets = mutator._collect_profile_wire_targets(
+            message,
+            mutator._collect_wire_targets(message),
+            "ims_specific",
+        )
+        byte_ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "ims_specific",
+        )
+
+        self.assertTrue(wire_targets)
+        self.assertTrue(
+            any(target.path == "header:Contact" for target in wire_targets)
+        )
+        self.assertTrue(
+            any(target.path == "header:Record-Route" for target in wire_targets)
+        )
+        self.assertFalse(any(target.path == "header:Via" for target in wire_targets))
+        self.assertEqual(
+            {header_name for header_name, _start, _end in byte_ranges},
+            {"Contact", "Record-Route"},
+        )
+
 
 class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
     def test_mutate_rejects_unsupported_strategy(self) -> None:
@@ -862,6 +958,22 @@ class SIPMutatorCatalogFailureTests(SIPMutatorTestCase):
                 packet,
                 MutationTarget(layer="model", path="reason-phrase"),
                 MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_explicit_targets_for_non_legacy_profiles(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "profile-scoped mutation does not support explicit targets",
+        ):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="wire", path="header:Via"),
+                MutationConfig(profile="ims_specific", layer="wire"),
             )
 
 

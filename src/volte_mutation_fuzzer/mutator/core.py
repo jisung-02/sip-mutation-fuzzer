@@ -20,6 +20,11 @@ from volte_mutation_fuzzer.mutator.editable import (
     EditableSIPMessage,
     EditableStartLine,
 )
+from volte_mutation_fuzzer.mutator.profile_catalog import (
+    IMS_PROFILE_HEADER_NAMES,
+    resolve_effective_strategy,
+    validate_profile_strategy,
+)
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import (
     AbsoluteURI,
@@ -300,47 +305,52 @@ class SIPMutator:
             raise ValueError(
                 "mutate_editable does not support the model layer; use wire or byte"
             )
-        self._validate_supported_strategy(config.strategy, effective_layer)
+        effective_config = self._resolve_effective_config(config, effective_layer)
+        self._validate_supported_strategy(effective_config.strategy, effective_layer)
 
-        if config.strategy == "identity":
+        if effective_config.strategy == "identity":
             if effective_layer == "wire":
                 return MutatedWireCase(
                     wire_text=self._finalize_wire_message(message),
                     records=(),
-                    seed=config.seed,
-                    strategy="identity",
+                    seed=effective_config.seed,
+                    profile=effective_config.profile,
+                    strategy=effective_config.strategy,
                     final_layer="wire",
                 )
             editable_bytes = self._to_packet_bytes(message)
             return MutatedWireCase(
                 packet_bytes=self._finalize_packet_bytes(editable_bytes),
                 records=(),
-                seed=config.seed,
-                strategy="identity",
+                seed=effective_config.seed,
+                profile=effective_config.profile,
+                strategy=effective_config.strategy,
                 final_layer="byte",
             )
 
         if effective_layer == "wire":
             deterministic_wire_mutation = self._apply_deterministic_wire_strategy(
                 message,
-                config.strategy,
-                self._rng_from_seed(config.seed),
+                effective_config.strategy,
+                self._rng_from_seed(effective_config.seed),
             )
             if deterministic_wire_mutation is not None:
                 mutated_msg, record = deterministic_wire_mutation
                 return MutatedWireCase(
                     wire_text=self._finalize_wire_message(mutated_msg),
                     records=(record,),
-                    seed=config.seed,
-                    strategy=config.strategy,
+                    seed=effective_config.seed,
+                    profile=effective_config.profile,
+                    strategy=effective_config.strategy,
                     final_layer="wire",
                 )
-            mutated_msg, records = self._apply_wire_operations(message, config)
+            mutated_msg, records = self._apply_wire_operations(message, effective_config)
             return MutatedWireCase(
                 wire_text=self._finalize_wire_message(mutated_msg),
                 records=tuple(records),
-                seed=config.seed,
-                strategy=config.strategy,
+                seed=effective_config.seed,
+                profile=effective_config.profile,
+                strategy=effective_config.strategy,
                 final_layer="wire",
             )
 
@@ -348,24 +358,29 @@ class SIPMutator:
         editable_bytes = self._to_packet_bytes(message)
         deterministic_byte_mutation = self._apply_deterministic_byte_strategy(
             editable_bytes,
-            config.strategy,
-            self._rng_from_seed(config.seed),
+            effective_config.strategy,
+            self._rng_from_seed(effective_config.seed),
         )
         if deterministic_byte_mutation is not None:
             mutated_bytes, record = deterministic_byte_mutation
             return MutatedWireCase(
                 packet_bytes=self._finalize_packet_bytes(mutated_bytes),
                 records=(record,),
-                seed=config.seed,
-                strategy=config.strategy,
+                seed=effective_config.seed,
+                profile=effective_config.profile,
+                strategy=effective_config.strategy,
                 final_layer="byte",
             )
-        mutated_bytes, records = self._apply_byte_operations(editable_bytes, config)
+        mutated_bytes, records = self._apply_byte_operations(
+            editable_bytes,
+            effective_config,
+        )
         return MutatedWireCase(
             packet_bytes=self._finalize_packet_bytes(mutated_bytes),
             records=tuple(records),
-            seed=config.seed,
-            strategy=config.strategy,
+            seed=effective_config.seed,
+            profile=effective_config.profile,
+            strategy=effective_config.strategy,
             final_layer="byte",
         )
 
@@ -429,6 +444,23 @@ class SIPMutator:
         if isinstance(packet, SIPResponse):
             return self.catalog.get_response(packet.status_code)
         raise TypeError("packet must be a SIPRequest or SIPResponse")
+
+    def _resolve_effective_config(
+        self,
+        config: MutationConfig,
+        layer: str,
+    ) -> MutationConfig:
+        self._validate_supported_strategy(config.strategy, layer)
+        validate_profile_strategy(config.profile, layer, config.strategy)
+        effective_strategy = resolve_effective_strategy(
+            config.profile,
+            layer,
+            config.strategy,
+            config.seed,
+        )
+        if effective_strategy == config.strategy:
+            return config
+        return config.model_copy(update={"strategy": effective_strategy})
 
     def _collect_model_targets(
         self,
@@ -584,6 +616,7 @@ class SIPMutator:
                 mutated_packet=mutated_packet,
                 records=(record,),
                 seed=config.seed,
+                profile=config.profile,
                 strategy=config.strategy,
                 final_layer="model",
             )
@@ -622,6 +655,7 @@ class SIPMutator:
             mutated_packet=current_packet,
             records=tuple(records),
             seed=config.seed,
+            profile=config.profile,
             strategy=config.strategy,
             final_layer="model",
         )
@@ -635,18 +669,26 @@ class SIPMutator:
         context: DialogContext | None,
         target: MutationTarget | None,
     ) -> MutatedCase:
+        if target is not None and config.profile != "legacy":
+            raise ValueError(
+                "profile-scoped mutation does not support explicit targets"
+            )
         effective_layer = config.layer if target is None else target.layer
         if effective_layer == "auto":
             effective_layer = "model"
 
-        self._validate_supported_strategy(config.strategy, effective_layer)
+        effective_config = self._resolve_effective_config(config, effective_layer)
+        self._validate_supported_strategy(
+            effective_config.strategy,
+            effective_layer,
+        )
 
         if effective_layer == "model":
             model_target = target if target is None or target.layer == "model" else None
             return self._mutate_model(
                 packet=packet,
                 definition=definition,
-                config=config,
+                config=effective_config,
                 context=context,
                 target=model_target,
             )
@@ -658,7 +700,7 @@ class SIPMutator:
                 packet=packet,
                 definition=definition,
                 editable_message=editable_message,
-                config=config,
+                config=effective_config,
                 context=context,
                 target=wire_target,
             )
@@ -670,7 +712,7 @@ class SIPMutator:
             return self._mutate_bytes(
                 packet=packet,
                 editable_bytes=editable_bytes,
-                config=config,
+                config=effective_config,
                 context=context,
                 target=byte_target,
             )
@@ -1056,6 +1098,35 @@ class SIPMutator:
 
         return tuple(targets)
 
+    def _collect_profile_wire_targets(
+        self,
+        editable_message: EditableSIPMessage,
+        targets: tuple[MutationTarget, ...],
+        profile: str,
+    ) -> tuple[MutationTarget, ...]:
+        if profile != "ims_specific":
+            return targets
+
+        ims_targets: list[MutationTarget] = []
+        for target in targets:
+            if target.path.startswith("header:"):
+                header_name = target.path.split(":", 1)[1]
+                if header_name.casefold() in IMS_PROFILE_HEADER_NAMES:
+                    ims_targets.append(target)
+                continue
+
+            header_match = _HEADER_INDEX_PATTERN.fullmatch(target.path)
+            if header_match is None:
+                continue
+            header_index = int(header_match.group(1))
+            if header_index >= len(editable_message.headers):
+                continue
+            header_name = self._header_name_key(editable_message.headers[header_index].name)
+            if header_name in IMS_PROFILE_HEADER_NAMES:
+                ims_targets.append(target)
+
+        return tuple(ims_targets or targets)
+
     def _apply_wire_operator(
         self,
         editable_message: EditableSIPMessage,
@@ -1174,13 +1245,21 @@ class SIPMutator:
             used_paths: set[str] = set()
             is_safe = config.strategy == "safe"
             for _ in range(config.max_operations):
-                available_targets = tuple(
-                    candidate
-                    for candidate in self._collect_wire_targets(
-                        current_message, self._resolve_packet_definition(packet)
-                    )
-                    if candidate.path not in used_paths
-                    and (not is_safe or not self._is_wire_target_protected(candidate))
+                available_targets = self._collect_profile_wire_targets(
+                    current_message,
+                    tuple(
+                        candidate
+                        for candidate in self._collect_wire_targets(
+                            current_message,
+                            self._resolve_packet_definition(packet),
+                        )
+                        if candidate.path not in used_paths
+                        and (
+                            not is_safe
+                            or not self._is_wire_target_protected(candidate)
+                        )
+                    ),
+                    config.profile,
                 )
                 if not available_targets:
                     break
@@ -1207,6 +1286,7 @@ class SIPMutator:
             wire_text=self._finalize_wire_message(current_message),
             records=tuple(records),
             seed=config.seed,
+            profile=config.profile,
             strategy=config.strategy,
             final_layer="wire",
         )
@@ -1407,7 +1487,10 @@ class SIPMutator:
                 records.append(record)
             elif config.strategy == "header_targeted":
                 # Target bytes within a specific non-protected header region.
-                header_ranges = self._collect_header_byte_ranges(current_bytes.data)
+                header_ranges = self._collect_profile_header_byte_ranges(
+                    current_bytes.data,
+                    config.profile,
+                )
                 if header_ranges:
                     _header_name, start, end = header_ranges[
                         rng.randrange(len(header_ranges))
@@ -1464,6 +1547,7 @@ class SIPMutator:
             packet_bytes=self._finalize_packet_bytes(current_bytes),
             records=tuple(records),
             seed=config.seed,
+            profile=config.profile,
             strategy=config.strategy,
             final_layer="byte",
         )
@@ -1570,6 +1654,22 @@ class SIPMutator:
                 break
             offset = line_start + len(line_bytes) + 2  # +2 for \r\n
         return results
+
+    def _collect_profile_header_byte_ranges(
+        self,
+        data: bytes,
+        profile: str,
+    ) -> list[tuple[str, int, int]]:
+        header_ranges = self._collect_header_byte_ranges(data)
+        if profile != "ims_specific":
+            return header_ranges
+
+        ims_header_ranges = [
+            header_range
+            for header_range in header_ranges
+            if header_range[0].casefold() in IMS_PROFILE_HEADER_NAMES
+        ]
+        return ims_header_ranges or header_ranges
 
     def _build_canonical_wire_target(
         self,
