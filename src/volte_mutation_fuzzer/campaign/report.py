@@ -210,12 +210,16 @@ def _render_interesting_case(case: CaseResult, interesting_dir: Path) -> str:
     color = _VERDICT_COLORS.get(case.verdict, "#ccc")
 
     parts: list[str] = []
-    parts.append(f'<div class="interesting-case" style="border-left: 4px solid {color}; '
-                 f'padding: 8px 12px; margin: 8px 0; background: #fafafa;">')
+    parts.append(
+        f'<div id="case-{case.case_id}" class="interesting-case" '
+        f'style="border-left: 4px solid {color}; padding: 8px 12px; '
+        f'margin: 8px 0; background: #fafafa;">'
+    )
     parts.append(
         f"<strong>#{case.case_id}</strong> "
         f'<span style="color:{color};font-weight:bold;">{_esc(case.verdict)}</span> '
-        f"{_esc(case.method)} {_esc(case.layer)}/{_esc(case.strategy)} "
+        f"{_esc(case.method)} {_esc(case.profile)} / "
+        f"{_esc(case.layer)}/{_esc(case.strategy)} "
         f"seed={case.seed} ({case.elapsed_ms:.0f}ms)"
     )
     if case.response_code:
@@ -400,6 +404,7 @@ class HtmlReportGenerator:
         for col in (
             "ID",
             "Method",
+            "Profile",
             "Layer",
             "Strategy",
             "Seed",
@@ -428,6 +433,7 @@ class HtmlReportGenerator:
                 f'<tr class="{row_class}" style="border-left: 3px solid {color};">'
                 f"<td>{id_cell}</td>"
                 f"<td>{_esc(c.method)}</td>"
+                f"<td>{_esc(c.profile)}</td>"
                 f"<td>{_esc(c.layer)}</td>"
                 f"<td>{_esc(c.strategy)}</td>"
                 f"<td>{c.seed}</td>"

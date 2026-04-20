@@ -87,6 +87,50 @@ class SIPMutatorCLITests(unittest.TestCase):
             payload["original_packet"]["max_forwards"],
         )
 
+    def test_request_command_auto_selects_wire_layer_for_parser_breaker_default(self) -> None:
+        result = self.runner.invoke(
+            self.app,
+            [
+                "request",
+                "OPTIONS",
+                "--profile",
+                "parser_breaker",
+                "--seed",
+                "19",
+            ],
+        )
+
+        payload = self.parse_output(result)
+
+        self.assertEqual(payload["profile"], "parser_breaker")
+        self.assertEqual(payload["final_layer"], "wire")
+        self.assertIn(
+            payload["strategy"],
+            {"final_crlf_loss", "duplicate_content_length_conflict"},
+        )
+
+    def test_request_command_auto_selects_byte_layer_for_explicit_byte_strategy(self) -> None:
+        result = self.runner.invoke(
+            self.app,
+            [
+                "request",
+                "OPTIONS",
+                "--profile",
+                "parser_breaker",
+                "--strategy",
+                "tail_chop_1",
+                "--seed",
+                "23",
+            ],
+        )
+
+        payload = self.parse_output(result)
+
+        self.assertEqual(payload["profile"], "parser_breaker")
+        self.assertEqual(payload["final_layer"], "byte")
+        self.assertEqual(payload["strategy"], "tail_chop_1")
+        self.assertIn("packet_bytes", payload)
+
     def test_response_command_generates_and_mutates_response_packet(self) -> None:
         result = self.runner.invoke(
             self.app,
@@ -165,6 +209,40 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("final_crlf_loss", result.output)
         self.assertIn("tail_chop_1", result.output)
         self.assertIn("alias_port_desync", result.output)
+
+    def test_commands_reject_invalid_profile_without_traceback(self) -> None:
+        packet_input = self.generate_request_baseline_json("OPTIONS")
+        cases = (
+            ("packet", ["packet", "--profile", "unknown"], packet_input),
+            ("request", ["request", "OPTIONS", "--profile", "unknown"], None),
+            (
+                "response",
+                [
+                    "response",
+                    "200",
+                    "INVITE",
+                    "--context",
+                    (
+                        '{"call_id":"'
+                        f"{REALISTIC_CALL_ID}"
+                        '","local_tag":"'
+                        f"{REALISTIC_LOCAL_TAG}"
+                        '","local_cseq":7}'
+                    ),
+                    "--profile",
+                    "unknown",
+                ],
+                None,
+            ),
+        )
+
+        for name, args, command_input in cases:
+            with self.subTest(command=name):
+                result = self.runner.invoke(self.app, args, input=command_input)
+
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn("unsupported mutation profile: unknown", result.output)
+                self.assertNotIn("Traceback", result.output)
 
     def test_packet_command_rejects_invalid_input_json(self) -> None:
         result = self.runner.invoke(

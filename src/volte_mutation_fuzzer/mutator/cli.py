@@ -19,6 +19,11 @@ from volte_mutation_fuzzer.mutator.contracts import (
     PacketModel,
 )
 from volte_mutation_fuzzer.mutator.core import SIPMutator
+from volte_mutation_fuzzer.mutator.profile_catalog import (
+    SUPPORTED_STRATEGIES_BY_LAYER,
+    normalize_profile_name,
+    profile_supports_strategy,
+)
 from volte_mutation_fuzzer.sip.common import SIPMethod
 from volte_mutation_fuzzer.sip.requests import REQUEST_MODELS_BY_METHOD
 from volte_mutation_fuzzer.sip.responses import SIPResponse
@@ -27,6 +32,8 @@ app = typer.Typer(
     add_completion=False,
     help="Mutate SIP packets using configurable strategies and layers.",
 )
+
+_AUTO_LAYER_ORDER = ("model", "wire", "byte")
 
 
 def _parse_packet_json(raw_json: str) -> PacketModel:
@@ -89,11 +96,37 @@ def _build_config(
     )  # type: ignore[arg-type]
 
 
+def _resolve_cli_layer(profile: str, strategy: str, layer: str) -> str:
+    if layer != "auto":
+        return layer
+
+    normalized_profile = normalize_profile_name(profile)
+    compatible_layers = tuple(
+        candidate
+        for candidate in _AUTO_LAYER_ORDER
+        if profile_supports_strategy(normalized_profile, candidate, strategy)
+    )
+    if compatible_layers:
+        return compatible_layers[0]
+
+    globally_supported_layers = tuple(
+        candidate
+        for candidate in _AUTO_LAYER_ORDER
+        if strategy in SUPPORTED_STRATEGIES_BY_LAYER.get(candidate, frozenset())
+    )
+    if not globally_supported_layers:
+        raise ValueError(f"unsupported mutation strategy: {strategy}")
+
+    raise ValueError(
+        f"profile '{normalized_profile}' does not support strategy '{strategy}' "
+        "on any layer"
+    )
+
+
 def _build_target(target: str | None, layer: str) -> MutationTarget | None:
     if target is None:
         return None
-    resolved_layer = layer if layer != "auto" else "model"
-    return MutationTarget(layer=resolved_layer, path=target)  # type: ignore[arg-type]
+    return MutationTarget(layer=layer, path=target)  # type: ignore[arg-type]
 
 
 def _execute_mutation(
@@ -112,6 +145,29 @@ def _apply_profile(case: MutatedCase, profile: str) -> MutatedCase:
     if case.profile == profile:
         return case
     return case.model_copy(update={"profile": profile})
+
+
+def _run_mutation_command(
+    packet: PacketModel,
+    *,
+    profile: str,
+    strategy: str,
+    layer: str,
+    seed: int | None,
+    target: str | None,
+    context: DialogContext | None = None,
+) -> MutatedCase:
+    try:
+        resolved_layer = _resolve_cli_layer(profile, strategy, layer)
+        config = _build_config(profile, strategy, resolved_layer, seed)
+        mutation_target = _build_target(target, resolved_layer)
+        mutator = SIPMutator()
+        return _apply_profile(
+            _execute_mutation(mutator, packet, config, mutation_target, context),
+            config.profile,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _render_result(case: MutatedCase) -> str:
@@ -139,7 +195,11 @@ def packet_command(
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
     layer: Annotated[
-        str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
+        str,
+        typer.Option(
+            "--layer",
+            help="Mutation layer: model, wire, byte, or auto (profile-aware).",
+        ),
     ] = "auto",
     seed: Annotated[
         int | None, typer.Option("--seed", help="Random seed for reproducibility.")
@@ -151,10 +211,14 @@ def packet_command(
     """Mutate a SIP packet from JSON read on stdin."""
     raw = sys.stdin.read()
     packet = _parse_packet_json(raw)
-    config = _build_config(profile, strategy, layer, seed)
-    mutation_target = _build_target(target, layer)
-    mutator = SIPMutator()
-    case = _apply_profile(_execute_mutation(mutator, packet, config, mutation_target), config.profile)
+    case = _run_mutation_command(
+        packet,
+        profile=profile,
+        strategy=strategy,
+        layer=layer,
+        seed=seed,
+        target=target,
+    )
     typer.echo(_render_result(case))
 
 
@@ -168,7 +232,11 @@ def request_command(
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
     layer: Annotated[
-        str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
+        str,
+        typer.Option(
+            "--layer",
+            help="Mutation layer: model, wire, byte, or auto (profile-aware).",
+        ),
     ] = "auto",
     seed: Annotated[
         int | None, typer.Option("--seed", help="Random seed for reproducibility.")
@@ -185,10 +253,14 @@ def request_command(
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    config = _build_config(profile, strategy, layer, seed)
-    mutation_target = _build_target(target, layer)
-    mutator = SIPMutator()
-    case = _apply_profile(_execute_mutation(mutator, packet, config, mutation_target), config.profile)
+    case = _run_mutation_command(
+        packet,
+        profile=profile,
+        strategy=strategy,
+        layer=layer,
+        seed=seed,
+        target=target,
+    )
     typer.echo(_render_result(case))
 
 
@@ -206,7 +278,11 @@ def response_command(
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
     layer: Annotated[
-        str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
+        str,
+        typer.Option(
+            "--layer",
+            help="Mutation layer: model, wire, byte, or auto (profile-aware).",
+        ),
     ] = "auto",
     seed: Annotated[
         int | None, typer.Option("--seed", help="Random seed for reproducibility.")
@@ -226,10 +302,15 @@ def response_command(
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    config = _build_config(profile, strategy, layer, seed)
-    mutation_target = _build_target(target, layer)
-    mutator = SIPMutator()
-    case = _apply_profile(_execute_mutation(mutator, packet, config, mutation_target), config.profile)
+    case = _run_mutation_command(
+        packet,
+        profile=profile,
+        strategy=strategy,
+        layer=layer,
+        seed=seed,
+        target=target,
+        context=dialog_context,
+    )
     typer.echo(_render_result(case))
 
 

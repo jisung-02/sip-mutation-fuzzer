@@ -19,6 +19,7 @@ def _make_case(case_id: int, verdict: str, **kwargs) -> CaseResult:
         case_id=case_id,
         seed=case_id,
         method="INVITE",
+        profile="legacy",
         layer="wire",
         strategy="default",
         verdict=verdict,
@@ -221,3 +222,28 @@ class HtmlReportGeneratorTests(unittest.TestCase):
 
             self.assertIn("Reproduction", content)
             self.assertIn("--seed-start 0", content)
+
+    def test_html_report_renders_profile_in_interesting_cases_and_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases = [
+                _make_case(
+                    0,
+                    "suspicious",
+                    profile="parser_breaker",
+                    layer="wire",
+                    strategy="final_crlf_loss",
+                ),
+                _make_case(
+                    1,
+                    "normal",
+                    profile="delivery_preserving",
+                    layer="model",
+                    strategy="default",
+                ),
+            ]
+            jsonl_path = _write_campaign(tmpdir, cases)
+            content = HtmlReportGenerator(jsonl_path).generate().read_text()
+
+            self.assertIn("<th>Profile</th>", content)
+            self.assertIn("INVITE parser_breaker / wire/final_crlf_loss", content)
+            self.assertIn("<td>delivery_preserving</td>", content)
