@@ -219,6 +219,70 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertEqual(captured["config"].profiles, ("parser_breaker",))
         self.assertEqual(captured["config"].strategies, ("default",))
 
+    def test_run_command_rejects_unknown_profile(self) -> None:
+        result = self.runner.invoke(
+            app,
+            [
+                "campaign",
+                "run",
+                "--target-host",
+                "127.0.0.1",
+                "--target-port",
+                "5060",
+                "--methods",
+                "OPTIONS",
+                "--profile",
+                "unknown",
+                "--layer",
+                "model",
+                "--max-cases",
+                "1",
+                "--timeout",
+                "0.1",
+                "--cooldown",
+                "0",
+                "--no-process-check",
+                "--output",
+                "test_run",
+            ],
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Configuration error:", result.output)
+        self.assertIn("unsupported mutation profile", result.output)
+
+    def test_run_command_rejects_blank_profile(self) -> None:
+        result = self.runner.invoke(
+            app,
+            [
+                "campaign",
+                "run",
+                "--target-host",
+                "127.0.0.1",
+                "--target-port",
+                "5060",
+                "--methods",
+                "OPTIONS",
+                "--profile",
+                ",",
+                "--layer",
+                "model",
+                "--max-cases",
+                "1",
+                "--timeout",
+                "0.1",
+                "--cooldown",
+                "0",
+                "--no-process-check",
+                "--output",
+                "test_run",
+            ],
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Configuration error:", result.output)
+        self.assertIn("profile must not be blank", result.output)
+
     def test_run_command_defaults_to_legacy_profile_strategy_pair(self) -> None:
         captured: dict[str, CampaignConfig] = {}
 
