@@ -2,6 +2,7 @@ from typing import Any, Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from volte_mutation_fuzzer.mutator.profile_catalog import normalize_profile_name
 from volte_mutation_fuzzer.sip.requests import SIPRequest
 from volte_mutation_fuzzer.sip.responses import SIPResponse
 
@@ -14,10 +15,18 @@ class MutationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     seed: int | None = Field(default=None, ge=0)
+    profile: str = Field(default="legacy", min_length=1)
     strategy: str = Field(default="default", min_length=1)
     layer: Literal["model", "wire", "byte", "auto"] = "auto"
     max_operations: int = Field(default=1, ge=1)
     preserve_valid_model: bool = True
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _normalize_profile(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return normalize_profile_name(value)
 
     @field_validator("strategy", mode="before")
     @classmethod
@@ -85,8 +94,16 @@ class MutatedCase(BaseModel):
     packet_bytes: bytes | None = None
     records: tuple[MutationRecord, ...] = Field(default_factory=tuple)
     seed: int | None = Field(default=None, ge=0)
+    profile: str = Field(default="legacy", min_length=1)
     strategy: str = Field(default="default", min_length=1)
     final_layer: Literal["model", "wire", "byte"]
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _normalize_profile(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return normalize_profile_name(value)
 
     @field_validator("strategy", mode="before")
     @classmethod
@@ -121,8 +138,16 @@ class MutatedWireCase(BaseModel):
     packet_bytes: bytes | None = None
     records: tuple[MutationRecord, ...] = Field(default_factory=tuple)
     seed: int | None = Field(default=None, ge=0)
+    profile: str = Field(default="legacy", min_length=1)
     strategy: str = Field(default="default", min_length=1)
     final_layer: Literal["wire", "byte"]
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _normalize_profile(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return normalize_profile_name(value)
 
     @field_validator("strategy", mode="before")
     @classmethod

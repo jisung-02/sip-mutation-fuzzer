@@ -17,6 +17,7 @@ class CampaignConfigTests(unittest.TestCase):
         cfg = CampaignConfig(target_host="127.0.0.1")
         self.assertEqual(cfg.target_port, 5060)
         self.assertEqual(cfg.methods, ALL_SIP_METHODS)
+        self.assertEqual(cfg.profiles, ("legacy",))
         self.assertEqual(cfg.response_codes, ())
         self.assertFalse(cfg.with_dialog)
         self.assertEqual(cfg.max_cases, 1000)
@@ -28,6 +29,29 @@ class CampaignConfigTests(unittest.TestCase):
         self.assertIsNone(cfg.output_name)
         self.assertEqual(cfg.process_name, "baresip")
         self.assertTrue(cfg.check_process)
+
+    def test_profiles_normalize_and_dedupe(self) -> None:
+        cfg = CampaignConfig(
+            target_host="127.0.0.1",
+            profiles=(" parser_breaker ", "legacy", "parser_breaker"),
+        )
+
+        self.assertEqual(cfg.profiles, ("parser_breaker", "legacy"))
+
+    def test_profiles_reject_blank_and_unknown_values(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                target_host="127.0.0.1",
+                profiles=("   ",),
+            )
+        self.assertIn("profile must not be blank", str(ctx.exception))
+
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                target_host="127.0.0.1",
+                profiles=("unknown",),
+            )
+        self.assertIn("unsupported mutation profile", str(ctx.exception))
 
     def test_oracle_log_grace_seconds_for_method_uses_real_ue_defaults(self) -> None:
         cfg = CampaignConfig(target_host="10.20.20.8", mode="real-ue-direct")
@@ -155,6 +179,7 @@ class CaseSpecTests(unittest.TestCase):
         )
         self.assertEqual(spec.case_id, 0)
         self.assertEqual(spec.seed, 42)
+        self.assertEqual(spec.profile, "legacy")
 
     def test_negative_case_id_rejected(self) -> None:
         with self.assertRaises(ValidationError):
@@ -185,11 +210,14 @@ class CaseResultTests(unittest.TestCase):
         self.assertEqual(r.verdict, "normal")
         self.assertEqual(r.response_code, 200)
         self.assertIsNone(r.raw_response)
+        self.assertEqual(r.profile, "legacy")
 
     def test_crash_case_with_raw_response(self) -> None:
         r = self._make(verdict="crash", raw_response="SIP/2.0 500 Error\r\n\r\n")
         self.assertEqual(r.verdict, "crash")
         self.assertIsNotNone(r.raw_response)
+        payload = r.model_dump(mode="json")
+        self.assertEqual(payload["profile"], "legacy")
 
     def test_mutation_ops_default_empty(self) -> None:
         r = self._make()

@@ -3,6 +3,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from volte_mutation_fuzzer.mutator.profile_catalog import normalize_profile_name
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 ALL_SIP_METHODS = tuple(method.value for method in SIPMethod)
@@ -21,6 +22,7 @@ class CampaignConfig(BaseModel):
     methods: tuple[str, ...] = Field(default_factory=tuple)
     response_codes: tuple[int, ...] = Field(default_factory=tuple)
     with_dialog: bool = False
+    profiles: tuple[str, ...] = ("legacy",)
     strategies: tuple[str, ...] = ("default", "state_breaker")
     layers: tuple[str, ...] = ("model", "wire", "byte")
     max_cases: int = Field(default=1000, ge=0)
@@ -99,6 +101,22 @@ class CampaignConfig(BaseModel):
             if code < 100 or code > 699:
                 raise ValueError("response codes must be between 100 and 699")
         return codes
+
+    @field_validator("profiles", mode="before")
+    @classmethod
+    def _normalize_profiles(cls, value: Any) -> Any:
+        if value is None:
+            return ("legacy",)
+        if isinstance(value, str):
+            value = value.split(",")
+
+        normalized: list[str] = []
+        for item in value:
+            stripped = str(item).strip()
+            normalized_name = normalize_profile_name(stripped)
+            if normalized_name not in normalized:
+                normalized.append(normalized_name)
+        return tuple(normalized or ("legacy",))
 
     @model_validator(mode="after")
     def _default_methods(self) -> Self:
@@ -224,10 +242,18 @@ class CaseSpec(BaseModel):
     case_id: int = Field(ge=0)
     seed: int = Field(ge=0)
     method: str = Field(min_length=1)
+    profile: str = Field(default="legacy", min_length=1)
     layer: str = Field(min_length=1)
     strategy: str = Field(min_length=1)
     response_code: int | None = Field(default=None, ge=100, le=699)
     related_method: str | None = None
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _normalize_profile(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return normalize_profile_name(value)
 
 
 class CaseResult(BaseModel):
@@ -238,6 +264,7 @@ class CaseResult(BaseModel):
     case_id: int = Field(ge=0)
     seed: int = Field(ge=0)
     method: str
+    profile: str = Field(default="legacy", min_length=1)
     layer: str
     strategy: str
     mutation_ops: tuple[str, ...] = Field(default_factory=tuple)
@@ -255,6 +282,13 @@ class CaseResult(BaseModel):
     fuzz_related_method: str | None = None
     pcap_path: str | None = None
     case_wall_ms: float | None = None
+
+    @field_validator("profile", mode="before")
+    @classmethod
+    def _normalize_profile(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return normalize_profile_name(value)
 
 
 class CampaignSummary(BaseModel):

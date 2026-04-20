@@ -9,6 +9,7 @@ from volte_mutation_fuzzer.generator import (
 )
 from volte_mutation_fuzzer.mutator.contracts import (
     MutatedCase,
+    MutatedWireCase,
     MutationConfig,
     MutationRecord,
     MutationTarget,
@@ -52,6 +53,7 @@ class MutationConfigTests(MutatorContractTestCase):
         payload = config.model_dump(mode="json")
 
         self.assertIsNone(config.seed)
+        self.assertEqual(config.profile, "legacy")
         self.assertEqual(config.strategy, "default")
         self.assertEqual(config.layer, "auto")
         self.assertEqual(config.max_operations, 1)
@@ -60,12 +62,14 @@ class MutationConfigTests(MutatorContractTestCase):
             set(payload),
             {
                 "seed",
+                "profile",
                 "strategy",
                 "layer",
                 "max_operations",
                 "preserve_valid_model",
             },
         )
+        self.assertEqual(payload["profile"], "legacy")
 
     def test_normalizes_strategy_and_rejects_invalid_values(self) -> None:
         config = MutationConfig(strategy=" state_breaker ")
@@ -79,6 +83,15 @@ class MutationConfigTests(MutatorContractTestCase):
 
         with self.assertRaises(ValueError):
             MutationConfig(max_operations=0)
+
+    def test_rejects_blank_or_unknown_profile(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            MutationConfig(profile="   ")
+        self.assertIn("profile must not be blank", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            MutationConfig(profile="unknown")
+        self.assertIn("unsupported mutation profile", str(ctx.exception))
 
 
 class MutationTargetTests(MutatorContractTestCase):
@@ -173,6 +186,7 @@ class MutatedCaseTests(MutatorContractTestCase):
         self.assertEqual(case.records[0].target.path, "call_id")
         self.assertEqual(payload["final_layer"], "model")
         self.assertEqual(payload["seed"], 17)
+        self.assertEqual(payload["profile"], "legacy")
         self.assertEqual(payload["strategy"], "state_breaker")
         self.assertEqual(payload["mutated_packet"]["call_id"], REALISTIC_MUTATED_CALL_ID)
         self.assertIn("from", payload["original_packet"])
@@ -197,6 +211,7 @@ class MutatedCaseTests(MutatorContractTestCase):
         assert wire_text is not None
         self.assertIn(f"Call-ID: {REALISTIC_CALL_ID}", wire_text)
         self.assertEqual(payload["final_layer"], "wire")
+        self.assertEqual(payload["profile"], "legacy")
         self.assertEqual(payload["wire_text"], REALISTIC_OPTIONS_WIRE)
         self.assertEqual(payload["records"], [])
         self.assertNotIn("mutated_packet", payload)
@@ -215,9 +230,20 @@ class MutatedCaseTests(MutatorContractTestCase):
         self.assertEqual(case.final_layer, "byte")
         self.assertEqual(case.packet_bytes, b"SIP/2.0 200 OK\r\n\r\n")
         self.assertEqual(payload["final_layer"], "byte")
+        self.assertEqual(payload["profile"], "legacy")
         self.assertEqual(payload["packet_bytes"], "SIP/2.0 200 OK\r\n\r\n")
         self.assertNotIn("mutated_packet", payload)
         self.assertNotIn("wire_text", payload)
+
+    def test_mutated_wire_case_serializes_profile(self) -> None:
+        case = MutatedWireCase(
+            wire_text=REALISTIC_OPTIONS_WIRE,
+            final_layer="wire",
+        )
+        payload = case.model_dump(mode="json", exclude_none=True)
+
+        self.assertEqual(case.profile, "legacy")
+        self.assertEqual(payload["profile"], "legacy")
 
     def test_requires_matching_artifact_for_final_layer(self) -> None:
         original_packet = self.build_request()
