@@ -37,7 +37,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 
 # 퍼징 설정
 --methods <LIST>            # SIP 메서드 (OPTIONS,INVITE,MESSAGE,...)
---profile <NAME>            # 변이 프로필 (legacy,delivery_preserving,ims_specific,parser_breaker)
+--profile <LIST>            # 변이 프로필 목록 (legacy,delivery_preserving,ims_specific,parser_breaker; 쉼표 구분)
 --layer model,wire,byte     # 변이 레이어 선택
 --strategy <LIST>           # 변이 전략 (identity,default,state_breaker,safe,
                             # header_targeted,header_whitespace_noise,
@@ -89,6 +89,8 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ## 🎚️ Mutation Profile Axis
 
 `--profile`은 mutator가 어떤 성격의 변이를 선택할지 정하는 축이며, sender mode(`--mode softphone` / `--mode real-ue-direct`)와 독립적이다. 같은 `mode`라도 profile이 달라지면 기본 strategy 선택과 허용되는 mutation 경로가 달라진다.
+
+`--strategy default`는 요청값이며, 실제 실행과 결과 저장에는 profile + layer + seed로 해석된 concrete strategy가 기록된다. 그래서 reproduction command도 resolved strategy를 그대로 담아 재현성을 유지한다.
 
 | Profile | 의미 |
 | --- | --- |

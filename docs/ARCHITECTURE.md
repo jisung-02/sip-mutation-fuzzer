@@ -42,10 +42,14 @@ graph TB
   methods: OPTIONS, INVITE, MESSAGE, REGISTER, ...
   profiles: legacy, delivery_preserving, ims_specific, parser_breaker
   layers: model, wire, byte
-  strategies: identity, default, state_breaker
+  strategies: identity, default, safe, header_targeted,
+              header_whitespace_noise, final_crlf_loss,
+              duplicate_content_length_conflict, tail_chop_1,
+              tail_garbage, alias_port_desync, state_breaker
   ```
-  - `profile`은 mutator 정책 축이고, `mode`는 sender 경로 축이다.
-  - 따라서 `softphone`와 `real-ue-direct` 모두 같은 profile을 사용할 수 있으며, mode는 전송 방식만 바꾼다.
+  - `profile`은 mutator 정책 축이고, `mode`는 실행 경로 축이다.
+  - 둘은 서로 독립적이지만, `mode`에 따라 생성/변이/송신 흐름이 달라질 수 있다.
+  - 예를 들어 `real-ue-direct`는 MT template 렌더링과 real-UE resolver를 포함하고, `softphone`는 일반 PacketModel 경로를 사용한다.
 
 #### `CampaignConfig`
 - **역할**: 전체 설정 중앙화 + validation
