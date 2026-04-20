@@ -22,6 +22,7 @@ from volte_mutation_fuzzer.mutator.editable import (
 )
 from volte_mutation_fuzzer.mutator.profile_catalog import (
     IMS_PROFILE_HEADER_NAMES,
+    PROFILE_DEFAULT_STRATEGY_POOLS,
     resolve_effective_strategy,
     validate_profile_strategy,
 )
@@ -305,7 +306,11 @@ class SIPMutator:
             raise ValueError(
                 "mutate_editable does not support the model layer; use wire or byte"
             )
-        effective_config = self._resolve_effective_config(config, effective_layer)
+        effective_config = self._resolve_effective_config(
+            config,
+            effective_layer,
+            editable_message=message,
+        )
         self._validate_supported_strategy(effective_config.strategy, effective_layer)
 
         if effective_config.strategy == "identity":
@@ -344,7 +349,10 @@ class SIPMutator:
                     strategy=effective_config.strategy,
                     final_layer="wire",
                 )
-            mutated_msg, records = self._apply_wire_operations(message, effective_config)
+            mutated_msg, records = self._apply_wire_operations(
+                message,
+                effective_config,
+            )
             return MutatedWireCase(
                 wire_text=self._finalize_wire_message(mutated_msg),
                 records=tuple(records),
@@ -388,6 +396,7 @@ class SIPMutator:
         self,
         message: EditableSIPMessage,
         config: MutationConfig,
+        definition: PacketDefinition | None = None,
     ) -> tuple[EditableSIPMessage, list[MutationRecord]]:
         """Core wire mutation loop; no packet/definition dependency."""
         rng = self._rng_from_seed(config.seed)
@@ -395,10 +404,21 @@ class SIPMutator:
         records: list[MutationRecord] = []
         used_paths: set[str] = set()
         for _ in range(config.max_operations):
-            available_targets = tuple(
-                candidate
-                for candidate in self._collect_wire_targets(current_message)
-                if candidate.path not in used_paths
+            available_targets = self._collect_profile_wire_targets(
+                current_message,
+                tuple(
+                    candidate
+                    for candidate in self._collect_wire_targets(
+                        current_message,
+                        definition,
+                    )
+                    if candidate.path not in used_paths
+                    and (
+                        config.strategy != "safe"
+                        or not self._is_wire_target_protected(candidate)
+                    )
+                ),
+                config.profile,
             )
             if not available_targets:
                 break
@@ -422,10 +442,45 @@ class SIPMutator:
         records: list[MutationRecord] = []
         used_paths: set[str] = set()
         for _ in range(config.max_operations):
+            if config.strategy == "header_targeted":
+                header_ranges = self._collect_profile_header_byte_ranges(
+                    current_bytes.data,
+                    config.profile,
+                )
+                available_targets = tuple(
+                    MutationTarget(layer="byte", path=f"byte[{index}]")
+                    for _header_name, start, end in header_ranges
+                    for index in range(start, end)
+                    if f"byte[{index}]" not in used_paths
+                )
+                if not available_targets:
+                    break
+                selected_target = available_targets[
+                    rng.randrange(len(available_targets))
+                ]
+                current_bytes, record = self._apply_byte_operator(
+                    current_bytes,
+                    selected_target,
+                    "flip_byte",
+                    rng,
+                )
+                used_paths.add(selected_target.path)
+                records.append(record)
+                continue
+
             available_targets = tuple(
                 candidate
                 for candidate in self._collect_byte_targets(current_bytes)
                 if candidate.path not in used_paths
+                and (
+                    config.strategy != "safe"
+                    or not self._is_byte_target_protected(
+                        candidate,
+                        self._collect_protected_byte_ranges(
+                            current_bytes.data
+                        ),
+                    )
+                )
             )
             if not available_targets:
                 break
@@ -449,18 +504,74 @@ class SIPMutator:
         self,
         config: MutationConfig,
         layer: str,
+        editable_message: EditableSIPMessage | None = None,
     ) -> MutationConfig:
         self._validate_supported_strategy(config.strategy, layer)
         validate_profile_strategy(config.profile, layer, config.strategy)
-        effective_strategy = resolve_effective_strategy(
-            config.profile,
-            layer,
-            config.strategy,
-            config.seed,
-        )
-        if effective_strategy == config.strategy:
+        if config.strategy != "default":
             return config
+
+        effective_strategy = self._resolve_default_strategy(
+            profile=config.profile,
+            layer=layer,
+            seed=config.seed,
+            editable_message=editable_message,
+        )
         return config.model_copy(update={"strategy": effective_strategy})
+
+    def _resolve_default_strategy(
+        self,
+        *,
+        profile: str,
+        layer: str,
+        seed: int | None,
+        editable_message: EditableSIPMessage | None,
+    ) -> str:
+        initial_strategy = resolve_effective_strategy(profile, layer, "default", seed)
+        if self._is_strategy_applicable(
+            initial_strategy,
+            layer=layer,
+            editable_message=editable_message,
+        ):
+            return initial_strategy
+
+        pool = PROFILE_DEFAULT_STRATEGY_POOLS.get(profile, {}).get(layer, ())
+        if not pool:
+            return initial_strategy
+
+        rng = random.Random(seed)
+        start_index = rng.randrange(len(pool))
+        for offset in range(len(pool)):
+            candidate = pool[(start_index + offset) % len(pool)]
+            if self._is_strategy_applicable(
+                candidate,
+                layer=layer,
+                editable_message=editable_message,
+            ):
+                return candidate
+        return initial_strategy
+
+    def _is_strategy_applicable(
+        self,
+        strategy: str,
+        *,
+        layer: str,
+        editable_message: EditableSIPMessage | None,
+    ) -> bool:
+        if strategy == "alias_port_desync" and layer == "wire":
+            return (
+                editable_message is not None
+                and self._has_contact_alias(editable_message)
+            )
+        return True
+
+    def _has_contact_alias(self, editable_message: EditableSIPMessage) -> bool:
+        for header in editable_message.headers:
+            if self._header_name_key(header.name) != "contact":
+                continue
+            if _ALIAS_PORT_PATTERN.search(header.value) is not None:
+                return True
+        return False
 
     def _collect_model_targets(
         self,
@@ -677,7 +788,18 @@ class SIPMutator:
         if effective_layer == "auto":
             effective_layer = "model"
 
-        effective_config = self._resolve_effective_config(config, effective_layer)
+        editable_message: EditableSIPMessage | None = None
+        editable_bytes: EditablePacketBytes | None = None
+        if effective_layer in {"wire", "byte"}:
+            editable_message = self._to_editable_message(packet)
+        if effective_layer == "byte" and editable_message is not None:
+            editable_bytes = self._to_packet_bytes(editable_message)
+
+        effective_config = self._resolve_effective_config(
+            config,
+            effective_layer,
+            editable_message=editable_message,
+        )
         self._validate_supported_strategy(
             effective_config.strategy,
             effective_layer,
@@ -694,7 +816,6 @@ class SIPMutator:
             )
 
         if effective_layer == "wire":
-            editable_message = self._to_editable_message(packet)
             wire_target = target if target is None or target.layer == "wire" else None
             return self._mutate_wire(
                 packet=packet,
@@ -706,9 +827,8 @@ class SIPMutator:
             )
 
         if effective_layer == "byte":
-            editable_message = self._to_editable_message(packet)
-            editable_bytes = self._to_packet_bytes(editable_message)
             byte_target = target if target is None or target.layer == "byte" else None
+            assert editable_bytes is not None
             return self._mutate_bytes(
                 packet=packet,
                 editable_bytes=editable_bytes,
@@ -1212,7 +1332,6 @@ class SIPMutator:
         context: DialogContext | None,
         target: MutationTarget | None,
     ) -> MutatedCase:
-        del definition
         self._snapshot_context(context)
         rng = self._rng_from_seed(config.seed)
         current_message = editable_message
@@ -1242,44 +1361,11 @@ class SIPMutator:
             )
             records.append(record)
         else:
-            used_paths: set[str] = set()
-            is_safe = config.strategy == "safe"
-            for _ in range(config.max_operations):
-                available_targets = self._collect_profile_wire_targets(
-                    current_message,
-                    tuple(
-                        candidate
-                        for candidate in self._collect_wire_targets(
-                            current_message,
-                            self._resolve_packet_definition(packet),
-                        )
-                        if candidate.path not in used_paths
-                        and (
-                            not is_safe
-                            or not self._is_wire_target_protected(candidate)
-                        )
-                    ),
-                    config.profile,
-                )
-                if not available_targets:
-                    break
-
-                selected_target = available_targets[
-                    rng.randrange(len(available_targets))
-                ]
-                operator = self._resolve_wire_operator(
-                    selected_target,
-                    current_message,
-                    rng,
-                )
-                current_message, record = self._apply_wire_operator(
-                    current_message,
-                    selected_target,
-                    operator,
-                    rng,
-                )
-                used_paths.add(selected_target.path)
-                records.append(record)
+            current_message, records = self._apply_wire_operations(
+                current_message,
+                config,
+                definition,
+            )
 
         return MutatedCase(
             original_packet=packet,
@@ -1664,12 +1750,11 @@ class SIPMutator:
         if profile != "ims_specific":
             return header_ranges
 
-        ims_header_ranges = [
+        return [
             header_range
             for header_range in header_ranges
             if header_range[0].casefold() in IMS_PROFILE_HEADER_NAMES
         ]
-        return ims_header_ranges or header_ranges
 
     def _build_canonical_wire_target(
         self,

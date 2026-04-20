@@ -494,6 +494,99 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
             tuple(record.model_dump(mode="python") for record in second_case.records),
         )
 
+    def test_ims_specific_default_falls_back_when_contact_alias_is_missing(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="ims_specific",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "ims_specific")
+        self.assertEqual(case.strategy, "safe")
+        self.assertEqual(case.final_layer, "wire")
+        self.assertIsNotNone(case.wire_text)
+        self.assertGreaterEqual(len(case.records), 1)
+
+    def test_mutate_editable_delivery_preserving_default_wire_keeps_via_intact(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=1,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "delivery_preserving")
+        self.assertEqual(case.strategy, "safe")
+        self.assertEqual(case.final_layer, "wire")
+        assert case.wire_text is not None
+        self.assertIn(
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1",
+            case.wire_text,
+        )
+
+    def test_mutate_editable_ims_specific_default_byte_stays_inside_ims_headers(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=2,
+                layer="byte",
+                profile="ims_specific",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "ims_specific")
+        self.assertEqual(case.strategy, "header_targeted")
+        self.assertEqual(case.final_layer, "byte")
+        self.assertIsNotNone(case.packet_bytes)
+        self.assertGreaterEqual(len(case.records), 1)
+
+        header_ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "ims_specific",
+        )
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(
+            any(start <= byte_index < end for _name, start, end in header_ranges)
+        )
+
     def test_same_seed_produces_same_wire_mutation(self) -> None:
         mutator = SIPMutator()
         packet = self.build_request()
