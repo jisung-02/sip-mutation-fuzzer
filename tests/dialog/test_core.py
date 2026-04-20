@@ -548,3 +548,198 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         assert exchange.setup_succeeded is False
         assert exchange.fuzz_result is None
         assert exchange.error == "final INVITE response already received for PRACK"
+
+    def test_execute_allows_prack_when_reliable_provisional_is_followed_by_invalid_noise(
+        self,
+    ) -> None:
+        generator, mutator = _make_components()
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        target = _make_target("127.0.0.1", 5060)
+        orchestrator = DialogOrchestrator(generator, mutator, target)
+        mutation_config = MutationConfig(seed=10, strategy="default", layer="model")
+
+        reliable_provisional = SocketObservation(
+            status_code=183,
+            reason_phrase="Session Progress",
+            headers={
+                "to": "<sip:111111@ims.mnc001.mcc001.3gppnetwork.org>;tag=early-183",
+                "contact": "<sip:111111@10.0.0.9:5088;transport=udp>",
+                "record-route": (
+                    "<sip:pcscf1.ims.mnc001.mcc001.3gppnetwork.org;lr>,"
+                    "<sip:pcscf2.ims.mnc001.mcc001.3gppnetwork.org;lr>"
+                ),
+                "require": "100rel",
+                "rseq": "73",
+                "cseq": "41 INVITE",
+            },
+            body="",
+            raw_text="SIP/2.0 183 Session Progress\r\n\r\n",
+            raw_size=0,
+            classification="provisional",
+        )
+        invalid_noise = SocketObservation(
+            status_code=None,
+            reason_phrase=None,
+            headers={},
+            body="",
+            raw_text="not sip at all",
+            raw_size=len("not sip at all"),
+            classification="invalid",
+        )
+        invite_result = SendReceiveResult(
+            target=target,
+            artifact_kind="packet",
+            bytes_sent=128,
+            outcome="invalid_response",
+            responses=(reliable_provisional, invalid_noise),
+            send_started_at=10.0,
+            send_completed_at=10.1,
+        )
+        captured_contexts: list[DialogContext] = []
+
+        def run_step(
+            _sock: object,
+            step: DialogStep,
+            step_index: int,
+            context: DialogContext,
+            *,
+            mutation_config: MutationConfig | None,
+        ):
+            if step.method == "INVITE":
+                return DialogStepResult(
+                    step_index=step_index,
+                    method="INVITE",
+                    role="send",
+                    send_result=invite_result,
+                    success=True,
+                    error=None,
+                )
+            if step.method == "PRACK":
+                captured_contexts.append(context.model_copy(deep=True))
+                return DialogStepResult(
+                    step_index=step_index,
+                    method="PRACK",
+                    role="send",
+                    send_result=None,
+                    success=True,
+                    error=None,
+                )
+            raise AssertionError(f"unexpected step {step.method}")
+
+        socket_factory = mock.MagicMock()
+        socket_context = mock.MagicMock()
+        socket_context.__enter__.return_value = socket_factory
+        socket_context.__exit__.return_value = False
+
+        with mock.patch(
+            "volte_mutation_fuzzer.dialog.core.socket.socket",
+            return_value=socket_context,
+        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+            exchange = orchestrator.execute(scenario, mutation_config)
+
+        assert exchange.setup_succeeded is True
+        assert exchange.error is None
+        assert exchange.fuzz_result is not None
+        assert exchange.fuzz_result.method == "PRACK"
+        assert len(captured_contexts) == 1
+        assert captured_contexts[0].reliable_invite_rseq == 73
+
+    def test_execute_allows_prack_when_reliable_provisional_is_followed_by_unrelated_valid_final(
+        self,
+    ) -> None:
+        generator, mutator = _make_components()
+        scenario = scenario_for_method("PRACK")
+        assert scenario is not None
+        target = _make_target("127.0.0.1", 5060)
+        orchestrator = DialogOrchestrator(generator, mutator, target)
+        mutation_config = MutationConfig(seed=11, strategy="default", layer="model")
+
+        reliable_provisional = SocketObservation(
+            status_code=183,
+            reason_phrase="Session Progress",
+            headers={
+                "to": "<sip:111111@ims.mnc001.mcc001.3gppnetwork.org>;tag=early-183",
+                "contact": "<sip:111111@10.0.0.9:5088;transport=udp>",
+                "record-route": (
+                    "<sip:pcscf1.ims.mnc001.mcc001.3gppnetwork.org;lr>,"
+                    "<sip:pcscf2.ims.mnc001.mcc001.3gppnetwork.org;lr>"
+                ),
+                "require": "100rel",
+                "rseq": "73",
+                "cseq": "41 INVITE",
+            },
+            body="",
+            raw_text="SIP/2.0 183 Session Progress\r\n\r\n",
+            raw_size=0,
+            classification="provisional",
+        )
+        unrelated_final = SocketObservation(
+            status_code=200,
+            reason_phrase="OK",
+            headers={
+                "call-id": "other-call@example.com",
+                "cseq": "5 OPTIONS",
+            },
+            body="",
+            raw_text="SIP/2.0 200 OK\r\nCSeq: 5 OPTIONS\r\n\r\n",
+            raw_size=0,
+            classification="success",
+        )
+        invite_result = SendReceiveResult(
+            target=target,
+            artifact_kind="packet",
+            bytes_sent=128,
+            outcome="success",
+            responses=(reliable_provisional, unrelated_final),
+            send_started_at=10.0,
+            send_completed_at=10.1,
+        )
+        captured_contexts: list[DialogContext] = []
+
+        def run_step(
+            _sock: object,
+            step: DialogStep,
+            step_index: int,
+            context: DialogContext,
+            *,
+            mutation_config: MutationConfig | None,
+        ):
+            if step.method == "INVITE":
+                return DialogStepResult(
+                    step_index=step_index,
+                    method="INVITE",
+                    role="send",
+                    send_result=invite_result,
+                    success=True,
+                    error=None,
+                )
+            if step.method == "PRACK":
+                captured_contexts.append(context.model_copy(deep=True))
+                return DialogStepResult(
+                    step_index=step_index,
+                    method="PRACK",
+                    role="send",
+                    send_result=None,
+                    success=True,
+                    error=None,
+                )
+            raise AssertionError(f"unexpected step {step.method}")
+
+        socket_factory = mock.MagicMock()
+        socket_context = mock.MagicMock()
+        socket_context.__enter__.return_value = socket_factory
+        socket_context.__exit__.return_value = False
+
+        with mock.patch(
+            "volte_mutation_fuzzer.dialog.core.socket.socket",
+            return_value=socket_context,
+        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+            exchange = orchestrator.execute(scenario, mutation_config)
+
+        assert exchange.setup_succeeded is True
+        assert exchange.error is None
+        assert exchange.fuzz_result is not None
+        assert exchange.fuzz_result.method == "PRACK"
+        assert len(captured_contexts) == 1
+        assert captured_contexts[0].reliable_invite_rseq == 73

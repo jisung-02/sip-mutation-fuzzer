@@ -84,7 +84,10 @@ class DialogOrchestrator:
                     if (
                         scenario.scenario_type == DialogScenarioType.invite_prack
                         and any(
-                            observation.classification != "provisional"
+                            self._is_final_invite_response(
+                                observation,
+                                expected_call_id=result.send_result.correlation_key.call_id,
+                            )
                             for observation in result.send_result.responses
                         )
                     ):
@@ -355,6 +358,33 @@ class DialogOrchestrator:
             if obs.status_code is not None and status_min <= obs.status_code <= hi:
                 return True
         return False
+
+    @staticmethod
+    def _is_final_invite_response(
+        observation: SocketObservation,
+        *,
+        expected_call_id: str | None,
+    ) -> bool:
+        if observation.status_code is None or observation.status_code < 200:
+            return False
+
+        cseq_header = observation.headers.get("cseq")
+        if cseq_header is None:
+            return False
+
+        cseq_parts = cseq_header.strip().split()
+        if len(cseq_parts) < 2 or cseq_parts[1].upper() != "INVITE":
+            return False
+
+        call_id = observation.headers.get("call-id")
+        if (
+            expected_call_id is not None
+            and call_id is not None
+            and call_id.strip() != expected_call_id
+        ):
+            return False
+
+        return True
 
     @staticmethod
     def _artifact_from_mutated(mutated: MutatedCase) -> SendArtifact:
