@@ -19,15 +19,29 @@ class EditableStartLine(BaseModel):
 
 
 class EditableHeader(BaseModel):
-    """Ordered editable header entry that preserves duplicates and unknown names."""
+    """Ordered editable header entry that preserves duplicates and unknown names.
+
+    The ``separator`` field is render-only and is intended for malformed wire
+    output. Non-default separators are not guaranteed to round-trip through
+    ``parse_editable_from_wire()``, which only recognizes canonical ``:`` header
+    syntax.
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     name: str
     value: str
+    separator: str = Field(
+        default=": ",
+        description=(
+            "Render-only header separator for malformed wire output; "
+            "non-default values are not guaranteed to round-trip through "
+            "parse_editable_from_wire()."
+        ),
+    )
 
     def render(self) -> str:
-        return f"{self.name}: {self.value}"
+        return f"{self.name}{self.separator}{self.value}"
 
 
 class EditableSIPMessage(BaseModel):
@@ -39,6 +53,9 @@ class EditableSIPMessage(BaseModel):
     headers: tuple[EditableHeader, ...] = Field(default_factory=tuple)
     body: str = ""
     declared_content_length: int | None = Field(default=None, ge=0)
+    line_ending: str = "\r\n"
+    emit_final_blank_line: bool = True
+    extra_blank_lines_after_headers: int = Field(default=0, ge=0)
 
     def header_values(self, name: str) -> tuple[str, ...]:
         header_name = _header_name_key(name)
@@ -76,8 +93,15 @@ class EditableSIPMessage(BaseModel):
                 f"{_CONTENT_LENGTH_HEADER}: {self.declared_content_length}"
             )
 
-        rendered_sections = [self.start_line.render(), *rendered_headers, ""]
-        return _CRLF.join(rendered_sections) + _CRLF + self.body
+        rendered_lines = [self.start_line.render(), *rendered_headers]
+        rendered = self.line_ending.join(rendered_lines)
+        rendered += self.line_ending
+
+        blank_line_count = self.extra_blank_lines_after_headers
+        if self.emit_final_blank_line:
+            blank_line_count += 1
+        rendered += self.line_ending * blank_line_count
+        return rendered + self.body
 
 
 class EditablePacketBytes(BaseModel):
@@ -104,10 +128,18 @@ class EditablePacketBytes(BaseModel):
         updated = self.data[:offset] + value + self.data[offset:]
         return self.model_copy(update={"data": updated})
 
+    def append(self, value: bytes) -> Self:
+        return self.model_copy(update={"data": self.data + value})
+
     def delete(self, start: int, end: int) -> Self:
         _validate_range(start, end, upper_bound=len(self.data))
         updated = self.data[:start] + self.data[end:]
         return self.model_copy(update={"data": updated})
+
+    def tail_delete(self, count: int) -> Self:
+        if count < 0 or count > len(self.data):
+            raise ValueError("tail delete count must be within current data bounds")
+        return self.model_copy(update={"data": self.data[: len(self.data) - count]})
 
     def truncate(self, length: int) -> Self:
         if length < 0 or length > len(self.data):
@@ -118,10 +150,12 @@ class EditablePacketBytes(BaseModel):
 def parse_editable_from_wire(wire_text: str) -> EditableSIPMessage:
     """Parse a raw SIP wire-text string into an ``EditableSIPMessage``.
 
-    This is the inverse of ``EditableSIPMessage.render()``.  It preserves every
-    header line verbatim — including 3GPP P-* headers, Record-Route, Accept-Contact,
-    etc. — so that the result can be fed directly into wire/byte mutation paths
-    without needing a packet definition from the SIP catalog.
+    This preserves canonical SIP-style header lines, including common folded-header
+    cases, 3GPP P-* headers, Record-Route, Accept-Contact, and similar wire text so
+    the result can be fed directly into wire/byte mutation paths without needing a
+    packet definition from the SIP catalog. Malformed render-only output such as
+    custom header separators is not guaranteed to round-trip back through this
+    parser.
 
     Header folding (continuation lines starting with SP or HT) is handled by
     appending the continuation to the preceding header value.

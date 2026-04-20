@@ -121,6 +121,9 @@ _BYTE_TARGET_ALIASES = {
 _HEADER_INDEX_PATTERN = re.compile(r"^header\[(\d+)\]$")
 _BYTE_INDEX_PATTERN = re.compile(r"^byte\[(\d+)\]$")
 _BYTE_RANGE_PATTERN = re.compile(r"^range\[(\d+):(\d+)\]$")
+_ALIAS_PORT_PATTERN = re.compile(
+    r"(?P<prefix>;alias=[^~;>]+~)(?P<port_a>\d+)(?:~(?P<port_b>\d+))?(?P<suffix>~1)"
+)
 _CONTENT_LENGTH_HEADER = "Content-Length"
 _CRLF_DELIMITER = b"\r\n"
 
@@ -318,6 +321,20 @@ class SIPMutator:
             )
 
         if effective_layer == "wire":
+            deterministic_wire_mutation = self._apply_deterministic_wire_strategy(
+                message,
+                config.strategy,
+                self._rng_from_seed(config.seed),
+            )
+            if deterministic_wire_mutation is not None:
+                mutated_msg, record = deterministic_wire_mutation
+                return MutatedWireCase(
+                    wire_text=self._finalize_wire_message(mutated_msg),
+                    records=(record,),
+                    seed=config.seed,
+                    strategy=config.strategy,
+                    final_layer="wire",
+                )
             mutated_msg, records = self._apply_wire_operations(message, config)
             return MutatedWireCase(
                 wire_text=self._finalize_wire_message(mutated_msg),
@@ -329,6 +346,20 @@ class SIPMutator:
 
         # byte layer
         editable_bytes = self._to_packet_bytes(message)
+        deterministic_byte_mutation = self._apply_deterministic_byte_strategy(
+            editable_bytes,
+            config.strategy,
+            self._rng_from_seed(config.seed),
+        )
+        if deterministic_byte_mutation is not None:
+            mutated_bytes, record = deterministic_byte_mutation
+            return MutatedWireCase(
+                packet_bytes=self._finalize_packet_bytes(mutated_bytes),
+                records=(record,),
+                seed=config.seed,
+                strategy=config.strategy,
+                final_layer="byte",
+            )
         mutated_bytes, records = self._apply_byte_operations(editable_bytes, config)
         return MutatedWireCase(
             packet_bytes=self._finalize_packet_bytes(mutated_bytes),
@@ -750,11 +781,26 @@ class SIPMutator:
                 raise ValueError(f"unsupported mutation strategy: {strategy}")
             return
         if layer == "wire":
-            if strategy not in {"default", "identity", "safe"}:
+            if strategy not in {
+                "default",
+                "identity",
+                "safe",
+                "header_whitespace_noise",
+                "final_crlf_loss",
+                "duplicate_content_length_conflict",
+                "alias_port_desync",
+            }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
         if layer == "byte":
-            if strategy not in {"default", "identity", "safe", "header_targeted"}:
+            if strategy not in {
+                "default",
+                "identity",
+                "safe",
+                "header_targeted",
+                "tail_chop_1",
+                "tail_garbage",
+            }:
                 raise ValueError(f"unsupported byte mutation strategy: {strategy}")
             return
         raise ValueError(f"unsupported mutation layer: {layer}")
@@ -1101,7 +1147,18 @@ class SIPMutator:
         current_message = editable_message
         records: list[MutationRecord] = []
 
-        if target is not None:
+        deterministic_wire_mutation = None
+        if target is None:
+            deterministic_wire_mutation = self._apply_deterministic_wire_strategy(
+                current_message,
+                config.strategy,
+                rng,
+            )
+
+        if deterministic_wire_mutation is not None:
+            current_message, record = deterministic_wire_mutation
+            records.append(record)
+        elif target is not None:
             selected_target = self._build_canonical_wire_target(target, current_message)
             operator = self._resolve_wire_operator(
                 selected_target, current_message, rng
@@ -1157,11 +1214,62 @@ class SIPMutator:
     def _finalize_wire_message(self, editable_message: EditableSIPMessage) -> str:
         return editable_message.render()
 
+    def _apply_deterministic_wire_strategy(
+        self,
+        editable_message: EditableSIPMessage,
+        strategy: str,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord] | None:
+        if strategy == "alias_port_desync":
+            return self._apply_alias_port_desync(editable_message, rng)
+        if strategy == "header_whitespace_noise":
+            return self._apply_header_whitespace_noise(editable_message, rng)
+        if strategy == "final_crlf_loss":
+            return self._apply_final_crlf_loss(editable_message)
+        if strategy == "duplicate_content_length_conflict":
+            return self._apply_duplicate_content_length_conflict(editable_message, rng)
+        return None
+
     def _to_packet_bytes(
         self,
         editable_message: EditableSIPMessage,
     ) -> EditablePacketBytes:
         return EditablePacketBytes.from_message(editable_message)
+
+    def _apply_deterministic_byte_strategy(
+        self,
+        editable_bytes: EditablePacketBytes,
+        strategy: str,
+        rng: random.Random,
+    ) -> tuple[EditablePacketBytes, MutationRecord] | None:
+        if strategy == "tail_chop_1":
+            if not editable_bytes.data:
+                raise ValueError("tail_chop_1 requires packet bytes")
+            mutated_bytes = editable_bytes.tail_delete(1)
+            return mutated_bytes, self._record_mutation(
+                target=MutationTarget(layer="byte", path="segment:tail"),
+                operator="tail_chop_1",
+                before=editable_bytes.data[-1:],
+                after=b"",
+            )
+
+        if strategy == "tail_garbage":
+            suffixes = (
+                b"\r\nX",
+                b"\r\n\r\n",
+                b"\r\nINV",
+                b"\x00\r\n",
+            )
+            suffix = suffixes[rng.randrange(len(suffixes))]
+            mutated_bytes = editable_bytes.append(suffix)
+            return mutated_bytes, self._record_mutation(
+                target=MutationTarget(layer="byte", path="segment:tail"),
+                operator="tail_garbage",
+                before=b"",
+                after=suffix,
+            )
+
+        return None
 
     def _collect_byte_targets(
         self,
@@ -1288,59 +1396,68 @@ class SIPMutator:
                 rng,
             )
             records.append(record)
-        elif config.strategy == "header_targeted":
-            # Target bytes within a specific non-protected header region
-            header_ranges = self._collect_header_byte_ranges(current_bytes.data)
-            if header_ranges:
-                header_name, start, end = header_ranges[
-                    rng.randrange(len(header_ranges))
-                ]
-                # Pick a byte within this header's value range
-                if start < end:
-                    byte_idx = rng.randrange(start, end)
-                    byte_target = MutationTarget(
-                        layer="byte", path=f"byte[{byte_idx}]"
-                    )
-                    operator = "flip_byte"
-                    current_bytes, record = self._apply_byte_operator(
-                        current_bytes, byte_target, operator, rng
-                    )
-                    records.append(record)
         else:
-            used_paths: set[str] = set()
-            is_safe = config.strategy == "safe"
-            protected_ranges = (
-                self._collect_protected_byte_ranges(current_bytes.data)
-                if is_safe
-                else ()
+            deterministic_byte_mutation = self._apply_deterministic_byte_strategy(
+                current_bytes,
+                config.strategy,
+                rng,
             )
-            for _ in range(config.max_operations):
-                available_targets = tuple(
-                    candidate
-                    for candidate in self._collect_byte_targets(current_bytes)
-                    if candidate.path not in used_paths
-                    and (
-                        not is_safe
-                        or not self._is_byte_target_protected(
-                            candidate, protected_ranges
+            if deterministic_byte_mutation is not None:
+                current_bytes, record = deterministic_byte_mutation
+                records.append(record)
+            elif config.strategy == "header_targeted":
+                # Target bytes within a specific non-protected header region.
+                header_ranges = self._collect_header_byte_ranges(current_bytes.data)
+                if header_ranges:
+                    _header_name, start, end = header_ranges[
+                        rng.randrange(len(header_ranges))
+                    ]
+                    # Pick a byte within this header's value range
+                    if start < end:
+                        byte_idx = rng.randrange(start, end)
+                        byte_target = MutationTarget(
+                            layer="byte", path=f"byte[{byte_idx}]"
+                        )
+                        operator = "flip_byte"
+                        current_bytes, record = self._apply_byte_operator(
+                            current_bytes, byte_target, operator, rng
+                        )
+                        records.append(record)
+            else:
+                used_paths: set[str] = set()
+                is_safe = config.strategy == "safe"
+                protected_ranges = (
+                    self._collect_protected_byte_ranges(current_bytes.data)
+                    if is_safe
+                    else ()
+                )
+                for _ in range(config.max_operations):
+                    available_targets = tuple(
+                        candidate
+                        for candidate in self._collect_byte_targets(current_bytes)
+                        if candidate.path not in used_paths
+                        and (
+                            not is_safe
+                            or not self._is_byte_target_protected(
+                                candidate, protected_ranges
+                            )
                         )
                     )
-                )
-                if not available_targets:
-                    break
+                    if not available_targets:
+                        break
 
-                selected_target = available_targets[
-                    rng.randrange(len(available_targets))
-                ]
-                operator = self._resolve_byte_operator(selected_target, rng)
-                current_bytes, record = self._apply_byte_operator(
-                    current_bytes,
-                    selected_target,
-                    operator,
-                    rng,
-                )
-                used_paths.add(selected_target.path)
-                records.append(record)
+                    selected_target = available_targets[
+                        rng.randrange(len(available_targets))
+                    ]
+                    operator = self._resolve_byte_operator(selected_target, rng)
+                    current_bytes, record = self._apply_byte_operator(
+                        current_bytes,
+                        selected_target,
+                        operator,
+                        rng,
+                    )
+                    used_paths.add(selected_target.path)
+                    records.append(record)
 
         return MutatedCase(
             original_packet=packet,
@@ -1550,6 +1667,184 @@ class SIPMutator:
                 )
             return target.operator_hint
         return operators[rng.randrange(len(operators))]
+
+    def _apply_header_whitespace_noise(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        candidate_indices = [
+            index
+            for index, header in enumerate(editable_message.headers)
+            if self._header_name_key(header.name) not in _SAFE_PROTECTED_HEADER_NAMES
+        ]
+        if not candidate_indices:
+            raise ValueError("no non-protected headers available for whitespace noise")
+
+        header_index = candidate_indices[rng.randrange(len(candidate_indices))]
+        original_header = editable_message.headers[header_index]
+        separator_choices = tuple(
+            separator
+            for separator in (":", ":  ", " : ", ":\t", ": \t")
+            if separator != original_header.separator
+        )
+        mutated_separator = separator_choices[rng.randrange(len(separator_choices))]
+
+        headers = list(editable_message.headers)
+        headers[header_index] = original_header.model_copy(
+            update={"separator": mutated_separator}
+        )
+        mutated_header = headers[header_index]
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path=f"header[{header_index}]"),
+            operator="header_whitespace_noise",
+            before={
+                "name": original_header.name,
+                "separator": original_header.separator,
+                "value": original_header.value,
+            },
+            after={
+                "name": mutated_header.name,
+                "separator": mutated_header.separator,
+                "value": mutated_header.value,
+            },
+        )
+
+    def _apply_final_crlf_loss(
+        self,
+        editable_message: EditableSIPMessage,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        before_suffix = editable_message.line_ending * (
+            1
+            + editable_message.extra_blank_lines_after_headers
+            + int(editable_message.emit_final_blank_line)
+        )
+        if before_suffix == editable_message.line_ending:
+            raise ValueError("message does not contain a final blank line to drop")
+
+        mutated_message = editable_message.model_copy(
+            update={
+                "emit_final_blank_line": False,
+                "extra_blank_lines_after_headers": 0,
+            }
+        )
+        after_suffix = mutated_message.line_ending * (
+            1
+            + mutated_message.extra_blank_lines_after_headers
+            + int(mutated_message.emit_final_blank_line)
+        )
+
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path="message:final_blank_line"),
+            operator="final_crlf_loss",
+            before=before_suffix,
+            after=after_suffix,
+        )
+
+    def _apply_duplicate_content_length_conflict(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        existing_values = editable_message.header_values(_CONTENT_LENGTH_HEADER)
+        actual_length = len(editable_message.body.encode("utf-8"))
+
+        if existing_values:
+            base_message = editable_message
+            base_value = existing_values[0]
+            before_values = existing_values
+        else:
+            declared_length = editable_message.declared_content_length
+            if declared_length is None:
+                declared_length = actual_length
+            base_value = str(declared_length)
+            base_message = editable_message.append_header(
+                _CONTENT_LENGTH_HEADER,
+                base_value,
+            )
+            before_values = (base_value,)
+
+        try:
+            base_length = int(base_value)
+        except ValueError:
+            declared_length = editable_message.declared_content_length
+            if declared_length is None:
+                declared_length = actual_length
+            base_length = declared_length
+
+        conflicting_value = str(base_length + rng.randrange(1, 10))
+        while conflicting_value in before_values:
+            conflicting_value = str(int(conflicting_value) + 1)
+
+        mutated_message = base_message.append_header(
+            _CONTENT_LENGTH_HEADER,
+            conflicting_value,
+        )
+        after_values = mutated_message.header_values(_CONTENT_LENGTH_HEADER)
+
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path="header:Content-Length"),
+            operator="duplicate_content_length_conflict",
+            before=before_values,
+            after=after_values,
+        )
+
+    def _apply_alias_port_desync(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        for index, header in enumerate(editable_message.headers):
+            if self._header_name_key(header.name) != "contact":
+                continue
+
+            match = _ALIAS_PORT_PATTERN.search(header.value)
+            if match is None:
+                continue
+
+            replacement = [
+                match.group("prefix"),
+                str(self._mutate_alias_port_number(int(match.group("port_a")), rng)),
+            ]
+            port_b = match.group("port_b")
+            if port_b is not None:
+                replacement.append(
+                    f"~{self._mutate_alias_port_number(int(port_b), rng)}"
+                )
+            replacement.append(match.group("suffix"))
+            alias_before = match.group(0).lstrip(";")
+            alias_after = "".join(replacement).lstrip(";")
+
+            mutated_value = (
+                header.value[: match.start()]
+                + "".join(replacement)
+                + header.value[match.end() :]
+            )
+            headers = list(editable_message.headers)
+            headers[index] = header.model_copy(update={"value": mutated_value})
+            mutated_message = editable_message.model_copy(
+                update={"headers": tuple(headers)}
+            )
+            return mutated_message, self._record_mutation(
+                target=MutationTarget(layer="wire", path=f"header[{index}]"),
+                operator="alias_port_desync",
+                before=header.value,
+                after=mutated_value,
+                note=f"contact_alias={alias_before} -> {alias_after}",
+            )
+
+        raise ValueError("no Contact alias field available for alias_port_desync")
+
+    @staticmethod
+    def _mutate_alias_port_number(port: int, rng: random.Random) -> int:
+        delta = rng.randrange(1, 10)
+        if port + delta <= 65535:
+            return port + delta
+        return max(1, port - delta)
 
     def _resolve_byte_operator(
         self,

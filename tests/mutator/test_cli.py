@@ -7,6 +7,9 @@ from typer.testing import CliRunner
 
 from volte_mutation_fuzzer.generator.cli import app as generator_app
 
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+
 
 class SIPMutatorCLITests(unittest.TestCase):
     @classmethod
@@ -87,7 +90,13 @@ class SIPMutatorCLITests(unittest.TestCase):
                 "200",
                 "INVITE",
                 "--context",
-                '{"call_id":"call-1","local_tag":"ue-tag","local_cseq":7}',
+                (
+                    '{"call_id":"'
+                    f"{REALISTIC_CALL_ID}"
+                    '","local_tag":"'
+                    f"{REALISTIC_LOCAL_TAG}"
+                    '","local_cseq":7}'
+                ),
                 "--layer",
                 "model",
                 "--seed",
@@ -109,6 +118,30 @@ class SIPMutatorCLITests(unittest.TestCase):
             payload["original_packet"]["reason_phrase"],
         )
 
+    def test_packet_command_accepts_realistic_wire_strategy(self) -> None:
+        baseline_json = self.generate_request_baseline_json("OPTIONS")
+
+        result = self.runner.invoke(
+            self.app,
+            [
+                "packet",
+                "--layer",
+                "wire",
+                "--seed",
+                "17",
+                "--strategy",
+                "final_crlf_loss",
+            ],
+            input=baseline_json,
+        )
+
+        payload = self.parse_output(result)
+
+        self.assertEqual(payload["strategy"], "final_crlf_loss")
+        self.assertEqual(payload["final_layer"], "wire")
+        self.assertTrue(payload["wire_text"].endswith("\r\n"))
+        self.assertFalse(payload["wire_text"].endswith("\r\n\r\n"))
+
     def test_help_exposes_basic_mutation_options(self) -> None:
         expected_options = ("--strategy", "--layer", "--seed", "--target")
 
@@ -119,6 +152,14 @@ class SIPMutatorCLITests(unittest.TestCase):
                 self.assertEqual(result.exit_code, 0, msg=result.output)
                 for option in expected_options:
                     self.assertIn(option, result.output)
+
+    def test_packet_help_mentions_realistic_strategy_examples(self) -> None:
+        result = self.runner.invoke(self.app, ["packet", "--help"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("final_crlf_loss", result.output)
+        self.assertIn("tail_chop_1", result.output)
+        self.assertIn("alias_port_desync", result.output)
 
     def test_packet_command_rejects_invalid_input_json(self) -> None:
         result = self.runner.invoke(

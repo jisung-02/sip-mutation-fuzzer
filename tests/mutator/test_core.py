@@ -1,3 +1,4 @@
+import re
 import unittest
 
 from volte_mutation_fuzzer.generator import (
@@ -13,14 +14,36 @@ from volte_mutation_fuzzer.mutator.contracts import (
     MutationTarget,
 )
 from volte_mutation_fuzzer.mutator.core import SIPMutator
-from volte_mutation_fuzzer.mutator.editable import EditableSIPMessage
+from volte_mutation_fuzzer.mutator.editable import (
+    EditableSIPMessage,
+    EditableStartLine,
+    parse_editable_from_wire,
+)
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
-from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
+from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.requests import SIPRequestDefinition
 from volte_mutation_fuzzer.sip.responses import SIPResponseDefinition
 
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_MUTATED_CALL_ID = (
+    "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+)
+REALISTIC_CONTEXT_CALL_ID = (
+    "d93f7c440f8b11ef@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+)
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+REALISTIC_CONTEXT_LOCAL_TAG = "a73kszlfl"
+REALISTIC_REMOTE_TAG = "873294202"
+REALISTIC_REQUEST_URI_USER = "001010000123511"
+REALISTIC_REQUEST_URI_HOST = "10.20.20.8"
+REALISTIC_MESSAGE_START_LINE = "MESSAGE sip:222222@10.20.20.9:31800 SIP/2.0"
+
 
 class SIPMutatorTestCase(unittest.TestCase):
+    alias_pattern = re.compile(
+        r"alias=(?P<host>[^~;>]+)~(?P<port_a>\d+)(?:~(?P<port_b>\d+))?(?P<suffix>~1)"
+    )
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.generator = SIPGenerator(GeneratorSettings())
@@ -30,8 +53,8 @@ class SIPMutatorTestCase(unittest.TestCase):
 
     def build_response(self):
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
         )
         return self.generator.generate_response(
@@ -39,14 +62,36 @@ class SIPMutatorTestCase(unittest.TestCase):
             context,
         )
 
+    def build_response_with_contact_alias(
+        self,
+        alias_value: str = "10.20.20.9~31800~31100~1",
+    ):
+        packet = self.build_response()
+        assert packet.contact is not None
+        original_contact = packet.contact[0]
+        assert isinstance(original_contact, NameAddress)
+
+        aliased_contact = NameAddress(
+            display_name=original_contact.display_name,
+            uri=original_contact.uri.model_copy(
+                update={"parameters": {"alias": alias_value}}
+            ),
+            parameters=original_contact.parameters,
+        )
+        return packet.model_copy(update={"contact": [aliased_contact]})
+
     def build_context(self) -> DialogContext:
         return DialogContext(
-            call_id="call-ctx-1",
-            local_tag="local-tag",
-            remote_tag="remote-tag",
+            call_id=REALISTIC_CONTEXT_CALL_ID,
+            local_tag=REALISTIC_CONTEXT_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
             local_cseq=3,
             remote_cseq=4,
-            request_uri=SIPURI(scheme="sip", user="ue", host="device.example.net"),
+            request_uri=SIPURI(
+                scheme="sip",
+                user=REALISTIC_REQUEST_URI_USER,
+                host=REALISTIC_REQUEST_URI_HOST,
+            ),
             is_registered=True,
         )
 
@@ -61,6 +106,12 @@ class SIPMutatorTestCase(unittest.TestCase):
 
     def packet_payload(self, packet):
         return packet.model_dump(mode="python")
+
+    def extract_alias_parts(self, value: str):
+        match = self.alias_pattern.search(value)
+        self.assertIsNotNone(match, msg=f"expected alias in value: {value}")
+        assert match is not None
+        return match.groupdict()
 
     def assert_record_matches_packet_values(
         self, original_packet, mutated_packet, record
@@ -132,8 +183,8 @@ class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
         record = mutator._record_mutation(
             target=target,
             operator="replace_text",
-            before="call-1",
-            after="call-2",
+            before=REALISTIC_CALL_ID,
+            after=REALISTIC_MUTATED_CALL_ID,
             note=" generated in helper ",
         )
 
@@ -141,8 +192,8 @@ class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
         self.assertEqual(record.layer, "model")
         self.assertEqual(record.target.path, "call_id")
         self.assertEqual(record.operator, "replace_text")
-        self.assertEqual(record.before, "call-1")
-        self.assertEqual(record.after, "call-2")
+        self.assertEqual(record.before, REALISTIC_CALL_ID)
+        self.assertEqual(record.after, REALISTIC_MUTATED_CALL_ID)
         self.assertEqual(record.note, "generated in helper")
 
     def test_snapshot_context_returns_none_for_missing_context(self) -> None:
@@ -158,9 +209,9 @@ class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
 
         self.assertIsInstance(snapshot, dict)
         assert snapshot is not None
-        self.assertEqual(snapshot["call_id"], "call-ctx-1")
+        self.assertEqual(snapshot["call_id"], REALISTIC_CONTEXT_CALL_ID)
         self.assertEqual(snapshot["local_cseq"], 3)
-        self.assertEqual(snapshot["request_uri"]["host"], "device.example.net")
+        self.assertEqual(snapshot["request_uri"]["host"], REALISTIC_REQUEST_URI_HOST)
 
         snapshot["local_cseq"] = 99
         snapshot["request_uri"]["host"] = "mutated.example.net"
@@ -168,7 +219,7 @@ class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
         self.assertEqual(context.local_cseq, 3)
         request_uri = context.request_uri
         assert isinstance(request_uri, SIPURI)
-        self.assertEqual(request_uri.host, "device.example.net")
+        self.assertEqual(request_uri.host, REALISTIC_REQUEST_URI_HOST)
 
 
 class SIPMutatorModelMutationTests(SIPMutatorTestCase):
@@ -316,13 +367,13 @@ class SIPMutatorModelMutationTests(SIPMutatorTestCase):
             context=context,
         )
 
-        self.assertEqual(context.call_id, "call-ctx-1")
-        self.assertEqual(context.local_tag, "local-tag")
-        self.assertEqual(context.remote_tag, "remote-tag")
+        self.assertEqual(context.call_id, REALISTIC_CONTEXT_CALL_ID)
+        self.assertEqual(context.local_tag, REALISTIC_CONTEXT_LOCAL_TAG)
+        self.assertEqual(context.remote_tag, REALISTIC_REMOTE_TAG)
         self.assertEqual(context.local_cseq, 3)
         request_uri = context.request_uri
         assert isinstance(request_uri, SIPURI)
-        self.assertEqual(request_uri.host, "device.example.net")
+        self.assertEqual(request_uri.host, REALISTIC_REQUEST_URI_HOST)
 
 
 class SIPMutatorWireMutationTests(SIPMutatorTestCase):
@@ -479,6 +530,269 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         assert case.wire_text is not None
         self.assertIn("\r\nContent-Length: ", case.wire_text)
         self.assertNotIn("\r\nContent-Length: 0\r\n", case.wire_text)
+
+    def test_header_whitespace_noise_mutates_separator_without_touching_value(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=101,
+                layer="wire",
+                strategy="header_whitespace_noise",
+            ),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.operator, "header_whitespace_noise")
+        self.assertRegex(record.target.path, r"^header\[\d+\]$")
+        self.assertEqual(record.before["name"], record.after["name"])
+        self.assertEqual(record.before["value"], record.after["value"])
+        self.assertNotEqual(record.before["separator"], record.after["separator"])
+        self.assertIn(
+            (
+                f"{record.after['name']}"
+                f"{record.after['separator']}"
+                f"{record.after['value']}"
+            ),
+            case.wire_text,
+        )
+
+    def test_final_crlf_loss_drops_one_terminal_line_break(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=102, layer="wire", strategy="final_crlf_loss"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "message:final_blank_line")
+        self.assertEqual(record.operator, "final_crlf_loss")
+        self.assertEqual(record.before, "\r\n\r\n")
+        self.assertEqual(record.after, "\r\n")
+        self.assertTrue(case.wire_text.endswith("\r\n"))
+        self.assertFalse(case.wire_text.endswith("\r\n\r\n"))
+
+    def test_final_crlf_loss_normalizes_multiple_blank_lines_to_single_crlf(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        message = mutator._to_editable_message(packet).model_copy(
+            update={"extra_blank_lines_after_headers": 2}
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(seed=104, layer="wire", strategy="final_crlf_loss"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(record.target.path, "message:final_blank_line")
+        self.assertEqual(record.before, "\r\n\r\n\r\n\r\n")
+        self.assertEqual(record.after, "\r\n")
+        self.assertTrue(case.wire_text.endswith("\r\n"))
+        self.assertFalse(case.wire_text.endswith("\r\n\r\n"))
+
+    def test_duplicate_content_length_conflict_adds_second_conflicting_header(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=103,
+                layer="wire",
+                strategy="duplicate_content_length_conflict",
+            ),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        content_length_values = [
+            line.split(":", 1)[1].strip()
+            for line in case.wire_text.split("\r\n")
+            if line.startswith("Content-Length:")
+        ]
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "header:Content-Length")
+        self.assertEqual(record.operator, "duplicate_content_length_conflict")
+        self.assertEqual(len(content_length_values), 2)
+        self.assertNotEqual(content_length_values[0], content_length_values[1])
+        self.assertEqual(record.before, (content_length_values[0],))
+        self.assertEqual(record.after, tuple(content_length_values))
+
+    def test_duplicate_content_length_conflict_preserves_declared_zero_without_header(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = EditableSIPMessage(
+            start_line=EditableStartLine(text=REALISTIC_MESSAGE_START_LINE),
+            headers=(),
+            body="hello",
+            declared_content_length=0,
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=114,
+                layer="wire",
+                strategy="duplicate_content_length_conflict",
+            ),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        content_length_values = [
+            line.split(":", 1)[1].strip()
+            for line in case.wire_text.split("\r\n")
+            if line.startswith("Content-Length:")
+        ]
+
+        self.assertEqual(content_length_values[0], "0")
+        self.assertEqual(record.before, ("0",))
+        self.assertEqual(record.after, tuple(content_length_values))
+        self.assertNotEqual(content_length_values[1], "0")
+
+    def test_deterministic_wire_strategies_are_reproducible_by_seed(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        configs = (
+            MutationConfig(
+                seed=111,
+                layer="wire",
+                strategy="header_whitespace_noise",
+            ),
+            MutationConfig(
+                seed=112,
+                layer="wire",
+                strategy="final_crlf_loss",
+            ),
+            MutationConfig(
+                seed=113,
+                layer="wire",
+                strategy="duplicate_content_length_conflict",
+            ),
+        )
+
+        for config in configs:
+            with self.subTest(strategy=config.strategy):
+                first_case = mutator.mutate(packet, config)
+                second_case = mutator.mutate(packet, config)
+
+                self.assertEqual(first_case.wire_text, second_case.wire_text)
+                self.assertEqual(
+                    tuple(
+                        record.model_dump(mode="python")
+                        for record in first_case.records
+                    ),
+                    tuple(
+                        record.model_dump(mode="python")
+                        for record in second_case.records
+                    ),
+                )
+
+    def test_alias_port_desync_rewrites_contact_alias_ports_but_keeps_shape(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "INVITE sip:001010000123511@10.20.20.8:8100;alias=10.20.20.8~8101~1 SIP/2.0\r\n"
+            "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(seed=301, layer="wire", strategy="alias_port_desync"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(record.operator, "alias_port_desync")
+        self.assertRegex(record.target.path, r"^header\[\d+\]$")
+        before_alias = self.extract_alias_parts(record.before)
+        after_alias = self.extract_alias_parts(record.after)
+        self.assertEqual(before_alias["host"], after_alias["host"])
+        self.assertEqual(before_alias["suffix"], after_alias["suffix"])
+        self.assertNotEqual(before_alias["port_a"], after_alias["port_a"])
+        self.assertNotEqual(before_alias["port_b"], after_alias["port_b"])
+        self.assertIn(f"Contact: {record.after}", case.wire_text)
+        self.assertNotEqual(record.before, record.after)
+        self.assertEqual(
+            record.note,
+            (
+                "contact_alias="
+                "alias=10.20.20.9~31800~31100~1"
+                " -> "
+                f"alias={after_alias['host']}~{after_alias['port_a']}~"
+                f"{after_alias['port_b']}{after_alias['suffix']}"
+            ),
+        )
+
+    def test_alias_port_desync_supports_regular_wire_mutate_path(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response_with_contact_alias()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=302, layer="wire", strategy="alias_port_desync"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+        before_alias = self.extract_alias_parts(record.before)
+        after_alias = self.extract_alias_parts(record.after)
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(record.operator, "alias_port_desync")
+        self.assertRegex(record.target.path, r"^header\[\d+\]$")
+        self.assertEqual(before_alias["host"], after_alias["host"])
+        self.assertEqual(before_alias["suffix"], after_alias["suffix"])
+        self.assertNotEqual(before_alias["port_a"], after_alias["port_a"])
+        self.assertNotEqual(before_alias["port_b"], after_alias["port_b"])
+        self.assertIn(f"Contact: {record.after}", case.wire_text)
+
+    def test_alias_port_desync_is_reproducible_by_seed(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response_with_contact_alias()
+        config = MutationConfig(seed=303, layer="wire", strategy="alias_port_desync")
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
 
     def test_mutate_with_auto_still_returns_model_case(self) -> None:
         mutator = SIPMutator()

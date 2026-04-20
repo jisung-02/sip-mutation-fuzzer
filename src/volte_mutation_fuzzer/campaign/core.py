@@ -77,8 +77,27 @@ logger = logging.getLogger(__name__)
 # layer별 지원 전략 매핑 — mutator/core.py _validate_supported_strategy와 동기화
 _SUPPORTED_STRATEGIES: dict[str, frozenset[str]] = {
     "model": frozenset({"default", "state_breaker"}),
-    "wire": frozenset({"default", "identity"}),
-    "byte": frozenset({"default", "identity"}),
+    "wire": frozenset(
+        {
+            "default",
+            "identity",
+            "safe",
+            "header_whitespace_noise",
+            "final_crlf_loss",
+            "duplicate_content_length_conflict",
+            "alias_port_desync",
+        }
+    ),
+    "byte": frozenset(
+        {
+            "default",
+            "identity",
+            "safe",
+            "header_targeted",
+            "tail_chop_1",
+            "tail_garbage",
+        }
+    ),
 }
 
 

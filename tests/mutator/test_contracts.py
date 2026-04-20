@@ -15,6 +15,16 @@ from volte_mutation_fuzzer.mutator.contracts import (
 )
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_MUTATED_CALL_ID = (
+    "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+)
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+REALISTIC_OPTIONS_WIRE = (
+    "OPTIONS sip:001010000123511@10.20.20.8:8100 SIP/2.0\r\n"
+    f"Call-ID: {REALISTIC_CALL_ID}\r\n\r\n"
+)
+
 
 class MutatorContractTestCase(unittest.TestCase):
     @classmethod
@@ -26,8 +36,8 @@ class MutatorContractTestCase(unittest.TestCase):
 
     def build_response(self):
         context = DialogContext(
-            call_id="call-1",
-            local_tag="ue-tag",
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
             local_cseq=7,
         )
         return self.generator.generate_response(
@@ -108,7 +118,7 @@ class MutationRecordTests(MutatorContractTestCase):
             layer="wire",
             target=MutationTarget(layer="wire", path="header:Call-ID"),
             operator=" delete_header ",
-            before="Call-ID: call-1",
+            before=f"Call-ID: {REALISTIC_CALL_ID}",
             after=None,
             note=" removed duplicate header ",
         )
@@ -117,7 +127,7 @@ class MutationRecordTests(MutatorContractTestCase):
         self.assertEqual(payload["layer"], "wire")
         self.assertEqual(payload["operator"], "delete_header")
         self.assertEqual(payload["target"]["path"], "header:Call-ID")
-        self.assertEqual(payload["before"], "Call-ID: call-1")
+        self.assertEqual(payload["before"], f"Call-ID: {REALISTIC_CALL_ID}")
         self.assertEqual(payload["note"], "removed duplicate header")
         self.assertNotIn("after", payload)
         self.assertEqual(payload["target"], {"layer": "wire", "path": "header:Call-ID"})
@@ -134,13 +144,15 @@ class MutationRecordTests(MutatorContractTestCase):
 class MutatedCaseTests(MutatorContractTestCase):
     def test_model_layer_serializes_packets_records_and_aliases(self) -> None:
         original_packet = self.build_request()
-        mutated_packet = original_packet.model_copy(update={"call_id": "call-2"})
+        mutated_packet = original_packet.model_copy(
+            update={"call_id": REALISTIC_MUTATED_CALL_ID}
+        )
         record = MutationRecord(
             layer="model",
             target=MutationTarget(layer="model", path="call_id"),
             operator="replace_value",
-            before="call-1",
-            after="call-2",
+            before=REALISTIC_CALL_ID,
+            after=REALISTIC_MUTATED_CALL_ID,
         )
 
         case = MutatedCase(
@@ -157,12 +169,12 @@ class MutatedCaseTests(MutatorContractTestCase):
         self.assertEqual(case.final_layer, "model")
         mutated_packet = case.mutated_packet
         assert mutated_packet is not None
-        self.assertEqual(mutated_packet.call_id, "call-2")
+        self.assertEqual(mutated_packet.call_id, REALISTIC_MUTATED_CALL_ID)
         self.assertEqual(case.records[0].target.path, "call_id")
         self.assertEqual(payload["final_layer"], "model")
         self.assertEqual(payload["seed"], 17)
         self.assertEqual(payload["strategy"], "state_breaker")
-        self.assertEqual(payload["mutated_packet"]["call_id"], "call-2")
+        self.assertEqual(payload["mutated_packet"]["call_id"], REALISTIC_MUTATED_CALL_ID)
         self.assertIn("from", payload["original_packet"])
         self.assertNotIn("from_", payload["original_packet"])
         self.assertEqual(payload["records"][0]["target"]["path"], "call_id")
@@ -174,7 +186,7 @@ class MutatedCaseTests(MutatorContractTestCase):
 
         case = MutatedCase(
             original_packet=original_packet,
-            wire_text="OPTIONS sip:ue@example.com SIP/2.0\r\nCall-ID: broken\r\n\r\n",
+            wire_text=REALISTIC_OPTIONS_WIRE,
             final_layer="wire",
         )
         payload = case.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -183,12 +195,9 @@ class MutatedCaseTests(MutatorContractTestCase):
         self.assertIsNone(case.mutated_packet)
         wire_text = case.wire_text
         assert wire_text is not None
-        self.assertIn("Call-ID: broken", wire_text)
+        self.assertIn(f"Call-ID: {REALISTIC_CALL_ID}", wire_text)
         self.assertEqual(payload["final_layer"], "wire")
-        self.assertEqual(
-            payload["wire_text"],
-            "OPTIONS sip:ue@example.com SIP/2.0\r\nCall-ID: broken\r\n\r\n",
-        )
+        self.assertEqual(payload["wire_text"], REALISTIC_OPTIONS_WIRE)
         self.assertEqual(payload["records"], [])
         self.assertNotIn("mutated_packet", payload)
         self.assertNotIn("packet_bytes", payload)

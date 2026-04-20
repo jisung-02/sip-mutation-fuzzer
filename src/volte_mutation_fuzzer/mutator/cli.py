@@ -106,10 +106,17 @@ def _render_result(case: MutatedCase) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+_STRATEGY_HELP = (
+    "Mutation strategy name. Examples: default, safe, header_targeted, "
+    "final_crlf_loss, duplicate_content_length_conflict, tail_chop_1, "
+    "tail_garbage, alias_port_desync."
+)
+
+
 @app.command("packet")
 def packet_command(
     strategy: Annotated[
-        str, typer.Option("--strategy", help="Mutation strategy name.")
+        str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
     layer: Annotated[
         str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
@@ -135,7 +142,7 @@ def packet_command(
 def request_command(
     method: SIPMethod,
     strategy: Annotated[
-        str, typer.Option("--strategy", help="Mutation strategy name.")
+        str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
     layer: Annotated[
         str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")
@@ -170,7 +177,7 @@ def response_command(
         str, typer.Option("--context", help="Required DialogContext JSON object.")
     ],
     strategy: Annotated[
-        str, typer.Option("--strategy", help="Mutation strategy name.")
+        str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
     layer: Annotated[
         str, typer.Option("--layer", help="Mutation layer: model, wire, byte, or auto.")

@@ -26,6 +26,11 @@ from volte_mutation_fuzzer.ios.contracts import IosDeviceInfo, IosSnapshotResult
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from tests.sender._server import UDPResponder
 
+REALISTIC_MT_REQUEST_URI = "sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~1"
+REALISTIC_MT_MUTATED_REQUEST_URI = (
+    "sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~9"
+)
+
 
 # ---------------------------------------------------------------------------
 # CaseGenerator tests
@@ -100,6 +105,20 @@ class CaseGeneratorTests(unittest.TestCase):
         cases = list(CaseGenerator(cfg).generate())
         for case in cases:
             self.assertEqual(case.strategy, "default")
+
+    def test_case_generator_allows_realistic_wire_and_byte_strategies(self) -> None:
+        cfg = self._config(
+            methods=("OPTIONS",),
+            layers=("wire", "byte"),
+            strategies=("final_crlf_loss", "tail_chop_1"),
+            max_cases=10,
+        )
+
+        cases = list(CaseGenerator(cfg).generate())
+        combos = {(case.layer, case.strategy) for case in cases}
+
+        self.assertIn(("wire", "final_crlf_loss"), combos)
+        self.assertIn(("byte", "tail_chop_1"), combos)
 
     def test_round_cycling_repeats_combos_with_new_seeds(self) -> None:
         """After exhausting unique combos, generator cycles with new seeds."""
@@ -432,13 +451,13 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             return_value=(8100, 8101),
         ), unittest.mock.patch.object(
             executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="wire",
-                wire_text="OPTIONS sip:111111@example.com SIP/2.0\r\n\r\n",
-                packet_bytes=None,
-                records=(),
-            ),
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="wire",
+                    wire_text=f"OPTIONS {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n\r\n",
+                    packet_bytes=None,
+                    records=(),
+                ),
         ), unittest.mock.patch.object(
             executor._sender,
             "send_artifact",
@@ -612,7 +631,7 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             strategy="default",
         )
         invite_wire = (
-            "INVITE sip:111111@example.com SIP/2.0\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
             "CSeq: 1 INVITE\r\n"
             "\r\n"
         )
@@ -1636,7 +1655,7 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         invite_wire = (
-            "INVITE sip:111111@example.com SIP/2.0\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
             "CSeq: 1 INVITE\r\n"
             "\r\n"
         )
@@ -1769,7 +1788,7 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         invite_wire = (
-            "INVITE sip:111111@example.com SIP/2.0\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
             "CSeq: 1 INVITE\r\n"
             "\r\n"
         )
@@ -1928,12 +1947,12 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         original_wire = (
-            "INVITE sip:original@example.com SIP/2.0\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
             "CSeq: 1 INVITE\r\n"
             "\r\n"
         )
         mutated_wire = (
-            "INVITE sip:mutated@example.com SIP/2.0\r\n"
+            f"INVITE {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\n"
             "CSeq: 9 INVITE\r\n"
             "\r\n"
         )
@@ -2028,7 +2047,7 @@ class CampaignExecutorTests(unittest.TestCase):
         cancel_artifact = send_mock.call_args_list[1].args[0]
         self.assertEqual(
             cancel_artifact.wire_text,
-            "CANCEL sip:mutated@example.com SIP/2.0\r\nCSeq: 9 CANCEL\r\n\r\n",
+            f"CANCEL {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\nCSeq: 9 CANCEL\r\n\r\n",
         )
 
     def test_mt_template_teardown_uses_mutated_byte_payload(self) -> None:
@@ -2055,14 +2074,16 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         original_wire = (
-            "INVITE sip:original@example.com SIP/2.0\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
             "CSeq: 1 INVITE\r\n"
             "\r\n"
         )
         mutated_bytes = (
-            b"INVITE sip:mutated@example.com SIP/2.0\r\n"
-            b"CSeq: 9 INVITE\r\n"
-            b"\r\n"
+            (
+                f"INVITE {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\n"
+                "CSeq: 9 INVITE\r\n"
+                "\r\n"
+            ).encode("utf-8")
         )
         provisional = SocketObservation(
             source="pcscf-log",
@@ -2155,7 +2176,7 @@ class CampaignExecutorTests(unittest.TestCase):
         cancel_artifact = send_mock.call_args_list[1].args[0]
         self.assertEqual(
             cancel_artifact.wire_text,
-            "CANCEL sip:mutated@example.com SIP/2.0\r\nCSeq: 9 CANCEL\r\n\r\n",
+            f"CANCEL {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\nCSeq: 9 CANCEL\r\n\r\n",
         )
 
     def test_response_reproduction_cmd_prefers_msisdn_and_cli_flags(self) -> None:

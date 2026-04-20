@@ -38,7 +38,10 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 # 퍼징 설정
 --methods <LIST>            # SIP 메서드 (OPTIONS,INVITE,MESSAGE,...)
 --layer model,wire,byte     # 변이 레이어 선택
---strategy <LIST>           # 변이 전략 (identity,default,state_breaker)
+--strategy <LIST>           # 변이 전략 (identity,default,state_breaker,safe,
+                            # header_targeted,header_whitespace_noise,
+                            # final_crlf_loss,duplicate_content_length_conflict,
+                            # tail_chop_1,tail_garbage,alias_port_desync)
 --max-cases <N>             # 최대 케이스 수 (기본: 1000)
 --timeout <SEC>             # 소켓 timeout (기본: 5.0)
 --seed-start <N>            # 시작 시드값 (재현용)
@@ -205,10 +208,44 @@ export VMF_DOCKER_TIMEOUT=30
 # 용도: 프로토콜 상태 머신 공격
 ```
 
+### realistic malformed / edge 전략
+```bash
+--strategy header_whitespace_noise
+# 헤더 구분자 주변 공백/탭을 비틀어 serializer/proxy 손상처럼 보이게 함
+
+--strategy final_crlf_loss
+# 패킷 끝의 terminal blank line을 줄여 final CRLF 손상 케이스 생성
+
+--strategy duplicate_content_length_conflict
+# Content-Length를 하나 더 붙여 상충하는 길이 해석 유도
+
+--strategy tail_chop_1
+# 마지막 1바이트만 잘라 tail truncation 재현
+
+--strategy tail_garbage
+# 짧은 replay-like suffix를 뒤에 덧붙여 parser confusion 유도
+
+--strategy alias_port_desync
+# real-UE/MT Contact alias의 port 값을 비틀어 alias-port desync 재현
+```
+
 ### 조합 사용
 ```bash
 --strategy identity,default,state_breaker
 # 여러 전략 혼합 (순서대로 적용)
+```
+
+### realistic malformed 예시
+```bash
+uv run fuzzer mutate packet --layer wire --strategy final_crlf_loss < baseline.json
+uv run fuzzer mutate packet --layer wire --strategy duplicate_content_length_conflict < baseline.json
+uv run fuzzer mutate packet --layer byte --strategy tail_chop_1 < baseline.json
+
+# MT-template / real-UE 집중 전략
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+  --impi 001010000123511 --methods INVITE --layer wire \
+  --strategy alias_port_desync --mt-invite-template a31 --ipsec-mode null \
+  --max-cases 1
 ```
 
 ## 🔄 워크플로우 예시

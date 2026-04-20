@@ -160,6 +160,73 @@ class SIPMutatorByteMutationTests(unittest.TestCase):
         self.assertIsNone(case.wire_text)
         self.assertGreaterEqual(len(case.records), 1)
 
+    def test_tail_chop_1_removes_only_last_byte(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        original_bytes = self.build_original_bytes(mutator, packet)
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=201, layer="byte", strategy="tail_chop_1"),
+        )
+
+        assert case.packet_bytes is not None
+        self.assertEqual(case.final_layer, "byte")
+        self.assertEqual(case.packet_bytes, original_bytes[:-1])
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(case.records[0].target.path, "segment:tail")
+        self.assertEqual(case.records[0].operator, "tail_chop_1")
+        self.assertEqual(case.records[0].before, original_bytes[-1:])
+        self.assertEqual(case.records[0].after, b"")
+
+    def test_tail_garbage_appends_replay_like_suffix(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        original_bytes = self.build_original_bytes(mutator, packet)
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=202, layer="byte", strategy="tail_garbage"),
+        )
+
+        assert case.packet_bytes is not None
+        suffix = case.packet_bytes[len(original_bytes) :]
+        self.assertEqual(case.final_layer, "byte")
+        self.assertTrue(case.packet_bytes.startswith(original_bytes))
+        self.assertGreater(len(suffix), 0)
+        self.assertLessEqual(len(suffix), 8)
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(case.records[0].target.path, "segment:tail")
+        self.assertEqual(case.records[0].operator, "tail_garbage")
+        self.assertEqual(case.records[0].before, b"")
+        self.assertEqual(case.records[0].after, suffix)
+
+    def test_deterministic_tail_byte_strategies_are_reproducible_by_seed(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        configs = (
+            MutationConfig(seed=211, layer="byte", strategy="tail_chop_1"),
+            MutationConfig(seed=212, layer="byte", strategy="tail_garbage"),
+        )
+
+        for config in configs:
+            with self.subTest(strategy=config.strategy):
+                first_case = mutator.mutate(packet, config)
+                second_case = mutator.mutate(packet, config)
+
+                self.assertEqual(first_case.packet_bytes, second_case.packet_bytes)
+                self.assertEqual(
+                    tuple(
+                        record.model_dump(mode="python")
+                        for record in first_case.records
+                    ),
+                    tuple(
+                        record.model_dump(mode="python")
+                        for record in second_case.records
+                    ),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
