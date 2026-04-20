@@ -45,6 +45,7 @@ RESPONSE_HEADER_POLICIES: dict[
         required_headers=frozenset({"contact", "expires"}),
         body_forbidden=True,
     ),
+    (SIPMethod.NOTIFY, 200): ResponseHeaderPolicy(body_forbidden=True),
     (SIPMethod.SUBSCRIBE, 200): ResponseHeaderPolicy(
         required_headers=frozenset({"expires"}),
         body_forbidden=True,

@@ -381,6 +381,48 @@ class SIPCatalogTests(unittest.TestCase):
                 }
             )
 
+    def test_realistic_success_and_provisional_responses_allow_empty_body(self) -> None:
+        ringing_model = RESPONSE_MODELS_BY_CODE[180]
+        ringing_packet = ringing_model.model_validate(
+            {
+                "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-180-ok")],
+                "from_": NameAddress(
+                    uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
+                    parameters={"tag": "remote"},
+                ),
+                "to": NameAddress(
+                    uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
+                    parameters={"tag": "ue"},
+                ),
+                "call_id": REALISTIC_CALL_ID_1,
+                "cseq": CSeqHeader(sequence=5, method=SIPMethod.INVITE),
+                "contact": [
+                    NameAddress(
+                        uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN)
+                    )
+                ],
+            }
+        )
+        self.assertIsNone(ringing_packet.body)
+
+        ok_model = RESPONSE_MODELS_BY_CODE[200]
+        notify_packet = ok_model.model_validate(
+            {
+                "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-notify-ok")],
+                "from_": NameAddress(
+                    uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
+                    parameters={"tag": "remote"},
+                ),
+                "to": NameAddress(
+                    uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN),
+                    parameters={"tag": "ue"},
+                ),
+                "call_id": REALISTIC_CALL_ID_2,
+                "cseq": CSeqHeader(sequence=5, method=SIPMethod.NOTIFY),
+            }
+        )
+        self.assertIsNone(notify_packet.body)
+
     def test_199_invite_response_allows_no_contact_when_reason_present(self) -> None:
         terminated_model = RESPONSE_MODELS_BY_CODE[199]
         packet = terminated_model.model_validate(

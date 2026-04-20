@@ -65,7 +65,9 @@ class BodyFactory:
     _INFO_BODY_MAP: dict[str, type[SIPBody]] = {
         DEFAULT_INFO_PACKAGE: DtmfRelayBody,
     }
-    _SDP_METHODS = frozenset({SIPMethod.INVITE, SIPMethod.PRACK, SIPMethod.UPDATE})
+    _REQUEST_SDP_METHODS = frozenset(
+        {SIPMethod.INVITE, SIPMethod.PRACK, SIPMethod.UPDATE}
+    )
 
     def select(self, ctx: BodyContext) -> type[SIPBody] | None:
         normalized_body_kind = self._normalize(ctx.body_kind)
@@ -95,7 +97,7 @@ class BodyFactory:
             return PlainTextBody
         if ctx.method == SIPMethod.PUBLISH:
             return PIdfBody
-        if ctx.method in self._SDP_METHODS:
+        if ctx.method in self._REQUEST_SDP_METHODS:
             return SDPBody
         return None
 
@@ -103,20 +105,12 @@ class BodyFactory:
         status_code = ctx.status_code
         if status_code is None:
             return None
-        if ctx.method == SIPMethod.NOTIFY and ctx.event_package:
-            body_cls = self._EVENT_BODY_MAP.get(self._normalize(ctx.event_package))
-            if body_cls is not None and 200 <= status_code < 300:
-                return body_cls
         if ctx.method == SIPMethod.INVITE and status_code == 380:
             return ImsServiceBody
-        if ctx.method in self._SDP_METHODS and (
-            status_code in {180, 183} or 200 <= status_code < 300
-        ):
+        if ctx.method == SIPMethod.INVITE and status_code in {183, 200}:
             return SDPBody
-        if ctx.method == SIPMethod.OPTIONS and status_code == 200:
+        if ctx.method == SIPMethod.UPDATE and status_code == 200:
             return SDPBody
-        if ctx.method == SIPMethod.MESSAGE:
-            return None
         return None
 
     @staticmethod

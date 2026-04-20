@@ -769,9 +769,138 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.recv_info, ("g.3gpp.iari-ref",))
         assert packet.supported is not None
         self.assertIn("100rel", packet.supported)
+        self.assertIsNone(packet.body)
+        self.assertIsNone(packet.content_type)
+        self.assertEqual(packet.content_length, 0)
         self.assertIsNotNone(packet.timestamp)
         assert packet.timestamp is not None
         self.assertGreater(packet.timestamp, 0)
+
+    def test_response_defaults_only_autogenerate_bodies_for_selected_success_cases(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+
+        options_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.OPTIONS),
+            context,
+        )
+        options_packet = RESPONSE_MODELS_BY_CODE[200].model_validate(options_defaults)
+        self.assertIsNone(options_packet.body)
+        self.assertIsNone(options_packet.content_type)
+        self.assertEqual(options_packet.content_length, 0)
+
+        notify_defaults = generator._build_response_defaults(
+            ResponseSpec(
+                status_code=200,
+                related_method=SIPMethod.NOTIFY,
+                event_package="presence",
+            ),
+            context,
+        )
+        notify_packet = RESPONSE_MODELS_BY_CODE[200].model_validate(notify_defaults)
+        self.assertIsNone(notify_packet.body)
+        self.assertIsNone(notify_packet.content_type)
+        self.assertEqual(notify_packet.content_length, 0)
+
+        invite_progress_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=183, related_method=SIPMethod.INVITE),
+            context,
+        )
+        invite_progress_packet = RESPONSE_MODELS_BY_CODE[183].model_validate(
+            invite_progress_defaults
+        )
+        self.assertEqual(invite_progress_packet.content_type, "application/sdp")
+        self.assertIsNotNone(invite_progress_packet.body)
+
+        invite_ok_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+        )
+        invite_ok_packet = RESPONSE_MODELS_BY_CODE[200].model_validate(
+            invite_ok_defaults
+        )
+        self.assertEqual(invite_ok_packet.content_type, "application/sdp")
+        self.assertIsNotNone(invite_ok_packet.body)
+
+        update_ok_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.UPDATE),
+            context,
+        )
+        update_ok_packet = RESPONSE_MODELS_BY_CODE[200].model_validate(
+            update_ok_defaults
+        )
+        self.assertEqual(update_ok_packet.content_type, "application/sdp")
+        self.assertIsNotNone(update_ok_packet.body)
+
+        alternative_service_defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=380, related_method=SIPMethod.INVITE),
+            context,
+        )
+        alternative_service_packet = RESPONSE_MODELS_BY_CODE[380].model_validate(
+            alternative_service_defaults
+        )
+        self.assertEqual(
+            alternative_service_packet.content_type,
+            "application/3gpp-ims+xml",
+        )
+        self.assertIsNotNone(alternative_service_packet.body)
+
+    def test_response_generation_rejects_missing_required_body(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+
+        for body in (None, ""):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "response policy requires a body",
+                ):
+                    generator.generate_response(
+                        ResponseSpec(
+                            status_code=183,
+                            related_method=SIPMethod.INVITE,
+                            overrides={"body": body, "content_type": "text/plain"},
+                        ),
+                        context,
+                    )
+
+    def test_response_generation_rejects_override_body_for_forbidden_response(
+        self,
+    ) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+
+        for body in ("unexpected notify payload", ""):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "response policy forbids a body",
+                ):
+                    generator.generate_response(
+                        ResponseSpec(
+                            status_code=200,
+                            related_method=SIPMethod.NOTIFY,
+                            overrides={
+                                "body": body,
+                                "content_type": "text/plain",
+                            },
+                        ),
+                        context,
+                    )
 
     def test_request_defaults_populate_contact_for_bye(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
@@ -831,6 +960,8 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
         self.assertIsNone(packet.contact)
         self.assertIsNone(packet.body)
+        self.assertIsNone(packet.content_type)
+        self.assertEqual(packet.content_length, 0)
 
 
 if __name__ == "__main__":

@@ -112,6 +112,18 @@ class SIPGenerator:
         if spec.has_overrides:
             payload = self._apply_overrides(payload, spec.overrides)
         self._populate_body_header_defaults(payload)
+        policy = get_response_policy(spec.related_method, spec.status_code)
+        body = payload.get("body")
+        if policy.body_forbidden and body is not None:
+            raise ValueError(
+                "response policy forbids a body for "
+                f"{spec.related_method.value} {spec.status_code}"
+            )
+        if policy.body_required and (body is None or body == ""):
+            raise ValueError(
+                "response policy requires a body for "
+                f"{spec.related_method.value} {spec.status_code}"
+            )
 
         # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
         return model.model_validate(payload)

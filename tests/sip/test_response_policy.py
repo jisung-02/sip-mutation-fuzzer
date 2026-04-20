@@ -13,6 +13,14 @@ class ResponsePolicyTests(unittest.TestCase):
         cases = (
             (
                 SIPMethod.INVITE,
+                180,
+                frozenset({"contact"}),
+                frozenset(),
+                False,
+                False,
+            ),
+            (
+                SIPMethod.INVITE,
                 200,
                 frozenset({"contact"}),
                 frozenset(),
@@ -50,6 +58,22 @@ class ResponsePolicyTests(unittest.TestCase):
                 frozenset(),
                 True,
                 False,
+            ),
+            (
+                SIPMethod.UPDATE,
+                200,
+                frozenset(),
+                frozenset(),
+                True,
+                False,
+            ),
+            (
+                SIPMethod.NOTIFY,
+                200,
+                frozenset(),
+                frozenset(),
+                False,
+                True,
             ),
             (
                 SIPMethod.INVITE,

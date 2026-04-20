@@ -126,8 +126,11 @@ class BodyFactoryTests(unittest.TestCase):
             )
 
     def test_select_response_body_types(self) -> None:
+        self.assertIsNone(
+            self.factory.select(BodyContext(method=SIPMethod.INVITE, status_code=180))
+        )
         self.assertIs(
-            self.factory.select(BodyContext(method=SIPMethod.INVITE, status_code=180)),
+            self.factory.select(BodyContext(method=SIPMethod.INVITE, status_code=183)),
             SDPBody,
         )
         self.assertIs(
@@ -135,16 +138,27 @@ class BodyFactoryTests(unittest.TestCase):
             SDPBody,
         )
         self.assertIs(
-            self.factory.select(BodyContext(method=SIPMethod.PRACK, status_code=204)),
+            self.factory.select(BodyContext(method=SIPMethod.INVITE, status_code=200)),
             SDPBody,
         )
-        self.assertIs(
-            self.factory.select(BodyContext(method=SIPMethod.OPTIONS, status_code=200)),
-            SDPBody,
+        self.assertIsNone(
+            self.factory.select(BodyContext(method=SIPMethod.PRACK, status_code=204))
+        )
+        self.assertIsNone(
+            self.factory.select(
+                BodyContext(
+                    method=SIPMethod.NOTIFY,
+                    status_code=200,
+                    event_package="presence",
+                )
+            )
         )
         self.assertIs(
             self.factory.select(BodyContext(method=SIPMethod.INVITE, status_code=380)),
             ImsServiceBody,
+        )
+        self.assertIsNone(
+            self.factory.select(BodyContext(method=SIPMethod.OPTIONS, status_code=200))
         )
         self.assertIsNone(
             self.factory.select(BodyContext(method=SIPMethod.MESSAGE, status_code=200))
