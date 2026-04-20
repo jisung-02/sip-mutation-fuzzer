@@ -171,6 +171,9 @@ class DialogOrchestrator:
                     error=f"mutate failed: {exc}",
                 )
 
+        resolved_profile = getattr(mutated, "profile", None)
+        resolved_strategy = getattr(mutated, "strategy", None)
+
         # Build payload
         if mutated is not None:
             artifact = self._artifact_from_mutated(mutated)
@@ -200,6 +203,8 @@ class DialogOrchestrator:
                 method=step.method,
                 role="send",
                 success=False,
+                profile=resolved_profile,
+                strategy=resolved_strategy,
                 error=f"sendto failed: {exc}",
             )
 
@@ -230,6 +235,8 @@ class DialogOrchestrator:
                     method=step.method,
                     role="send",
                     send_result=send_result,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
                     success=False,
                     error=f"expected {step.expect_status_min}-{step.expect_status_max}, got {got}",
                 )
@@ -239,6 +246,8 @@ class DialogOrchestrator:
             method=step.method,
             role="send",
             send_result=send_result,
+            profile=resolved_profile,
+            strategy=resolved_strategy,
             success=True,
         )
 

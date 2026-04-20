@@ -20,6 +20,11 @@ from volte_mutation_fuzzer.campaign.core import (
     ResultStore,
     _SUPPORTED_STRATEGIES,
 )
+from volte_mutation_fuzzer.dialog.contracts import (
+    DialogExchangeResult,
+    DialogScenarioType,
+    DialogStepResult,
+)
 from volte_mutation_fuzzer.sender.contracts import TargetEndpoint
 from volte_mutation_fuzzer.sender.contracts import SocketObservation, SendReceiveResult
 from volte_mutation_fuzzer.ios.contracts import IosDeviceInfo, IosSnapshotResult
@@ -633,6 +638,136 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
 
         context = evaluate_mock.call_args.args[1]
         self.assertEqual(context.log_grace_seconds, 2.0)
+
+    def test_execute_case_uses_resolved_dialog_profile_and_strategy_on_success(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("BYE",),
+                max_cases=1,
+                results_dir=tmpdir,
+                output_name="test",
+            )
+            executor = CampaignExecutor(cfg)
+            spec = CaseSpec(
+                case_id=0,
+                seed=0,
+                method="BYE",
+                layer="model",
+                strategy="default",
+            )
+            send_result = SendReceiveResult(
+                target=TargetEndpoint(host="127.0.0.1", port=5060),
+                artifact_kind="packet",
+                bytes_sent=120,
+                outcome="success",
+                responses=(
+                    SocketObservation(
+                        status_code=200,
+                        reason_phrase="OK",
+                        raw_text="SIP/2.0 200 OK\r\n\r\n",
+                        classification="success",
+                    ),
+                ),
+                send_started_at=100.1,
+                send_completed_at=100.2,
+            )
+            exchange = DialogExchangeResult(
+                scenario_type=DialogScenarioType.invite_dialog,
+                setup_results=(),
+                fuzz_result=DialogStepResult(
+                    step_index=0,
+                    method="BYE",
+                    role="send",
+                    send_result=send_result,
+                    profile="delivery_preserving",
+                    strategy="final_crlf_loss",
+                    success=True,
+                ),
+                teardown_results=(),
+                setup_succeeded=True,
+            )
+
+            with unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                return_value=exchange,
+            ), unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ), unittest.mock.patch.object(
+                executor,
+                "_persist_case_artifacts",
+                side_effect=lambda _spec, case_result, **kwargs: case_result,
+            ):
+                result = executor._execute_case(spec)
+
+        self.assertEqual(result.profile, "delivery_preserving")
+        self.assertEqual(result.strategy, "final_crlf_loss")
+        self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
+        self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
+
+    def test_execute_case_uses_resolved_dialog_profile_and_strategy_on_missing_send_result(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("BYE",),
+                max_cases=1,
+                results_dir=tmpdir,
+                output_name="test",
+            )
+            executor = CampaignExecutor(cfg)
+            spec = CaseSpec(
+                case_id=0,
+                seed=0,
+                method="BYE",
+                layer="model",
+                strategy="default",
+            )
+            exchange = DialogExchangeResult(
+                scenario_type=DialogScenarioType.invite_dialog,
+                setup_results=(),
+                fuzz_result=DialogStepResult(
+                    step_index=0,
+                    method="BYE",
+                    role="send",
+                    profile="delivery_preserving",
+                    strategy="final_crlf_loss",
+                    success=False,
+                    error="send failed",
+                ),
+                teardown_results=(),
+                setup_succeeded=True,
+            )
+
+            with unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                return_value=exchange,
+            ), unittest.mock.patch.object(
+                executor,
+                "_persist_case_artifacts",
+                side_effect=lambda _spec, case_result, **kwargs: case_result,
+            ):
+                result = executor._execute_case(spec)
+
+        self.assertEqual(result.profile, "delivery_preserving")
+        self.assertEqual(result.strategy, "final_crlf_loss")
+        self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
+        self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
+        self.assertEqual(result.reason, "dialog fuzz step produced no send result")
 
     def test_execute_mt_template_case_records_wall_time_after_evidence_collection(
         self,

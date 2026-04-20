@@ -48,6 +48,8 @@ class DialogStepResult(BaseModel):
     method: str
     role: Literal["send", "expect"]
     send_result: SendReceiveResult | None = None
+    profile: str | None = None
+    strategy: str | None = None
     success: bool
     error: str | None = None
 

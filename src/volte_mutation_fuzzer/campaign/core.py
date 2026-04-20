@@ -1305,6 +1305,16 @@ class CampaignExecutor:
 
         fuzz_result = exchange.fuzz_result
         send_result = fuzz_result.send_result if fuzz_result is not None else None
+        resolved_profile = (
+            getattr(fuzz_result, "profile", spec.profile)
+            if fuzz_result is not None
+            else spec.profile
+        )
+        resolved_strategy = (
+            getattr(fuzz_result, "strategy", spec.strategy)
+            if fuzz_result is not None
+            else spec.strategy
+        )
 
         if send_result is None:
             return self._build_case_result(
@@ -1312,7 +1322,13 @@ class CampaignExecutor:
                 verdict="unknown",
                 reason="dialog fuzz step produced no send result",
                 elapsed_ms=0.0,
-                reproduction_cmd=self._build_reproduction_cmd(spec),
+                reproduction_cmd=self._build_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
                 timestamp=timestamp,
                 pcap_path=pcap_path_saved,
                 case_wall_ms=self._case_wall_ms(case_started_monotonic),
@@ -1344,7 +1360,13 @@ class CampaignExecutor:
             elapsed_ms=verdict.elapsed_ms,
             process_alive=verdict.process_alive,
             raw_response=raw_response,
-            reproduction_cmd=self._build_reproduction_cmd(spec),
+            reproduction_cmd=self._build_reproduction_cmd(
+                spec,
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+            ),
+            profile=resolved_profile,
+            strategy=resolved_strategy,
             details=getattr(verdict, "details", {}) or {},
             timestamp=timestamp,
             pcap_path=pcap_path_saved,

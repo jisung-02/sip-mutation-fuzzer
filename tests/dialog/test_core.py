@@ -1,11 +1,16 @@
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
+from volte_mutation_fuzzer.dialog.contracts import DialogStep
 from volte_mutation_fuzzer.dialog.core import DialogOrchestrator
 from volte_mutation_fuzzer.dialog.scenarios import scenario_for_method
+from volte_mutation_fuzzer.generator.contracts import DialogContext
 from volte_mutation_fuzzer.generator.contracts import GeneratorSettings
 from volte_mutation_fuzzer.generator.core import SIPGenerator
 from volte_mutation_fuzzer.mutator.contracts import MutationConfig
 from volte_mutation_fuzzer.mutator.core import SIPMutator
+from volte_mutation_fuzzer.sender.contracts import SendArtifact
 from volte_mutation_fuzzer.sender.contracts import TargetEndpoint
 
 from tests.dialog._dialog_server import (
@@ -73,6 +78,87 @@ class TestInviteDialogBye(unittest.TestCase):
             methods_received.append(first_line.split(" ", 1)[0])
         assert "INVITE" in methods_received
         assert "BYE" in methods_received
+
+    def test_fuzz_step_carries_resolved_metadata_on_success(self) -> None:
+        generator, mutator = _make_components()
+        target = _make_target(self.server.host, self.server.port)
+        orchestrator = DialogOrchestrator(generator, mutator, target)
+        step = DialogStep(method="BYE", role="send", is_fuzz_target=True)
+        packet = SimpleNamespace(call_id="call-1", cseq=SimpleNamespace(sequence=1))
+        mutated = SimpleNamespace(
+            profile="delivery_preserving",
+            strategy="final_crlf_loss",
+        )
+        sock = mock.Mock()
+        mutation_config = MutationConfig(seed=42, strategy="default", layer="model")
+
+        with mock.patch.object(
+            generator,
+            "generate_request",
+            return_value=packet,
+        ), mock.patch.object(
+            mutator,
+            "mutate",
+            return_value=mutated,
+        ), mock.patch.object(
+            orchestrator,
+            "_artifact_from_mutated",
+            return_value=SendArtifact.from_wire_text("BYE sip:test SIP/2.0\r\n\r\n"),
+        ), mock.patch(
+            "volte_mutation_fuzzer.dialog.core.read_udp_observations",
+            return_value=[],
+        ):
+            result = orchestrator._send_step(
+                sock,
+                step,
+                0,
+                DialogContext(),
+                mutation_config=mutation_config,
+            )
+
+        assert result.success is True
+        assert result.profile == "delivery_preserving"
+        assert result.strategy == "final_crlf_loss"
+
+    def test_fuzz_step_carries_resolved_metadata_on_send_failure(self) -> None:
+        generator, mutator = _make_components()
+        target = _make_target(self.server.host, self.server.port)
+        orchestrator = DialogOrchestrator(generator, mutator, target)
+        step = DialogStep(method="BYE", role="send", is_fuzz_target=True)
+        packet = SimpleNamespace(call_id="call-1", cseq=SimpleNamespace(sequence=1))
+        mutated = SimpleNamespace(
+            profile="delivery_preserving",
+            strategy="final_crlf_loss",
+        )
+        sock = mock.Mock()
+        sock.sendto.side_effect = OSError("send failed")
+        mutation_config = MutationConfig(seed=42, strategy="default", layer="model")
+
+        with mock.patch.object(
+            generator,
+            "generate_request",
+            return_value=packet,
+        ), mock.patch.object(
+            mutator,
+            "mutate",
+            return_value=mutated,
+        ), mock.patch.object(
+            orchestrator,
+            "_artifact_from_mutated",
+            return_value=SendArtifact.from_wire_text("BYE sip:test SIP/2.0\r\n\r\n"),
+        ):
+            result = orchestrator._send_step(
+                sock,
+                step,
+                0,
+                DialogContext(),
+                mutation_config=mutation_config,
+            )
+
+        assert result.success is False
+        assert result.profile == "delivery_preserving"
+        assert result.strategy == "final_crlf_loss"
+        assert "sendto failed" in (result.error or "")
 
 
 class TestInviteDialogUpdate(unittest.TestCase):
