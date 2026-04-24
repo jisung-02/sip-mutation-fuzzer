@@ -304,6 +304,9 @@ class SIPSenderReactorTests(unittest.TestCase):
                             "native-ipsec:send:ok",
                             "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101",
                         ),
+                        "response_bytes": None,
+                        "response_peer_host": None,
+                        "response_peer_port": None,
                     },
                 )(),
             ) as mock_send,
@@ -462,7 +465,13 @@ class SIPSenderReactorTests(unittest.TestCase):
                 return_value=type(
                     "NativeSendResult",
                     (),
-                    {"payload_size": len(b"normalized-payload"), "observer_events": ()},
+                    {
+                        "payload_size": len(b"normalized-payload"),
+                        "observer_events": (),
+                        "response_bytes": None,
+                        "response_peer_host": None,
+                        "response_peer_port": None,
+                    },
                 )(),
             ),
             patch(

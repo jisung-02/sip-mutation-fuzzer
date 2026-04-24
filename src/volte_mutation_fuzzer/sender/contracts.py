@@ -16,7 +16,7 @@ from volte_mutation_fuzzer.sip.render import PacketModel
 TargetMode = Literal["softphone", "real-ue-direct"]
 TransportProtocol = Literal["UDP", "TCP"]
 ArtifactKind = Literal["packet", "wire", "bytes"]
-ObservationSource = Literal["socket", "pcscf-log"]
+ObservationSource = Literal["socket", "pcscf-log", "native-ipsec-socket"]
 ObservationClass = Literal[
     "provisional",
     "success",

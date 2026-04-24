@@ -97,7 +97,27 @@ except OSError as exc:
     sys.stderr.write(f"bind({src_ip}:{src_port}) failed: {exc}\n")
     sys.exit(2)
 sock.sendto(payload, (dst_ip, dst_port))
-sock.close()
+
+# Best-effort response capture on the same bound socket. When kamailio also
+# binds this protected port (e.g. P-CSCF's 6100/6101), SO_REUSEPORT makes the
+# kernel hash-pick one listener per inbound datagram, so any individual reply
+# may land on kamailio instead of us. In practice for A16 MESSAGE replies
+# that's fine — fuzzer correlation is best-effort — and we still emit a
+# length-prefixed frame so upstream can distinguish "no reply" from "timed
+# out while recv".
+try:
+    data, peer = sock.recvfrom(65535)
+    sys.stdout.buffer.write(len(data).to_bytes(4, "big"))
+    sys.stdout.buffer.write(peer[0].encode("ascii"))
+    sys.stdout.buffer.write(b"\n")
+    sys.stdout.buffer.write(peer[1].to_bytes(2, "big"))
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+except socket.timeout:
+    sys.stdout.buffer.write((0).to_bytes(4, "big"))
+    sys.stdout.buffer.flush()
+finally:
+    sock.close()
 """
 
 _TCP_DRIVER_SCRIPT: Final[str] = r"""
@@ -155,6 +175,12 @@ class ArtifactCorrelation:
 class NativeIPsecSendResult:
     payload_size: int
     observer_events: tuple[str, ...]
+    # Best-effort response captured on the same bound UDP socket inside the
+    # P-CSCF netns. None when the driver timed out waiting, when the UE
+    # didn't reply, or when SO_REUSEPORT hashed the reply to kamailio.
+    response_bytes: bytes | None = None
+    response_peer_host: str | None = None
+    response_peer_port: int | None = None
 
 
 @dataclass(frozen=True)
@@ -376,7 +402,9 @@ def send_via_native_ipsec(
             driver,
             input=stdin_data,
             capture_output=True,
-            timeout=timeout_seconds,
+            # Grace over the socket-level timeout so the driver can finish
+            # recvfrom + frame output before subprocess reaps it.
+            timeout=timeout_seconds + 1.5,
             check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
@@ -390,14 +418,55 @@ def send_via_native_ipsec(
             f"native IPsec injector failed: {stderr_text or 'unknown error'}",
             observer_events=("native-ipsec:send:failed:returncode",),
         )
+
+    response_bytes, peer_host, peer_port = _parse_driver_response(proc.stdout or b"")
+    observer_events = [
+        "native-ipsec:send:ok",
+        f"native-ipsec:send:transport:{transport.lower()}",
+        f"native-ipsec:tuple:{src_ip}:{src_port}->{dst_ip}:{dst_port}",
+    ]
+    if response_bytes is not None:
+        observer_events.append(
+            f"native-ipsec:recv:ok:{peer_host}:{peer_port}:{len(response_bytes)}B"
+        )
+
     return NativeIPsecSendResult(
         payload_size=len(payload),
-        observer_events=(
-            "native-ipsec:send:ok",
-            f"native-ipsec:send:transport:{transport.lower()}",
-            f"native-ipsec:tuple:{src_ip}:{src_port}->{dst_ip}:{dst_port}",
-        ),
+        observer_events=tuple(observer_events),
+        response_bytes=response_bytes,
+        response_peer_host=peer_host,
+        response_peer_port=peer_port,
     )
+
+
+def _parse_driver_response(
+    stdout: bytes,
+) -> tuple[bytes | None, str | None, int | None]:
+    """Decode the length-prefixed response frame emitted by _UDP_DRIVER_SCRIPT.
+
+    Frame layout when a reply was received:
+        uint32 length_big_endian
+        ascii peer_host + b"\n"
+        uint16 peer_port_big_endian
+        bytes  payload
+    Frame layout on timeout: uint32 length=0 (no peer, no payload).
+    Returns (None, None, None) on any parse issue.
+    """
+    if len(stdout) < 4:
+        return None, None, None
+    length = int.from_bytes(stdout[:4], "big")
+    if length == 0:
+        return None, None, None
+    rest = stdout[4:]
+    nl = rest.find(b"\n")
+    if nl < 0 or len(rest) < nl + 1 + 2 + length:
+        return None, None, None
+    peer_host = rest[:nl].decode("ascii", errors="replace")
+    peer_port = int.from_bytes(rest[nl + 1 : nl + 3], "big")
+    payload = rest[nl + 3 : nl + 3 + length]
+    if len(payload) != length:
+        return None, None, None
+    return payload, peer_host, peer_port
 
 
 def _parse_pcscf_log_observation(

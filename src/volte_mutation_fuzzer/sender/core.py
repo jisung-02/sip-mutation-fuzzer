@@ -498,23 +498,47 @@ class SIPSenderReactor:
             )
             observer_events.extend(native_result.observer_events)
 
-            observe_timeout = round(max(deadline - time.monotonic(), 0.0), 6)
-            if observe_timeout <= 0.0:
-                return resolved_target, payload, [], tuple(observer_events)
+            observations: list[SocketObservation] = []
 
-            observations = list(
-                observe_pcscf_log_responses(
-                    container=container,
-                    since=started_iso,
-                    ue_ip=resolved_host,
-                    ue_port=resolved_port,
-                    correlation=correlation,
-                    timeout_seconds=observe_timeout,
-                    poll_interval_seconds=min(observe_timeout, 0.25),
-                    collect_all_responses=collect_all_responses,
-                    observer_events=observer_events,
+            # Native UDP now captures replies directly on the bound socket.
+            # kamailio would otherwise silently drop them as stray responses
+            # (no matching transaction), so the log observer alone reports
+            # every case as timeout even when the UE replied. Parse the
+            # driver-captured bytes into a first-class socket observation and
+            # keep the log observer as a supplementary source.
+            if native_result.response_bytes is not None:
+                peer_host = native_result.response_peer_host or resolved_host
+                peer_port = (
+                    native_result.response_peer_port
+                    if native_result.response_peer_port is not None
+                    else resolved_port
                 )
-            )
+                observation = parse_sip_response(
+                    native_result.response_bytes,
+                    (peer_host, peer_port),
+                )
+                observations.append(
+                    observation.model_copy(update={"source": "native-ipsec-socket"})
+                )
+                observer_events.append("native-ipsec:recv:observation-added")
+
+            observe_timeout = round(max(deadline - time.monotonic(), 0.0), 6)
+            if observe_timeout > 0.0 and (
+                not observations or collect_all_responses
+            ):
+                observations.extend(
+                    observe_pcscf_log_responses(
+                        container=container,
+                        since=started_iso,
+                        ue_ip=resolved_host,
+                        ue_port=resolved_port,
+                        correlation=correlation,
+                        timeout_seconds=observe_timeout,
+                        poll_interval_seconds=min(observe_timeout, 0.25),
+                        collect_all_responses=collect_all_responses,
+                        observer_events=observer_events,
+                    )
+                )
         except RealUEDirectError as exc:
             raise type(exc)(
                 str(exc),
