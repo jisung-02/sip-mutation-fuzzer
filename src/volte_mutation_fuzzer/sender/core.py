@@ -285,16 +285,19 @@ class SIPSenderReactor:
         resolved = resolver.resolve(target)
         resolved_port = resolved.port
         if target.ipsec_mode == "native" and target.msisdn is not None:
-            port_pc, port_ps = resolver.resolve_protected_ports(
+            _port_pc, port_ps = resolver.resolve_protected_ports(
                 target.msisdn, ue_ip=resolved.host,
             )
-            # For TCP native, target the UE server port (port_ps).
-            # kamailio typically holds a persistent TCP ESTAB on
-            # (pcscf:5100 ↔ ue:port_pc), so reusing port_pc hits EADDRNOTAVAIL
-            # on our SOCK_STREAM connect. port_ps is UE's UAS listener where
-            # inbound requests belong anyway, and no kamailio 4-tuple
-            # conflicts there. UDP keeps port_pc for A31 back-compat.
-            resolved_port = port_ps if target.transport == "TCP" else port_pc
+            # Inbound P-CSCF→UE SIP requests belong on the UE's UAS listener
+            # (port_ps) regardless of transport. port_pc is UE's UAC (outbound)
+            # port and spec-strict UEs (A16, Pixel) do not expose a server
+            # listener there — UDP datagrams addressed to port_pc silently
+            # drop. Verified on A16: ESP to port_ps elicits a real SIP reply,
+            # ESP to port_pc times out.
+            # TCP benefits doubly: kamailio's persistent ESTAB on
+            # (pcscf:5100 ↔ ue:port_pc) would also block a SOCK_STREAM connect
+            # reusing that 4-tuple.
+            resolved_port = port_ps
         resolved_target = target.model_copy(
             update={
                 "host": resolved.host,

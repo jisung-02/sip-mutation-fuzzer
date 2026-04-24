@@ -262,8 +262,8 @@ class SIPSenderReactorTests(unittest.TestCase):
                     {
                         "ue_ip": "10.20.20.8",
                         "pcscf_ip": "172.22.0.21",
-                        "port_map": {8100: 5103},
-                        "observer_events": ("native-ipsec:port-map:8100->5103",),
+                        "port_map": {8101: 5103},
+                        "observer_events": ("native-ipsec:port-map:8101->5103",),
                         "pcscf_port_for": staticmethod(lambda _ue_port: 5103),
                     },
                 )(),
@@ -277,7 +277,7 @@ class SIPSenderReactorTests(unittest.TestCase):
                         "pcscf_port": 5103,
                         "observer_events": (
                             "native-ipsec:preflight:ok:pcscf",
-                            "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100",
+                            "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101",
                         ),
                     },
                 )(),
@@ -302,7 +302,7 @@ class SIPSenderReactorTests(unittest.TestCase):
                         "payload_size": len(b"normalized-payload"),
                         "observer_events": (
                             "native-ipsec:send:ok",
-                            "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100",
+                            "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101",
                         ),
                     },
                 )(),
@@ -313,7 +313,7 @@ class SIPSenderReactorTests(unittest.TestCase):
                     SocketObservation(
                         source="pcscf-log",
                         remote_host="10.20.20.8",
-                        remote_port=8100,
+                        remote_port=8101,
                         status_code=200,
                         reason_phrase="OK",
                         headers={},
@@ -334,7 +334,7 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.assertEqual(result.outcome, "success")
         self.assertEqual(result.bytes_sent, len(b"normalized-payload"))
         self.assertEqual(result.target.host, "10.20.20.8")
-        self.assertEqual(result.target.port, 8100)
+        self.assertEqual(result.target.port, 8101)
         self.assertEqual(len(result.responses), 1)
         self.assertEqual(result.responses[0].status_code, 200)
         self.assertIsNotNone(result.final_response)
@@ -344,7 +344,7 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.assertIn("native-ipsec:preflight:ok:pcscf", result.observer_events)
         self.assertIn("native-ipsec:send:ok", result.observer_events)
         self.assertTrue(
-            any(event.startswith("native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100") for event in result.observer_events)
+            any(event.startswith("native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101") for event in result.observer_events)
         )
         mock_resolve.assert_called_once()
         mock_resolve_ports.assert_called_once_with("111111", ue_ip="10.20.20.8")
@@ -354,13 +354,13 @@ class SIPSenderReactorTests(unittest.TestCase):
             env=self.reactor._env,
         )
         mock_preflight.assert_called_once()
-        self.assertEqual(mock_preflight.call_args.kwargs["ue_port"], 8100)
+        self.assertEqual(mock_preflight.call_args.kwargs["ue_port"], 8101)
         mock_send.assert_called_once_with(
             container="legacy-netns",
             src_ip="172.22.0.21",
             src_port=5103,
             dst_ip="10.20.20.8",
-            dst_port=8100,
+            dst_port=8101,
             payload=b"normalized-payload",
             timeout_seconds=0.4,
             transport="UDP",
@@ -376,7 +376,7 @@ class SIPSenderReactorTests(unittest.TestCase):
             container="legacy-netns",
             since=mock_observe.call_args.kwargs["since"],
             ue_ip="10.20.20.8",
-            ue_port=8100,
+            ue_port=8101,
             correlation=mock_observe.call_args.kwargs["correlation"],
             timeout_seconds=0.15,
             poll_interval_seconds=0.15,
@@ -385,7 +385,7 @@ class SIPSenderReactorTests(unittest.TestCase):
         )
         self.assertEqual(mock_observe.call_args.kwargs["container"], "legacy-netns")
         self.assertEqual(mock_observe.call_args.kwargs["ue_ip"], "10.20.20.8")
-        self.assertEqual(mock_observe.call_args.kwargs["ue_port"], 8100)
+        self.assertEqual(mock_observe.call_args.kwargs["ue_port"], 8101)
         self.assertEqual(mock_observe.call_args.kwargs["collect_all_responses"], False)
         self.assertEqual(mock_observe.call_args.kwargs["timeout_seconds"], 0.15)
         self.assertAlmostEqual(
@@ -526,8 +526,8 @@ class SIPSenderReactorTests(unittest.TestCase):
                     {
                         "ue_ip": "10.20.20.8",
                         "pcscf_ip": "172.22.0.21",
-                        "port_map": {8100: 5103},
-                        "observer_events": ("native-ipsec:port-map:8100->5103",),
+                        "port_map": {8101: 5103},
+                        "observer_events": ("native-ipsec:port-map:8101->5103",),
                         "pcscf_port_for": staticmethod(lambda _ue_port: 5103),
                     },
                 )(),
@@ -541,7 +541,7 @@ class SIPSenderReactorTests(unittest.TestCase):
                         "pcscf_port": 5103,
                         "observer_events": (
                             "native-ipsec:preflight:ok:legacy-netns",
-                            "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100",
+                            "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101",
                         ),
                     },
                 )(),
@@ -575,10 +575,10 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.assertEqual(result.outcome, "send_error")
         self.assertIn("native injector exploded", result.error or "")
         self.assertIn("resolver:static:10.20.20.8:5060", result.observer_events)
-        self.assertIn("native-ipsec:port-map:8100->5103", result.observer_events)
+        self.assertIn("native-ipsec:port-map:8101->5103", result.observer_events)
         self.assertIn("native-ipsec:preflight:ok:legacy-netns", result.observer_events)
         self.assertEqual(result.target.host, "10.20.20.8")
-        self.assertEqual(result.target.port, 8100)
+        self.assertEqual(result.target.port, 8101)
 
 
 if __name__ == "__main__":
