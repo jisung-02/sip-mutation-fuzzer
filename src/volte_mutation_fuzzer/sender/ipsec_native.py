@@ -34,9 +34,22 @@ _LOG_HEADER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b(Call-ID|CSeq|Via):\s*(.*?)(?=\s+(?:Call-ID|CSeq|Via):|$)",
     re.IGNORECASE,
 )
-_RAW_SOCKET_PROBE_SCRIPT: Final[str] = (
+# Earlier iterations of this module used SOCK_RAW + IP_HDRINCL to spoof the
+# protected source port. That path silently *bypasses* Linux xfrm output
+# processing, so "native IPsec" was in fact shipping plaintext UDP on the
+# wire — it only appeared to work against lenient UEs (e.g. the original
+# Galaxy A31) that also accepted plaintext on the protected ports. Spec-strict
+# UEs (Galaxy A16, Pixel) drop those plaintext datagrams and every case times
+# out.
+#
+# The correct approach is to use a normal kernel UDP socket inside the P-CSCF
+# netns with an explicit bind to the protected source port. The installed
+# xfrm OUT policy then auto-encapsulates outbound traffic as ESP, which is
+# what the UE actually expects. SO_REUSEPORT lets us share the port with
+# kamailio when its own UDP listener has already bound it.
+_UDP_DGRAM_PROBE_SCRIPT: Final[str] = (
     "import socket\n"
-    "sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)\n"
+    "sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
     "sock.close()\n"
     "print('ok')\n"
 )
@@ -53,21 +66,10 @@ _TCP_STREAM_PROBE_SCRIPT: Final[str] = (
     "sock.close()\n"
     "print('ok')\n"
 )
-_RAW_DRIVER_SCRIPT: Final[str] = r"""
-import base64
+_UDP_DRIVER_SCRIPT: Final[str] = r"""
 import socket
 import struct
 import sys
-
-
-def _checksum(data: bytes) -> int:
-    if len(data) % 2:
-        data += b"\x00"
-    total = 0
-    for i in range(0, len(data), 2):
-        total += (data[i] << 8) + data[i + 1]
-        total = (total & 0xFFFF) + (total >> 16)
-    return (~total) & 0xFFFF
 
 
 src_ip = sys.argv[1]
@@ -82,55 +84,19 @@ if len(length_bytes) < 4:
 payload_len = struct.unpack(">I", length_bytes)[0]
 payload = sys.stdin.buffer.read(payload_len)
 
-udp_length = 8 + len(payload)
-udp_header = struct.pack("!HHHH", src_port, dst_port, udp_length, 0)
-
-version_ihl = (4 << 4) | 5
-tos = 0
-total_length = 20 + udp_length
-identification = 0
-flags_fragment = 0
-ttl = 64
-protocol = socket.IPPROTO_UDP
-header_checksum = 0
-src_addr = socket.inet_aton(src_ip)
-dst_addr = socket.inet_aton(dst_ip)
-ip_header = struct.pack(
-    "!BBHHHBBH4s4s",
-    version_ihl,
-    tos,
-    total_length,
-    identification,
-    flags_fragment,
-    ttl,
-    protocol,
-    header_checksum,
-    src_addr,
-    dst_addr,
-)
-header_checksum = _checksum(ip_header)
-ip_header = struct.pack(
-    "!BBHHHBBH4s4s",
-    version_ihl,
-    tos,
-    total_length,
-    identification,
-    flags_fragment,
-    ttl,
-    protocol,
-    header_checksum,
-    src_addr,
-    dst_addr,
-)
-
-pseudo_header = struct.pack("!4s4sBBH", src_addr, dst_addr, 0, protocol, udp_length)
-udp_checksum = _checksum(pseudo_header + udp_header + payload)
-udp_header = struct.pack("!HHHH", src_port, dst_port, udp_length, udp_checksum)
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
-sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+except (OSError, AttributeError):
+    pass
 sock.settimeout(timeout_seconds)
-sock.sendto(ip_header + udp_header + payload, (dst_ip, dst_port))
+try:
+    sock.bind((src_ip, src_port))
+except OSError as exc:
+    sys.stderr.write(f"bind({src_ip}:{src_port}) failed: {exc}\n")
+    sys.exit(2)
+sock.sendto(payload, (dst_ip, dst_port))
 sock.close()
 """
 
@@ -339,7 +305,7 @@ def preflight_native_ipsec_target(
         )
 
     probe_script = (
-        _RAW_SOCKET_PROBE_SCRIPT if transport == "UDP" else _TCP_STREAM_PROBE_SCRIPT
+        _UDP_DGRAM_PROBE_SCRIPT if transport == "UDP" else _TCP_STREAM_PROBE_SCRIPT
     )
     probe_label = "raw socket" if transport == "UDP" else "stream socket"
     try:
@@ -389,7 +355,7 @@ def send_via_native_ipsec(
     timeout_seconds: float,
     transport: Literal["UDP", "TCP"] = "UDP",
 ) -> NativeIPsecSendResult:
-    driver_script = _RAW_DRIVER_SCRIPT if transport == "UDP" else _TCP_DRIVER_SCRIPT
+    driver_script = _UDP_DRIVER_SCRIPT if transport == "UDP" else _TCP_DRIVER_SCRIPT
     driver = [
         "docker",
         "exec",
