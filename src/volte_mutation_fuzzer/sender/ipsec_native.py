@@ -40,6 +40,19 @@ _RAW_SOCKET_PROBE_SCRIPT: Final[str] = (
     "sock.close()\n"
     "print('ok')\n"
 )
+
+# TCP native path uses kernel SOCK_STREAM inside the P-CSCF netns so the
+# installed xfrm SA encrypts outbound traffic automatically. Raw TCP with a
+# manual 3-way handshake is technically possible but the kernel RST on
+# source-host would fight us; reusing the kernel TCP stack side-steps that.
+# SO_REUSEPORT is attempted so we can share the protected source port with
+# kamailio when it already has a listener bound there.
+_TCP_STREAM_PROBE_SCRIPT: Final[str] = (
+    "import socket\n"
+    "sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+    "sock.close()\n"
+    "print('ok')\n"
+)
 _RAW_DRIVER_SCRIPT: Final[str] = r"""
 import base64
 import socket
@@ -119,6 +132,47 @@ sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 sock.settimeout(timeout_seconds)
 sock.sendto(ip_header + udp_header + payload, (dst_ip, dst_port))
 sock.close()
+"""
+
+_TCP_DRIVER_SCRIPT: Final[str] = r"""
+import socket
+import struct
+import sys
+
+
+src_ip = sys.argv[1]
+src_port = int(sys.argv[2])
+dst_ip = sys.argv[3]
+dst_port = int(sys.argv[4])
+timeout_seconds = float(sys.argv[5])
+
+length_bytes = sys.stdin.buffer.read(4)
+if len(length_bytes) < 4:
+    sys.exit(1)
+payload_len = struct.unpack(">I", length_bytes)[0]
+payload = sys.stdin.buffer.read(payload_len)
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+except (OSError, AttributeError):
+    pass
+sock.settimeout(timeout_seconds)
+try:
+    sock.bind((src_ip, src_port))
+except OSError as exc:
+    sys.stderr.write(f"bind({src_ip}:{src_port}) failed: {exc}\n")
+    sys.exit(2)
+try:
+    sock.connect((dst_ip, dst_port))
+    sock.sendall(payload)
+finally:
+    try:
+        sock.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    sock.close()
 """
 
 
@@ -273,6 +327,7 @@ def preflight_native_ipsec_target(
     ue_ip: str,
     ue_port: int,
     container: str,
+    transport: Literal["UDP", "TCP"] = "UDP",
 ) -> NativeIPsecPreflight:
     if ue_ip != session.ue_ip:
         raise RealUEDirectResolutionError(
@@ -283,6 +338,10 @@ def preflight_native_ipsec_target(
             f"native IPsec preflight could not map UE protected port {ue_port}"
         )
 
+    probe_script = (
+        _RAW_SOCKET_PROBE_SCRIPT if transport == "UDP" else _TCP_STREAM_PROBE_SCRIPT
+    )
+    probe_label = "raw socket" if transport == "UDP" else "stream socket"
     try:
         probe = subprocess.run(
             [
@@ -291,7 +350,7 @@ def preflight_native_ipsec_target(
                 container,
                 "python3",
                 "-c",
-                _RAW_SOCKET_PROBE_SCRIPT,
+                probe_script,
             ],
             capture_output=True,
             text=True,
@@ -300,12 +359,12 @@ def preflight_native_ipsec_target(
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         raise RealUEDirectResolutionError(
-            f"native IPsec preflight failed: raw socket unavailable in {container}: {exc}"
+            f"native IPsec preflight failed: {probe_label} unavailable in {container}: {exc}"
         ) from exc
     if probe.returncode != 0:
         stderr_text = _normalize_optional_text((probe.stderr or probe.stdout)[:200])
         raise RealUEDirectResolutionError(
-            f"native IPsec preflight failed: raw socket unavailable in {container}: {stderr_text or 'unknown error'}"
+            f"native IPsec preflight failed: {probe_label} unavailable in {container}: {stderr_text or 'unknown error'}"
         )
 
     pcscf_port = session.pcscf_port_for(ue_port)
@@ -313,6 +372,7 @@ def preflight_native_ipsec_target(
         pcscf_port=pcscf_port,
         observer_events=(
             f"native-ipsec:preflight:ok:{container}",
+            f"native-ipsec:preflight:transport:{transport.lower()}",
             f"native-ipsec:tuple:{session.pcscf_ip}:{pcscf_port}->{ue_ip}:{ue_port}",
         ),
     )
@@ -327,7 +387,9 @@ def send_via_native_ipsec(
     dst_port: int,
     payload: bytes,
     timeout_seconds: float,
+    transport: Literal["UDP", "TCP"] = "UDP",
 ) -> NativeIPsecSendResult:
+    driver_script = _RAW_DRIVER_SCRIPT if transport == "UDP" else _TCP_DRIVER_SCRIPT
     driver = [
         "docker",
         "exec",
@@ -335,7 +397,7 @@ def send_via_native_ipsec(
         container,
         "python3",
         "-c",
-        _RAW_DRIVER_SCRIPT,
+        driver_script,
         src_ip,
         str(src_port),
         dst_ip,
@@ -366,6 +428,7 @@ def send_via_native_ipsec(
         payload_size=len(payload),
         observer_events=(
             "native-ipsec:send:ok",
+            f"native-ipsec:send:transport:{transport.lower()}",
             f"native-ipsec:tuple:{src_ip}:{src_port}->{dst_ip}:{dst_port}",
         ),
     )

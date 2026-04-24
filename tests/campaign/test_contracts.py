@@ -149,12 +149,26 @@ class CampaignConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.ipsec_mode, "native")
 
-    def test_native_ipsec_rejects_tcp_in_real_ue_direct(self) -> None:
+    def test_native_ipsec_accepts_tcp_in_real_ue_direct(self) -> None:
+        cfg = CampaignConfig(
+            target_host="10.20.20.8",
+            mode="real-ue-direct",
+            transport="TCP",
+            target_msisdn="111111",
+            impi="001010000123511",
+            mt_invite_template="a31",
+            ipsec_mode="native",
+        )
+
+        self.assertEqual(cfg.ipsec_mode, "native")
+        self.assertEqual(cfg.transport, "TCP")
+
+    def test_native_ipsec_rejects_unsupported_transport_in_real_ue_direct(self) -> None:
         with self.assertRaises(ValidationError):
             CampaignConfig(
                 target_host="10.20.20.8",
                 mode="real-ue-direct",
-                transport="TCP",
+                transport="SCTP",
                 target_msisdn="111111",
                 impi="001010000123511",
                 mt_invite_template="a31",

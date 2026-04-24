@@ -363,6 +363,7 @@ class SIPSenderReactorTests(unittest.TestCase):
             dst_port=8100,
             payload=b"normalized-payload",
             timeout_seconds=0.4,
+            transport="UDP",
         )
         mock_prepare.assert_called_once_with(
             artifact,

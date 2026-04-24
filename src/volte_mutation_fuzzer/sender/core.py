@@ -451,6 +451,7 @@ class SIPSenderReactor:
                 ue_ip=resolved_host,
                 ue_port=resolved_port,
                 container=container,
+                transport=target.transport,
             )
             observer_events.extend(preflight.observer_events)
 
@@ -483,6 +484,7 @@ class SIPSenderReactor:
                 dst_port=resolved_port,
                 payload=payload,
                 timeout_seconds=send_timeout,
+                transport=target.transport,
             )
             observer_events.extend(native_result.observer_events)
 

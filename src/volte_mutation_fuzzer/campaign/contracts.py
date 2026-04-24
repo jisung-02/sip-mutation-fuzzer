@@ -222,8 +222,8 @@ class CampaignConfig(BaseModel):
         elif self.ipsec_mode == "native":
             if self.mode != "real-ue-direct":
                 raise ValueError("native ipsec_mode requires mode='real-ue-direct'")
-            if str(self.transport).upper() != "UDP":
-                raise ValueError("native ipsec_mode requires transport='UDP'")
+            if str(self.transport).upper() not in ("UDP", "TCP"):
+                raise ValueError("native ipsec_mode requires transport='UDP' or 'TCP'")
             if self.target_msisdn is None:
                 raise ValueError(
                     "native ipsec_mode requires target_msisdn in real-ue-direct mode"

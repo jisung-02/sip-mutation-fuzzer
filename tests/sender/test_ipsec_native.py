@@ -116,6 +116,7 @@ class NativeIPsecPreflightTests(unittest.TestCase):
             preflight.observer_events,
             (
                 "native-ipsec:preflight:ok:pcscf",
+                "native-ipsec:preflight:transport:udp",
                 "native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100",
             ),
         )
