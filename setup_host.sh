@@ -12,6 +12,7 @@
 #   --network     네트워크 설정만 적용
 #   --sdr         SDR udev rules만 설치
 #   --realtime    실시간 스케줄링 권한만 설정
+#   --cpu         CPU governor을 performance로 고정
 #   --check       현재 시스템 상태 확인
 #
 
@@ -52,7 +53,7 @@ print_header() {
 
 # 1. 커널 모듈 설정
 setup_kernel_modules() {
-    echo -e "${YELLOW}[1/5] Setting up kernel modules...${NC}"
+    echo -e "${YELLOW}[1/6] Setting up kernel modules...${NC}"
 
     # SCTP 모듈 (S1AP용)
     if lsmod | grep -q "^sctp"; then
@@ -81,7 +82,7 @@ EOF
 
 # 2. 네트워크 sysctl 설정
 setup_network() {
-    echo -e "${YELLOW}[2/5] Configuring network parameters...${NC}"
+    echo -e "${YELLOW}[2/6] Configuring network parameters...${NC}"
 
     cat > /etc/sysctl.d/99-volte-fuzzer.conf << 'EOF'
 # VoLTE Fuzzer network settings
@@ -116,7 +117,7 @@ EOF
 
 # 3. SDR udev rules 설치
 setup_sdr_udev() {
-    echo -e "${YELLOW}[3/5] Installing SDR udev rules...${NC}"
+    echo -e "${YELLOW}[3/6] Installing SDR udev rules...${NC}"
 
     UDEV_DIR="/etc/udev/rules.d"
 
@@ -175,7 +176,7 @@ EOF
 
 # 4. 실시간 스케줄링 권한
 setup_realtime() {
-    echo -e "${YELLOW}[4/5] Configuring realtime scheduling...${NC}"
+    echo -e "${YELLOW}[4/6] Configuring realtime scheduling...${NC}"
 
     cat > /etc/security/limits.d/99-volte-realtime.conf << EOF
 # VoLTE Fuzzer realtime scheduling permissions
@@ -199,9 +200,41 @@ EOF
     echo -e "  ${YELLOW}⚠ Note: Logout and login again to apply limits${NC}"
 }
 
-# 5. 기타 설정
+# 5. CPU governor (SDR realtime 안정성; powersave 면 srsenb Late/Overflow 발생)
+setup_cpu_governor() {
+    echo -e "${YELLOW}[5/6] Configuring CPU frequency governor...${NC}"
+
+    # 즉시 적용
+    for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -w "$gov" ] && echo performance > "$gov"
+    done
+
+    # 재부팅 후 자동 적용: systemd oneshot
+    cat > /etc/systemd/system/volte-cpu-performance.service << 'EOF'
+[Unit]
+Description=Set CPU governor to performance for SDR realtime processing (VoLTE fuzzer)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g"; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now volte-cpu-performance.service > /dev/null 2>&1
+
+    CURRENT=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "unknown")
+    echo -e "  ${GREEN}✓${NC} cpu0 governor: $CURRENT"
+    echo -e "  ${GREEN}✓${NC} Persistent via volte-cpu-performance.service"
+}
+
+# 6. 기타 설정
 setup_misc() {
-    echo -e "${YELLOW}[5/5] Applying miscellaneous settings...${NC}"
+    echo -e "${YELLOW}[6/6] Applying miscellaneous settings...${NC}"
 
     # TUN/TAP 권한
     if [ -c /dev/net/tun ]; then
@@ -302,6 +335,20 @@ check_status() {
     echo -e "${YELLOW}Resource Limits:${NC}"
     echo -e "  Max open files: $(ulimit -n)"
     echo -e "  Max realtime priority: $(ulimit -r 2>/dev/null || echo 'N/A')"
+    echo ""
+
+    # CPU governor
+    echo -e "${YELLOW}CPU Frequency Governor:${NC}"
+    if [ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]; then
+        UNIQUE_GOV=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort -u | paste -sd,)
+        if [ "$UNIQUE_GOV" = "performance" ]; then
+            echo -e "  ${GREEN}✓${NC} all CPUs: performance"
+        else
+            echo -e "  ${RED}✗${NC} governor(s): $UNIQUE_GOV  (recommend: performance)"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠${NC} cpufreq sysfs not available"
+    fi
 }
 
 # 도움말
@@ -314,6 +361,7 @@ show_help() {
     echo "  --network   Configure network settings only"
     echo "  --sdr       Install SDR udev rules only"
     echo "  --realtime  Configure realtime scheduling only"
+    echo "  --cpu       Pin CPU governor to performance only"
     echo "  --check     Check current system status"
     echo "  --help      Show this help"
     echo ""
@@ -332,6 +380,8 @@ setup_all() {
     setup_sdr_udev
     echo ""
     setup_realtime
+    echo ""
+    setup_cpu_governor
     echo ""
     setup_misc
     echo ""
@@ -376,6 +426,11 @@ main() {
             check_root
             print_header
             setup_realtime
+            ;;
+        --cpu)
+            check_root
+            print_header
+            setup_cpu_governor
             ;;
         --check)
             print_header
