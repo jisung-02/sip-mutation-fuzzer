@@ -285,9 +285,16 @@ class SIPSenderReactor:
         resolved = resolver.resolve(target)
         resolved_port = resolved.port
         if target.ipsec_mode == "native" and target.msisdn is not None:
-            resolved_port, _resolved_ps_port = resolver.resolve_protected_ports(
+            port_pc, port_ps = resolver.resolve_protected_ports(
                 target.msisdn, ue_ip=resolved.host,
             )
+            # For TCP native, target the UE server port (port_ps).
+            # kamailio typically holds a persistent TCP ESTAB on
+            # (pcscf:5100 ↔ ue:port_pc), so reusing port_pc hits EADDRNOTAVAIL
+            # on our SOCK_STREAM connect. port_ps is UE's UAS listener where
+            # inbound requests belong anyway, and no kamailio 4-tuple
+            # conflicts there. UDP keeps port_pc for A31 back-compat.
+            resolved_port = port_ps if target.transport == "TCP" else port_pc
         resolved_target = target.model_copy(
             update={
                 "host": resolved.host,
