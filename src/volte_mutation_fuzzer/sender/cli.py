@@ -314,7 +314,9 @@ def request_command(
             ipsec_mode=ipsec_mode,
         )
         resolved = resolver.resolve(tmp_target, impi=impi)
-        port_pc, port_ps = resolver.resolve_protected_ports(target_msisdn or "")
+        port_pc, port_ps = resolver.resolve_protected_ports(
+            target_msisdn or "", ue_ip=resolved.host,
+        )
 
         resolved_impi = impi or resolved.impi or os.environ.get("VMF_IMPI")
         if not resolved_impi:

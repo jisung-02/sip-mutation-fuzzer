@@ -347,7 +347,7 @@ class SIPSenderReactorTests(unittest.TestCase):
             any(event.startswith("native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8100") for event in result.observer_events)
         )
         mock_resolve.assert_called_once()
-        mock_resolve_ports.assert_called_once_with("111111")
+        mock_resolve_ports.assert_called_once_with("111111", ue_ip="10.20.20.8")
         mock_resolve_session.assert_called_once_with(
             ue_ip="10.20.20.8",
             pcscf_container="legacy-netns",

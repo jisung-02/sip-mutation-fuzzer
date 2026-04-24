@@ -286,7 +286,7 @@ class SIPSenderReactor:
         resolved_port = resolved.port
         if target.ipsec_mode == "native" and target.msisdn is not None:
             resolved_port, _resolved_ps_port = resolver.resolve_protected_ports(
-                target.msisdn
+                target.msisdn, ue_ip=resolved.host,
             )
         resolved_target = target.model_copy(
             update={

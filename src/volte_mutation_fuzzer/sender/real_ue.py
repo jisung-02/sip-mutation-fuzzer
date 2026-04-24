@@ -197,17 +197,7 @@ class RealUEDirectResolver:
         msisdn = target.msisdn
         resolved_port = target.port
 
-        contact = self._lookup_via_kamctl(msisdn, container=self.scscf_container)
-        if contact is None and self.pcscf_container != self.scscf_container:
-            contact = self._lookup_via_kamctl(msisdn, container=self.pcscf_container)
-        if contact is None:
-            contact = self._lookup_via_scscf_mysql(msisdn)
-        if contact is None:
-            contact = self._lookup_via_pcscf_logs(msisdn)
-        if contact is None:
-            contact = self._lookup_via_pcscf_options_ping(msisdn, impi=impi)
-        if contact is None:
-            contact = self._lookup_via_xfrm_state(msisdn)
+        contact = self._lookup_ue_contact(msisdn, impi=impi)
         if contact is None:
             raise RealUEDirectResolutionError(
                 f"real-ue-direct target msisdn {msisdn} could not be resolved via "
@@ -433,16 +423,54 @@ class RealUEDirectResolver:
                     return imsi.strip()
         return None
 
-    def resolve_protected_ports(self, msisdn: str) -> tuple[int, int]:
+    def _lookup_ue_contact(
+        self, msisdn: str, *, impi: str | None = None,
+    ) -> UEContact | None:
+        """Run the full UE contact lookup chain.
+
+        Non-raising wrapper used by both ``resolve()`` and
+        ``resolve_protected_ports()``. Chain order matches ``resolve()``:
+        kamctl (S-CSCF) → kamctl (P-CSCF) → S-CSCF MySQL → P-CSCF logs →
+        OPTIONS ping → xfrm state.
+        """
+        contact = self._lookup_via_kamctl(msisdn, container=self.scscf_container)
+        if contact is None and self.pcscf_container != self.scscf_container:
+            contact = self._lookup_via_kamctl(msisdn, container=self.pcscf_container)
+        if contact is None:
+            contact = self._lookup_via_scscf_mysql(msisdn)
+        if contact is None:
+            contact = self._lookup_via_pcscf_logs(msisdn)
+        if contact is None:
+            contact = self._lookup_via_pcscf_options_ping(msisdn, impi=impi)
+        if contact is None:
+            contact = self._lookup_via_xfrm_state(msisdn)
+        return contact
+
+    def resolve_protected_ports(
+        self, msisdn: str, *, ue_ip: str | None = None,
+    ) -> tuple[int, int]:
         """Return ``(port_pc, port_ps)`` for the UE identified by *msisdn*.
 
-        The requested MSISDN is resolved to a UE IP first, then both log-derived
-        and xfrm-derived candidates are filtered to that UE before selection.
+        The UE IP used to filter P-CSCF log / xfrm candidates is resolved
+        in this priority:
+
+        1. Explicit *ue_ip* (caller already did a live lookup).
+        2. Live lookup chain via ``_lookup_ue_contact`` (kamctl → logs → xfrm).
+        3. ``resolve_ue_ip_from_msisdn`` hardcoded mapping + ``VMF_MSISDN_TO_IP_<msisdn>``
+           env override — only as a last resort inside ``resolve_ue_protected_ports``.
+
+        The live-lookup step is what prevents the hardcoded mapping from poisoning
+        the filter after server reboots or UE re-IP.
         """
+        if ue_ip is None:
+            contact = self._lookup_ue_contact(msisdn)
+            if contact is not None:
+                ue_ip = contact.host
         return resolve_ue_protected_ports(
             msisdn=msisdn,
             pcscf_container=self.pcscf_container,
             env=self._env,
+            ue_ip=ue_ip,
         )
 
     def _parse_kamctl_output(self, msisdn: str, output: str) -> UEContact | None:
@@ -485,22 +513,27 @@ def resolve_ue_protected_ports(
     msisdn: str,
     pcscf_container: str = _DEFAULT_PCSCF_CONTAINER,
     env: Mapping[str, str] | None = None,
+    ue_ip: str | None = None,
 ) -> tuple[int, int]:
     """Return ``(port_pc, port_ps)`` for *msisdn* by querying the P-CSCF container.
 
     Strategy:
     1. Resolve the UE IP for *msisdn* and use it to filter candidates.
+       Priority: explicit *ue_ip* > ``VMF_MSISDN_TO_IP_<msisdn>`` env override >
+       hardcoded default mapping. If none resolves, candidates are not filtered
+       by IP (single-UE fallback).
     2. Parse the last matching ``Term UE connection`` log line from the P-CSCF container.
     3. Fallback: parse ``ip xfrm state`` output for matching UE port pairs.
     4. Raise ``RealUEDirectResolutionError`` if neither succeeds.
 
     ``port_ps`` is assumed to be ``port_pc + 1`` when derived from logs.
     """
-    requested_ue_ip: str | None = None
-    try:
-        requested_ue_ip = resolve_ue_ip_from_msisdn(msisdn, env=env)
-    except ValueError:
-        requested_ue_ip = None
+    requested_ue_ip: str | None = ue_ip
+    if requested_ue_ip is None:
+        try:
+            requested_ue_ip = resolve_ue_ip_from_msisdn(msisdn, env=env)
+        except ValueError:
+            requested_ue_ip = None
     source = os.environ if env is None else env
     pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_REAL_UE_PCSCF_IP)
 

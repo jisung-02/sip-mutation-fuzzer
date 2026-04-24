@@ -131,7 +131,9 @@ class RealUEDirectHelperTests(unittest.TestCase):
                 stderr="",
             ),
         ) as mock_run:
-            port_pc, port_ps = resolver.resolve_protected_ports("111111")
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111", ue_ip="10.20.20.8",
+            )
 
         self.assertEqual((port_pc, port_ps), (8100, 8101))
         mock_run.assert_called_once_with(
@@ -175,7 +177,9 @@ class RealUEDirectHelperTests(unittest.TestCase):
                 ),
             ),
         ) as mock_run:
-            port_pc, port_ps = resolver.resolve_protected_ports("111111")
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111", ue_ip="10.20.20.8",
+            )
 
         self.assertEqual((port_pc, port_ps), (8100, 8101))
         self.assertEqual(mock_run.call_count, 2)
