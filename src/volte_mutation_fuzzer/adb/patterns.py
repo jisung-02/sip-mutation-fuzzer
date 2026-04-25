@@ -129,9 +129,16 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "call_anomaly",
     ),
     AnomalyPattern(
+        # RILJ "Unexpected response" / OEM RIL error indicates the modem's
+        # transaction tracker has gone out of sync with what RILJ expected.
+        # Empirically (2026-04-25 500-case A16 campaign) this fires only
+        # under specific mutations (header[X] whitespace_noise, duplicate
+        # Call-ID, mutate Supported) — i.e. it tracks real cross-layer
+        # impact, not background noise. Promote to critical so the verdict
+        # surfaces it as stack_failure on the campaign dashboard.
         "oem_ril_error",
         r"oem.*ril.*error|RILJ.*Error|SecRIL.*(?:error|Error)",
-        "warning",
+        "critical",
         "call_anomaly",
     ),
     AnomalyPattern(

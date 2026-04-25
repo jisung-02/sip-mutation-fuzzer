@@ -50,6 +50,7 @@ class LogCheckResult(BaseModel):
     matched: bool
     matched_pattern: str | None = None
     matched_line: str | None = None
+    matched_tag: str | None = None
     lines_scanned: int = 0
     error: str | None = None
     details: dict[str, object] = Field(default_factory=dict)

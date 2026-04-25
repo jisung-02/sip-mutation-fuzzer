@@ -55,6 +55,9 @@ def _top_warning_details(events: list[Any], log_path: str) -> dict[str, object]:
             "log_path": log_path,
             "severity": top.severity,
             "warning_count": len(events),
+            # source_tag flows through so post-hoc analysis can tell which
+            # logcat tag fired the warning (RILJ vs SIPMSG vs unknown).
+            "source_tag": getattr(top, "source_tag", None),
         }
     }
 
@@ -497,6 +500,7 @@ class AdbOracle:
                 matched=True,
                 matched_pattern=top.matched_pattern,
                 matched_line=top.matched_line,
+                matched_tag=getattr(top, "source_tag", None),
                 lines_scanned=len(lines),
                 error=error,
                 details=details,
@@ -630,6 +634,7 @@ class OracleEngine:
                             "socket_verdict": verdict.verdict,
                             "matched_pattern": adb_result.matched_pattern,
                             "matched_line": adb_result.matched_line,
+                            "matched_tag": adb_result.matched_tag,
                             "log_path": "adb:logcat",
                         },
                     )
