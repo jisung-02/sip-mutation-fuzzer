@@ -273,6 +273,7 @@ class CaseResult(BaseModel):
     response_code: int | None = None
     elapsed_ms: float
     process_alive: bool | None = None
+    raw_request: str | None = None
     raw_response: str | None = None
     reproduction_cmd: str
     error: str | None = None

@@ -335,6 +335,20 @@ class ResultStore:
 # ---------------------------------------------------------------------------
 
 
+def _payload_to_text(payload: str | bytes | None) -> str | None:
+    """Decode the artifact-level payload for storage in case_result.raw_request.
+
+    Mutators emit either wire_text (str) or packet_bytes (bytes); this normalizes
+    to a single text representation so downstream tooling and the jsonl record
+    can show the request side symmetrically with raw_response.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        return payload
+    return payload.decode("utf-8", errors="replace")
+
+
 class CampaignExecutor:
     """Sequential campaign loop: generate → mutate → send → judge → store."""
 
@@ -785,6 +799,7 @@ class CampaignExecutor:
                 response_code=verdict.response_code,
                 elapsed_ms=verdict.elapsed_ms,
                 process_alive=verdict.process_alive,
+                raw_request=_payload_to_text(sent_payload),
                 raw_response=raw_response,
                 reproduction_cmd=self._build_reproduction_cmd(
                     spec,
@@ -1161,6 +1176,7 @@ class CampaignExecutor:
                 response_code=verdict.response_code,
                 elapsed_ms=verdict.elapsed_ms,
                 process_alive=verdict.process_alive,
+                raw_request=_payload_to_text(sent_payload),
                 raw_response=raw_response,
                 reproduction_cmd=self._build_mt_template_reproduction_cmd(
                     spec,
@@ -1457,6 +1473,7 @@ class CampaignExecutor:
         mutation_ops: tuple[str, ...] = (),
         response_code: int | None = None,
         process_alive: bool | None = None,
+        raw_request: str | None = None,
         raw_response: str | None = None,
         error: str | None = None,
         details: dict[str, object] | None = None,
@@ -1490,6 +1507,7 @@ class CampaignExecutor:
             response_code=response_code,
             elapsed_ms=elapsed_ms,
             process_alive=process_alive,
+            raw_request=raw_request,
             raw_response=raw_response,
             reproduction_cmd=resolved_reproduction_cmd,
             error=error,
