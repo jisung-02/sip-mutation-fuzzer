@@ -20,10 +20,19 @@ from volte_mutation_fuzzer.adb.contracts import (
 from volte_mutation_fuzzer.adb.patterns import ANOMALY_PATTERNS, AnomalyPattern
 
 
-# Logcat 'time' format: "MM-DD HH:MM:SS.NNN <Severity>/<Tag>( PID): <message>"
-_LOGCAT_LINE_RE = re.compile(
+# Logcat 'time' format:        "MM-DD HH:MM:SS.NNN <Severity>/<Tag>( PID): <message>"
+# Logcat 'threadtime' format:  "MM-DD HH:MM:SS.NNN  PID  TID <Severity> <Tag>: <message>"
+# Both are common; campaigns may use either depending on collector config or
+# offline log dumps. Tag extraction works for both — Samsung's real crash
+# dumps from A31 came in threadtime, so missing this format meant the tag
+# whitelist/blacklist gate was bypassed entirely.
+_LOGCAT_LINE_RE_TIME = re.compile(
     r"^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+"
     r"[VDIWEF]/(?P<tag>[^(]+?)\s*\(\s*\d+\)\s*:"
+)
+_LOGCAT_LINE_RE_THREADTIME = re.compile(
+    r"^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+"
+    r"\d+\s+\d+\s+[VDIWEF]\s+(?P<tag>\S(?:[^:]*\S)?)\s*:"
 )
 
 
@@ -72,8 +81,8 @@ BLACKLIST_TAGS_EXACT = BLACKLIST_TAGS_EXACT | frozenset(_load_env_tags("VMF_ADB_
 
 
 def _extract_logcat_tag(line: str) -> str | None:
-    """Parse a logcat 'time' format line and return the tag, or None."""
-    match = _LOGCAT_LINE_RE.match(line)
+    """Parse a logcat 'time' or 'threadtime' format line and return the tag."""
+    match = _LOGCAT_LINE_RE_TIME.match(line) or _LOGCAT_LINE_RE_THREADTIME.match(line)
     if match is None:
         return None
     return match.group("tag").strip() or None

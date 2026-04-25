@@ -855,3 +855,43 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         assert event is not None
         self.assertEqual(event.source_tag, "RILJ")
         self.assertEqual(event.pattern_name, "oem_ril_error")
+        # promoted to critical so verdict can upgrade to stack_failure
+        self.assertEqual(event.severity, "critical")
+
+    def test_threadtime_format_tag_extraction(self) -> None:
+        detector = AdbAnomalyDetector()
+        # Samsung's real crash dumps come in 'threadtime' format
+        # ("MM-DD HH:MM:SS.NNN  PID  TID L Tag: msg") — without the
+        # second regex variant, tag would extract as None and the
+        # whitelist/blacklist gate would silently bypass.
+        line = (
+            "04-25 12:00:00.000 30721 30801 E AndroidRuntime: "
+            "FATAL EXCEPTION: SipTransportNotifier-RawSipHandler"
+        )
+        event = detector.feed_line("crash", line)
+        assert event is not None
+        self.assertEqual(event.source_tag, "AndroidRuntime")
+        self.assertIn(event.pattern_name, ("android_runtime_fatal", "uncaught_java_exception"))
+
+    def test_a31_real_imsservice_crash_promotes(self) -> None:
+        # Real captured crash from A31 fuzzing campaign (2025-04-13):
+        # com.sec.imsservice dies on java.lang.ArrayIndexOutOfBoundsException
+        # in SipMsg.getCSeqMethod when parsing a fuzzed CSeq header. This
+        # is the kind of high-value finding the oracle exists for; if any
+        # future change silently stops catching it, this test catches it.
+        detector = AdbAnomalyDetector()
+        events = detector.feed_lines(
+            [("crash", line) for line in _read_fixture("logcat_a31_real_crash.txt")]
+        )
+        # Multiple critical patterns fire across the dump (FATAL EXCEPTION,
+        # uncaught_java_exception, dropbox_crash_tag, process_died); we
+        # require at least one critical to keep the test resilient to
+        # pattern-order changes.
+        critical = [e for e in events if e.severity == "critical"]
+        self.assertGreaterEqual(len(critical), 1,
+            f"oracle missed A31 imsservice crash; events={[e.pattern_name for e in events]}")
+        # AndroidRuntime is whitelisted, so its FATAL EXCEPTION line should
+        # propagate the source tag rather than being suppressed.
+        ar_events = [e for e in events if e.source_tag == "AndroidRuntime"]
+        self.assertGreaterEqual(len(ar_events), 1,
+            "expected at least one event tagged 'AndroidRuntime' from the threadtime crash log")

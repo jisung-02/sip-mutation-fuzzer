@@ -1,0 +1,15 @@
+--------- beginning of crash
+04-13 23:52:54.265 30721 30801 E AndroidRuntime: FATAL EXCEPTION: SipTransportNotifier-RawSipHandler
+04-13 23:52:54.265 30721 30801 E AndroidRuntime: Process: com.sec.imsservice, PID: 30721
+04-13 23:52:54.265 30721 30801 E AndroidRuntime: java.lang.ArrayIndexOutOfBoundsException: length=1; index=1
+04-13 23:52:54.265 30721 30801 E AndroidRuntime: 	at com.sec.internal.constants.ims.SipMsg.getCSeqMethod(SipMsg.java:447)
+04-13 23:52:54.265 30721 30801 E AndroidRuntime: 	at com.sec.internal.constants.ims.SipMsg.isRegister(SipMsg.java:459)
+04-13 23:52:54.265 30721 30801 E AndroidRuntime: 	at com.sec.internal.google.SipTransportNotifier.onSipMessageEvent(SipTransportNotifier.java:181)
+04-13 23:52:54.272  1389  7118 I DropBoxManagerService: add tag=system_app_crash isTagEnabled=true flags=0x2
+04-13 23:52:54.300 30721 30801 I Process : Sending signal. PID: 30721 SIG: 9
+04-13 23:52:54.359   491  1443 I servicemanager: 'ims6' died
+04-13 23:52:54.359   491   570 I servicemanager: 'secims' died
+04-13 23:52:54.359  1389 10601 I ActivityManager: Process com.sec.imsservice (pid 30721) has died: pers PER (249,1301)
+04-13 23:52:54.360   756   756 I Zygote  : Process 30721 exited due to signal 9 (Killed)
+04-13 23:52:54.360   491   498 I servicemanager: 'ImsBase' died
+04-13 23:52:54.387  1389  1434 I ActivityManager: Start proc 7131:com.sec.imsservice/1000 for restart com.sec.imsservice
