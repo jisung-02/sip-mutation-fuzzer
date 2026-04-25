@@ -203,11 +203,16 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "ims_anomaly",
     ),
     AnomalyPattern(
-        # 500/503/504 from the network indicate real infrastructure trouble;
-        # 502 Bad Gateway is also common during fuzz-storm load.  5xx is
-        # meaningful but not a device crash — keep at warning.
+        # 4xx / 5xx from the network. The negative lookbehind for "[-->] "
+        # excludes Samsung SIPMSG outbound-echo lines where A16 is just
+        # logging the rejection it itself sent in response to our fuzz —
+        # those are NOT device-side errors, just our own 4xx/5xx
+        # round-tripping back through the IMS log. We anchor on the
+        # "SIP/2.0 " prefix so the lookbehind has a single, well-defined
+        # position to evaluate (avoid the regex engine scanning past the
+        # arrow and matching at "500 Server..." offset).
         "sip_server_error",
-        r"SIP/2\.0\s+5(?:00|02|03|04|05)\b|5\d\d\s+Server Internal Error",
+        r"(?<!\[-->\] )SIP/2\.0\s+[45]\d\d",
         "warning",
         "ims_anomaly",
     ),
@@ -278,6 +283,213 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     AnomalyPattern(
         "selinux_denial",
         r"avc:\s+denied\s+\{.*\}.*scontext=.*imsservice|avc:\s+denied\s+\{.*\}.*telephony",
+        "warning",
+        "system_anomaly",
+    ),
+
+    # ---------------------------------------------------------------------
+    # Memory safety / corruption — sanitizers, allocator aborts, stack
+    # smashing, OOM. fatal_signal so they bypass the IMS-tag whitelist
+    # (these are system-wide signals; whatever process they fire in,
+    # it's a real bug).
+    # ---------------------------------------------------------------------
+    AnomalyPattern(
+        "address_sanitizer",
+        r"AddressSanitizer:\s+\S+",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "hw_address_sanitizer",
+        r"HWAddressSanitizer:\s+\S+",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "kasan",
+        r"\bKASAN:\s+\S+",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "use_after_free",
+        r"use[- ]after[- ]free|UAF detected|freed memory access",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "double_free",
+        r"double free or corruption|double-free detected",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "malloc_corruption",
+        r"malloc(?:\(\):)?\s+(?:corrupted|invalid pointer|memory corruption)|"
+        r"unsorted double linked list corrupted|"
+        r"munmap_chunk\(\): invalid pointer",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "stack_smashing",
+        r"\*\*\* stack smashing detected \*\*\*|stack-protector.*Aborted",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "heap_overflow",
+        r"heap[- ]buffer[- ]overflow|heap corruption detected",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "out_of_memory_native",
+        r"Out of memory:\s*Killed process|OOM killer.*invoked",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "out_of_memory_java",
+        r"java\.lang\.OutOfMemoryError",
+        "critical",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "unsatisfied_link_error",
+        r"java\.lang\.UnsatisfiedLinkError",
+        "critical",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "bad_alloc",
+        r"std::bad_alloc|terminating with uncaught exception of type std::bad_alloc",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "mmap_failure",
+        r"mmap.*failed.*\bENOMEM\b|mmap.*MAP_FAILED",
+        "warning",
+        "fatal_signal",
+    ),
+
+    # ---------------------------------------------------------------------
+    # IMS / SIP / VoLTE functional failures (beyond what existing
+    # patterns capture). ims_anomaly category — gated by tag whitelist
+    # so only IMS-stack tags can trigger them.
+    # ---------------------------------------------------------------------
+    AnomalyPattern(
+        "ims_register_fail",
+        r"(?:REGISTER|Register).*(?:failed|failure|denied|rejected).*(?:cause|reason|status)|"
+        r"onRegistrationFailed",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        "ims_call_fail",
+        r"(?:Call|MO|MT).*(?:setup error|terminated abnormally)|"
+        r"onCallSetupError|TerminalDisconnectCause",
+        "warning",
+        "call_anomaly",
+    ),
+    AnomalyPattern(
+        "ims_authentication_fail",
+        r"IMS.*[Aa]uth.*(?:fail|denied|reject)|AKA challenge.*fail",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        "ims_pdn_lost",
+        r"PDN.*(?:lost|disconnected unexpectedly|deactivated by network)",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        "volte_disabled",
+        r"VoLTE.*(?:disabled|turned off|service unavailable)|IMS_DISABLED_BY_NETWORK",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        "sip_response_dropped",
+        r"SIP.*(?:response dropped|cannot route|unmatched transaction)",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        "mmtel_error",
+        r"MMTEL.*[Ee]rror|mmtel.*fail",
+        "warning",
+        "ims_anomaly",
+    ),
+
+    # ---------------------------------------------------------------------
+    # Modem / RIL firmware-level failures. fatal_signal for the truly
+    # catastrophic ones (assert, subsystem restart) so they bypass tag
+    # whitelist; system_anomaly for softer signals.
+    # ---------------------------------------------------------------------
+    AnomalyPattern(
+        "modem_assert",
+        r"modem.*(?:assert|panic|fatal)|MODEM_FW_FATAL|crashscope",
+        "critical",
+        "fatal_signal",
+    ),
+    AnomalyPattern(
+        "qmi_error",
+        r"qmi[_:].*(?:error|fail|timeout)|QMI_ERR|qmi_fw.*serv_request.*fail",
+        "warning",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "radio_subsystem_restart",
+        r"subsys.*(?:Restart|crash)|SubsysRestartLevel|ssr_state",
+        "critical",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "rild_died",
+        r"rild.*(?:died|crashed|killed)|RIL daemon.*restart",
+        "critical",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "ril_request_fail",
+        r"RILRequest_(?:FAIL|TIMEOUT)|RIL.*request rejected",
+        "warning",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "nv_corruption",
+        r"NV(?:RAM)?.*(?:corrupt|invalid|recovery)",
+        "critical",
+        "fatal_signal",
+    ),
+
+    # ---------------------------------------------------------------------
+    # System / process death (boost on existing patterns).
+    # ---------------------------------------------------------------------
+    AnomalyPattern(
+        "process_died",
+        r"Process\s+\S+\s+\(pid\s+\d+\) has died",
+        "critical",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "binder_died",
+        r"Binder.*died|BinderProxy.*died|onServiceDisconnected.*ims",
+        "warning",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "watchdog_kill",
+        r"Watchdog killing|killing system_server|watchdog.*detected.*hang",
+        "critical",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        "selinux_denial_ims",
+        r"avc:\s+denied.*scontext=.*ims",
         "warning",
         "system_anomaly",
     ),

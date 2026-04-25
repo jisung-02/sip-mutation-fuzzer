@@ -1,3 +1,5 @@
+import os
+import re
 import subprocess
 import threading
 import time
@@ -16,6 +18,99 @@ from volte_mutation_fuzzer.adb.contracts import (
     AdbSnapshotResult,
 )
 from volte_mutation_fuzzer.adb.patterns import ANOMALY_PATTERNS, AnomalyPattern
+
+
+# Logcat 'time' format: "MM-DD HH:MM:SS.NNN <Severity>/<Tag>( PID): <message>"
+_LOGCAT_LINE_RE = re.compile(
+    r"^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s+"
+    r"[VDIWEF]/(?P<tag>[^(]+?)\s*\(\s*\d+\)\s*:"
+)
+
+
+def _load_env_tags(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, "")
+    return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+# IMS / Telephony / RIL related logcat tags.  Pattern matches in
+# `ims_anomaly` / `call_anomaly` categories require the source line's tag
+# to start with one of these prefixes — an unrelated process emitting a
+# regex-shaped log line will not promote a fuzz case verdict.
+WHITELIST_TAG_PREFIXES: tuple[str, ...] = (
+    "[IMS",            # Samsung native IMS log brand: [IMS6.0], [IMS5.0]
+    "SIPMSG",          # SIPMSG[0,2], SIPMSG[1,3]
+    "RILJ",
+    "SecRIL",
+    "SemImsService",
+    "ImsService",
+    "ImsManager",
+    "ImsRegistration",
+    "com.sec.imsservice",
+    "com.sec.epdg",
+    "com.android.phone",
+    "TelephonyProvider",
+    "AndroidRuntime",  # crash headers (FATAL EXCEPTION) come from here
+)
+
+
+# Hard-blocked logcat tags — any anomaly pattern that fires from these
+# tags is treated as noise and never promotes a verdict.  These are
+# Android background services that periodically log expected exceptions
+# unrelated to IMS / VoLTE fuzzing.
+BLACKLIST_TAGS_EXACT: frozenset[str] = frozenset({
+    "BluetoothPowerStatsCollector",
+    "WifiNl80211Manager",
+    "NetworkStatsManager",
+    "PowerStatsService",
+    "KeyguardViewMediator",
+})
+
+
+# env override (append-only) — set via VMF_ADB_WHITELIST_TAGS / VMF_ADB_BLACKLIST_TAGS
+WHITELIST_TAG_PREFIXES = WHITELIST_TAG_PREFIXES + _load_env_tags("VMF_ADB_WHITELIST_TAGS")
+BLACKLIST_TAGS_EXACT = BLACKLIST_TAGS_EXACT | frozenset(_load_env_tags("VMF_ADB_BLACKLIST_TAGS"))
+
+
+def _extract_logcat_tag(line: str) -> str | None:
+    """Parse a logcat 'time' format line and return the tag, or None."""
+    match = _LOGCAT_LINE_RE.match(line)
+    if match is None:
+        return None
+    return match.group("tag").strip() or None
+
+
+def _should_suppress_match(tag: str | None, category: str) -> bool:
+    """Return True if a match from this tag/category should be ignored.
+
+    Rules:
+        - Exact-match blacklist: always suppress (BluetoothPowerStatsCollector etc.)
+        - Whitelist prefix: only required for ims_anomaly / call_anomaly.
+        - fatal_signal / system_anomaly: accepted regardless of source.
+        - Tag unknown (line not in 'time' format): accept conservatively.
+    """
+    if tag is None:
+        return False
+    if tag in BLACKLIST_TAGS_EXACT:
+        return True
+    if category in ("ims_anomaly", "call_anomaly"):
+        return not any(tag.startswith(prefix) for prefix in WHITELIST_TAG_PREFIXES)
+    return False
+
+
+def _is_sipmsg_outbound_echo(line: str, tag: str | None) -> bool:
+    """Detect Samsung SIPMSG outbound-echo lines.
+
+    A16's IMS stack logs every SIP message it sends or receives in lines
+    like ``I/SIPMSG[0,2]( 2815): [-->] SIP/2.0 500 ...``.  The ``[-->]``
+    arrow marks the message as outbound — it's a copy of the rejection
+    the device just sent in response to our fuzz, not a sign the device
+    is in trouble.  These lines can match many ims_anomaly patterns
+    (sip_server_error, sip_timeout, etc.), so we filter them at line
+    level before pattern matching.
+    """
+    if tag is None or not tag.startswith("SIPMSG"):
+        return False
+    return "[-->]" in line
 
 
 class _PopenLike(Protocol):
@@ -546,8 +641,17 @@ class AdbAnomalyDetector:
 
     def feed_line(self, buffer_name: str, line: str) -> AdbAnomalyEvent | None:
         self._total_lines_scanned += 1
+        # Cheap line-level suppression for SIPMSG outbound echo — these
+        # lines can spuriously match several ims_anomaly patterns
+        # (sip_server_error, sip_timeout, ims_reg_failure, ...).  Pre-check
+        # avoids 36 regex evaluations per echoed line.
+        tag = _extract_logcat_tag(line)
+        if _is_sipmsg_outbound_echo(line, tag):
+            return None
         for pattern in self._patterns:
             if pattern.compiled.search(line):
+                if _should_suppress_match(tag, pattern.category):
+                    return None
                 event = AdbAnomalyEvent(
                     timestamp=time.time(),
                     severity=pattern.severity,
@@ -556,6 +660,7 @@ class AdbAnomalyDetector:
                     matched_pattern=pattern.regex,
                     matched_line=line[:500],
                     buffer=buffer_name,
+                    source_tag=tag,
                 )
                 with self._lock:
                     self._events.append(event)

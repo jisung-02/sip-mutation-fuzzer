@@ -1,0 +1,7 @@
+04-25 11:00:00.000 E/qmi_fw  (  500): qmi_fw: serv_request: fail (timeout)
+04-25 11:00:00.500 E/SubsystemRestart( 1601): subsys-modem: Restart triggered for crashscope
+04-25 11:00:01.000 F/modem   (  500): modem assert: MODEM_FW_FATAL at firmware_main.c:42
+04-25 11:00:01.500 E/rild    (  600): rild: died with signal 9
+04-25 11:00:02.000 E/QMI     (  500): qmi: kernel panic in modem firmware
+04-25 11:00:02.500 E/RILJ    ( 2153): RILRequest_FAILED: serial 1234
+04-25 11:00:03.000 E/system_server( 1601): NV-RAM corruption detected, recovery initiated

@@ -27,6 +27,7 @@ class AdbAnomalyEvent(BaseModel):
     matched_pattern: str
     matched_line: str = Field(max_length=500)
     buffer: str = "unknown"
+    source_tag: str | None = None
 
 
 class AdbCollectorConfig(BaseModel):

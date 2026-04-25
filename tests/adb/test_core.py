@@ -728,3 +728,130 @@ class AdbAnomalyDetectorTests(unittest.TestCase):
         detector.feed_line("main", "one")
         detector.feed_lines([("main", "two"), ("main", "three")])
         self.assertEqual(detector.total_lines_scanned, 3)
+
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _read_fixture(name: str) -> list[str]:
+    return [
+        line.rstrip("\n")
+        for line in (_FIXTURES / name).read_text().splitlines()
+        if line.strip()
+    ]
+
+
+class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
+    """feed_line() must apply tag-based suppression after pattern match.
+
+    Real captures from the 2026-04-25 500-case A16 campaign drove these
+    fixtures.  Without the filter every case picked up FP signals from
+    BluetoothPowerStatsCollector and from A16's own outbound SIPMSG echo
+    of its rejection responses.
+    """
+
+    def test_bluetooth_power_stats_noise_is_suppressed(self) -> None:
+        detector = AdbAnomalyDetector()
+        events = detector.feed_lines(
+            [("system", line) for line in _read_fixture("logcat_bluetooth_noise.txt")]
+        )
+        # uncaught_java_exception regex would otherwise match every "java.lang.*"
+        # line, but BluetoothPowerStatsCollector is in the exact-blacklist.
+        self.assertEqual(events, [])
+
+    def test_sipmsg_outbound_echo_suppressed(self) -> None:
+        detector = AdbAnomalyDetector()
+        events = detector.feed_lines(
+            [("radio", line) for line in _read_fixture("logcat_sipmsg_echo.txt")]
+        )
+        # Every line is "[-->] SIP/2.0 ..." which is A16 logging its own
+        # outbound rejection — not a device-side anomaly.
+        self.assertEqual(events, [])
+
+    def test_rilj_unexpected_response_kept(self) -> None:
+        detector = AdbAnomalyDetector()
+        events = detector.feed_lines(
+            [("radio", line) for line in _read_fixture("logcat_rilj_unexpected.txt")]
+        )
+        # RILJ tag is in the whitelist; oem_ril_error pattern matches.
+        self.assertGreaterEqual(len(events), 2)
+        self.assertTrue(all(e.source_tag == "RILJ" for e in events))
+        self.assertEqual(events[0].pattern_name, "oem_ril_error")
+
+    def test_memory_crash_lines_promote_regardless_of_tag(self) -> None:
+        # fatal_signal patterns bypass the whitelist — even a non-IMS tag
+        # gets through for SIGSEGV / ASan / stack smashing / etc.
+        detector = AdbAnomalyDetector()
+        events = detector.feed_lines(
+            [("crash", line) for line in _read_fixture("logcat_memory_crash.txt")]
+        )
+        self.assertGreaterEqual(len(events), 5)
+        # Most are critical, but a few patterns (e.g. mmap_failure) are warning;
+        # what matters is they all reach the fatal_signal / system_anomaly
+        # path, not get suppressed for non-IMS tags.
+        crit = [e for e in events if e.severity == "critical"]
+        self.assertGreaterEqual(len(crit), 4)
+        for event in events:
+            self.assertIn(event.category, ("fatal_signal", "system_anomaly"))
+
+    def test_modem_assert_lines_match(self) -> None:
+        detector = AdbAnomalyDetector()
+        events = detector.feed_lines(
+            [("radio", line) for line in _read_fixture("logcat_modem_assert.txt")]
+        )
+        # Should match modem_assert / radio_subsystem_restart / rild_died /
+        # qmi_error / nv_corruption / ril_request_fail.  Exact set depends on
+        # pattern-order tie-breaking; just check we got several criticals.
+        self.assertGreaterEqual(len(events), 5)
+        crit = [e for e in events if e.severity == "critical"]
+        self.assertGreaterEqual(len(crit), 3)
+
+    def test_unknown_tag_with_fatal_signal_is_kept(self) -> None:
+        detector = AdbAnomalyDetector()
+        line = "04-25 12:00:00.000 F/SomeRandomLib( 9999): Fatal signal SIGSEGV"
+        event = detector.feed_line("crash", line)
+        assert event is not None
+        self.assertEqual(event.severity, "critical")
+        self.assertEqual(event.category, "fatal_signal")
+        self.assertEqual(event.source_tag, "SomeRandomLib")
+
+    def test_unknown_tag_with_ims_anomaly_is_suppressed(self) -> None:
+        detector = AdbAnomalyDetector()
+        line = (
+            "04-25 12:00:00.000 W/RandomBackgroundService( 9999): "
+            "IMS DEREGIST reason=unknown"
+        )
+        # ims_anomaly category but tag isn't in whitelist → drop.
+        self.assertIsNone(detector.feed_line("system", line))
+
+    def test_unparseable_line_passes_through(self) -> None:
+        # If logcat format isn't 'time' (no tag extracted), accept matches
+        # conservatively — better to over-report than silently swallow real
+        # crashes from a misconfigured collector.
+        detector = AdbAnomalyDetector()
+        event = detector.feed_line("crash", "Fatal signal SIGSEGV in some unknown format")
+        assert event is not None
+        self.assertEqual(event.source_tag, None)
+
+    def test_explicit_blacklist_tag_suppresses_critical(self) -> None:
+        # Even fatal_signal patterns are dropped when tag is in the
+        # exact blacklist — Bluetooth's java.lang.* never indicates IMS bug.
+        detector = AdbAnomalyDetector()
+        line = (
+            "04-25 12:00:00.000 E/BluetoothPowerStatsCollector( 9999): "
+            "java.lang.RuntimeException: error: 11"
+        )
+        self.assertIsNone(detector.feed_line("system", line))
+
+    def test_source_tag_recorded_on_event(self) -> None:
+        detector = AdbAnomalyDetector()
+        # oem_ril_error needs "error" in the line; the real captured line
+        # has "error: 0" which qualifies.
+        line = (
+            "04-25 12:00:00.000 E/RILJ    ( 2153): processResponse: "
+            "Unexpected response! serial: 3000, error: 0 [PHONE0]"
+        )
+        event = detector.feed_line("radio", line)
+        assert event is not None
+        self.assertEqual(event.source_tag, "RILJ")
+        self.assertEqual(event.pattern_name, "oem_ril_error")
