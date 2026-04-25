@@ -457,9 +457,6 @@ class CampaignExecutor:
         )
         self._ue_resolver = RealUEDirectResolver()
 
-        # Port cache for MT template path — avoids docker logs per case
-        self._cached_ports: tuple[int, int] | None = None
-
         # Initialize crash analyzer
         self._crash_analyzer = CampaignCrashAnalyzer(
             output_dir=str(self._crash_analysis_dir),
@@ -568,8 +565,6 @@ class CampaignExecutor:
                 # Circuit breaker: abort on consecutive timeout/unknown streaks
                 if case_result.verdict in ("timeout", "unknown"):
                     consecutive_failures += 1
-                    # Invalidate port cache — UE may have re-registered
-                    self._cached_ports = None
 
                     # SA health probe: on sustained timeouts in real-ue-direct mode,
                     # check if IPsec SAs have expired.  If so, reclassify as
@@ -841,13 +836,17 @@ class CampaignExecutor:
                 case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
-    def _resolve_ports_cached(self, msisdn: str) -> tuple[int, int]:
-        """Return cached (port_pc, port_ps) or resolve and cache them."""
-        if self._cached_ports is not None:
-            return self._cached_ports
-        ports = self._ue_resolver.resolve_protected_ports(msisdn)
-        self._cached_ports = ports
-        return ports
+    def _resolve_ports_live(self, msisdn: str) -> tuple[int, int]:
+        """Resolve (port_pc, port_ps) fresh on every call.
+
+        Caching was previously used to avoid docker-logs overhead per case,
+        but UEs re-register frequently (especially Samsung A16 / Pixel-class
+        spec-strict stacks during long campaigns). A stale cache silently
+        sends to the old protected ports for the rest of the run, which
+        masquerades as "all timeout" — indistinguishable from a real
+        non-responsive UE. The ~150 ms per case is worth the correctness.
+        """
+        return self._ue_resolver.resolve_protected_ports(msisdn)
 
     def _teardown_invite(
         self,
@@ -973,8 +972,9 @@ class CampaignExecutor:
                     "IMPI could not be determined. Specify --impi or set VMF_IMPI"
                 )
 
-            # 2. Resolve live port_pc / port_ps (cached)
-            port_pc, port_ps = self._resolve_ports_cached(config.target_msisdn)
+            # 2. Resolve live port_pc / port_ps (no caching — UE re-registration
+            #    invalidates ports and stale values silently masquerade as timeouts)
+            port_pc, port_ps = self._resolve_ports_live(config.target_msisdn)
 
             # 3. Build wire text
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)

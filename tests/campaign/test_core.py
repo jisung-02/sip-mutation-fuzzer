@@ -480,7 +480,7 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch.object(
             executor._mutator,
@@ -824,7 +824,7 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch(
             "volte_mutation_fuzzer.campaign.core.build_default_slots",
@@ -1491,7 +1491,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch(
             "volte_mutation_fuzzer.campaign.core.build_default_slots",
@@ -2317,7 +2317,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch(
             "volte_mutation_fuzzer.campaign.core.build_default_slots",
@@ -2430,7 +2430,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch(
             "volte_mutation_fuzzer.campaign.core.build_default_slots",
@@ -2616,7 +2616,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch(
             "volte_mutation_fuzzer.campaign.core.build_default_slots",
@@ -2745,7 +2745,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         with unittest.mock.patch.object(
             executor,
-            "_resolve_ports_cached",
+            "_resolve_ports_live",
             return_value=(8100, 8101),
         ), unittest.mock.patch(
             "volte_mutation_fuzzer.campaign.core.build_default_slots",
