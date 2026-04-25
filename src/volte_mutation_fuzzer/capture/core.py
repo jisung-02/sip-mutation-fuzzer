@@ -16,7 +16,9 @@ class PcapCapture:
         self,
         output_path: str,
         interface: str = "any",
-        filter_expr: str = "udp port 5060 or tcp port 5060",
+        # native IPsec mode ships SIP inside ESP (IP proto 50), so the wire
+        # filter must include it or every native-mode pcap is empty.
+        filter_expr: str = "udp port 5060 or tcp port 5060 or esp",
     ) -> None:
         self._output_path = output_path
         self._interface = interface

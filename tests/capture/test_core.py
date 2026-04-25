@@ -26,7 +26,7 @@ class PcapCaptureTests(unittest.TestCase):
                 "eth0",
                 "-w",
                 "/tmp/test.pcap",
-                "udp port 5060 or tcp port 5060",
+                "udp port 5060 or tcp port 5060 or esp",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
