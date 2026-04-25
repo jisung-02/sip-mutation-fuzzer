@@ -96,15 +96,18 @@ try:
 except OSError as exc:
     sys.stderr.write(f"bind({src_ip}:{src_port}) failed: {exc}\n")
     sys.exit(2)
-sock.sendto(payload, (dst_ip, dst_port))
+# connect() the UDP socket so the kernel prefers it over kamailio's
+# unconnected listener when routing inbound packets from this UE peer.
+# Linux's UDP socket lookup scores connected sockets higher than
+# wildcard-bound ones, regardless of SO_REUSEPORT hashing — without this,
+# every reply from A16 races into kamailio and gets dropped as a stray.
+try:
+    sock.connect((dst_ip, dst_port))
+except OSError as exc:
+    sys.stderr.write(f"connect({dst_ip}:{dst_port}) failed: {exc}\n")
+    sys.exit(3)
+sock.send(payload)
 
-# Best-effort response capture on the same bound socket. When kamailio also
-# binds this protected port (e.g. P-CSCF's 6100/6101), SO_REUSEPORT makes the
-# kernel hash-pick one listener per inbound datagram, so any individual reply
-# may land on kamailio instead of us. In practice for A16 MESSAGE replies
-# that's fine — fuzzer correlation is best-effort — and we still emit a
-# length-prefixed frame so upstream can distinguish "no reply" from "timed
-# out while recv".
 try:
     data, peer = sock.recvfrom(65535)
     sys.stdout.buffer.write(len(data).to_bytes(4, "big"))
