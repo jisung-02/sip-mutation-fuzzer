@@ -1471,7 +1471,12 @@ class SIPMutator:
             "9999999999",
             "18446744073709551615", "18446744073709551616",
         )
-        length_boundaries = (1, 1024, 4096, 65535, 65536, 1048576)
+        # Cap at ~8KB so the resulting SIP packet stays within the practical
+        # UDP send budget (UDP max payload is 65507; ESP/IPsec headers and the
+        # rest of the SIP message eat further). Larger sizes trigger
+        # EMSGSIZE on send() before the UE ever sees the mutation, producing
+        # noise (unknown verdicts) instead of useful boundary signal.
+        length_boundaries = (1, 256, 1024, 4096, 8192)
 
         variants = ("numeric", "zero_length", "single_char", "huge_length", "negative_overflow")
         variant = variants[rng.randrange(len(variants))]
