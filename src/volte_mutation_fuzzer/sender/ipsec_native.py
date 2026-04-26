@@ -70,6 +70,7 @@ _UDP_DRIVER_SCRIPT: Final[str] = r"""
 import socket
 import struct
 import sys
+import select as select_mod
 
 
 src_ip = sys.argv[1]
@@ -77,6 +78,15 @@ src_port = int(sys.argv[2])
 dst_ip = sys.argv[3]
 dst_port = int(sys.argv[4])
 timeout_seconds = float(sys.argv[5])
+# Optional secondary 4-tuple — needed because the IMS IPsec spec
+# (3GPP TS 33.203) negotiates four SAs (UE/P-CSCF × client/server) and the
+# kernel's xfrm output policy may match either the server-side SA
+# (6109<->9901) or the client-side SA (5109<->9900) depending on which
+# pair is currently active. Replies come back on whichever SA the UE
+# happened to use; binding both so we don't miss the ones that land on
+# the unattended port. Pass 0 for both to disable secondary.
+alt_src_port = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+alt_dst_port = int(sys.argv[7]) if len(sys.argv) > 7 else 0
 
 length_bytes = sys.stdin.buffer.read(4)
 if len(length_bytes) < 4:
@@ -84,15 +94,16 @@ if len(length_bytes) < 4:
 payload_len = struct.unpack(">I", length_bytes)[0]
 payload = sys.stdin.buffer.read(payload_len)
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+sock_primary = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_primary.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock_primary.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 except (OSError, AttributeError):
     pass
-sock.settimeout(timeout_seconds)
+sock_primary.settimeout(timeout_seconds)
 try:
-    sock.bind((src_ip, src_port))
+    sock_primary.bind((src_ip, src_port))
 except OSError as exc:
     sys.stderr.write(f"bind({src_ip}:{src_port}) failed: {exc}\n")
     sys.exit(2)
@@ -102,25 +113,55 @@ except OSError as exc:
 # wildcard-bound ones, regardless of SO_REUSEPORT hashing — without this,
 # every reply from A16 races into kamailio and gets dropped as a stray.
 try:
-    sock.connect((dst_ip, dst_port))
+    sock_primary.connect((dst_ip, dst_port))
 except OSError as exc:
     sys.stderr.write(f"connect({dst_ip}:{dst_port}) failed: {exc}\n")
     sys.exit(3)
-sock.send(payload)
 
+# Optional alt socket on the alternate IPsec SA pair (server vs client).
+# Only created when both alt ports were supplied — silently no-op
+# otherwise to preserve the original single-socket behaviour.
+sock_alt = None
+if alt_src_port and alt_dst_port and alt_src_port != src_port:
+    try:
+        sock_alt = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock_alt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock_alt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (OSError, AttributeError):
+            pass
+        sock_alt.settimeout(timeout_seconds)
+        sock_alt.bind((src_ip, alt_src_port))
+        sock_alt.connect((dst_ip, alt_dst_port))
+    except OSError as exc:
+        # Best-effort: log and fall back to primary only. The original
+        # path (single socket) still works.
+        sys.stderr.write(f"alt bind/connect {src_ip}:{alt_src_port} -> {dst_ip}:{alt_dst_port} failed: {exc}\n")
+        if sock_alt is not None:
+            try: sock_alt.close()
+            except OSError: pass
+        sock_alt = None
+
+sock_primary.send(payload)
+
+socks = [sock_primary] + ([sock_alt] if sock_alt else [])
 try:
-    data, peer = sock.recvfrom(65535)
-    sys.stdout.buffer.write(len(data).to_bytes(4, "big"))
-    sys.stdout.buffer.write(peer[0].encode("ascii"))
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.buffer.write(peer[1].to_bytes(2, "big"))
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
-except socket.timeout:
-    sys.stdout.buffer.write((0).to_bytes(4, "big"))
-    sys.stdout.buffer.flush()
+    ready, _, _ = select_mod.select(socks, [], [], timeout_seconds)
+    if not ready:
+        sys.stdout.buffer.write((0).to_bytes(4, "big"))
+        sys.stdout.buffer.flush()
+    else:
+        data, peer = ready[0].recvfrom(65535)
+        sys.stdout.buffer.write(len(data).to_bytes(4, "big"))
+        sys.stdout.buffer.write(peer[0].encode("ascii"))
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.write(peer[1].to_bytes(2, "big"))
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
 finally:
-    sock.close()
+    sock_primary.close()
+    if sock_alt is not None:
+        sock_alt.close()
 """
 
 _TCP_DRIVER_SCRIPT: Final[str] = r"""
@@ -383,6 +424,8 @@ def send_via_native_ipsec(
     payload: bytes,
     timeout_seconds: float,
     transport: Literal["UDP", "TCP"] = "UDP",
+    alt_src_port: int = 0,
+    alt_dst_port: int = 0,
 ) -> NativeIPsecSendResult:
     driver_script = _UDP_DRIVER_SCRIPT if transport == "UDP" else _TCP_DRIVER_SCRIPT
     driver = [
@@ -399,6 +442,12 @@ def send_via_native_ipsec(
         str(dst_port),
         str(timeout_seconds),
     ]
+    # Append alt-pair argv only when supplied (UDP path only — TCP driver
+    # ignores extra args). Keeps the original 5-arg call signature
+    # backward-compatible: callers that don't supply alts get the
+    # original single-socket behaviour.
+    if transport == "UDP" and (alt_src_port or alt_dst_port):
+        driver.extend([str(alt_src_port), str(alt_dst_port)])
     stdin_data = len(payload).to_bytes(4, "big") + payload
     try:
         proc = subprocess.run(

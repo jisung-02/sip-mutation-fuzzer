@@ -284,6 +284,7 @@ class SIPSenderReactor:
         resolver = RealUEDirectResolver(env=self._env)
         resolved = resolver.resolve(target)
         resolved_port = resolved.port
+        port_pc_for_alt: int | None = None
         if target.ipsec_mode == "native" and target.msisdn is not None:
             _port_pc, port_ps = resolver.resolve_protected_ports(
                 target.msisdn, ue_ip=resolved.host,
@@ -298,6 +299,10 @@ class SIPSenderReactor:
             # (pcscf:5100 ↔ ue:port_pc) would also block a SOCK_STREAM connect
             # reusing that 4-tuple.
             resolved_port = port_ps
+            # Carry port_pc forward so the native-ipsec sender can also
+            # bind the *client*-side P-CSCF port and catch replies that
+            # the kernel routes via the client SA pair after a rekey.
+            port_pc_for_alt = _port_pc
         resolved_target = target.model_copy(
             update={
                 "host": resolved.host,
@@ -317,6 +322,7 @@ class SIPSenderReactor:
                 resolved_port=resolved_port,
                 observer_events=observer_events,
                 collect_all_responses=collect_all_responses,
+                ue_client_port=port_pc_for_alt,
             )
 
         # Deprecated compatibility path: delegate send to container netns only when
@@ -441,6 +447,7 @@ class SIPSenderReactor:
         resolved_port: int,
         observer_events: list[str],
         collect_all_responses: bool,
+        ue_client_port: int | None = None,
     ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
         """Send from the P-CSCF namespace using native IPsec helpers."""
         container = target.bind_container or self._env.get(
@@ -486,6 +493,27 @@ class SIPSenderReactor:
             if send_timeout <= 0.0:
                 observer_events.append("native-ipsec:send-skipped:timeout-budget-exhausted")
                 return resolved_target, payload, [], tuple(observer_events)
+            # IMS IPsec negotiates four SAs (UE/P-CSCF × client/server). The
+            # primary 4-tuple drives the server-side SA (port_ps ↔
+            # port_map[port_ps]), but the kernel's xfrm output policy may
+            # route a given send via the *client*-side SA when SA rekey
+            # leaves both pairs active — and the UE's reply then comes back
+            # on whichever SA pair was used. Resolve the client-side
+            # pcscf port too and pass it as alt so the driver binds both
+            # ports and select()s across them. Without this, every reply
+            # that lands on the unattended pcscf port times out even though
+            # the UE answered correctly. Falls back to single-socket if the
+            # alt mapping is missing.
+            alt_src = 0
+            alt_dst = 0
+            if ue_client_port is not None:
+                alt_pcscf_port = session.port_map.get(ue_client_port)
+                if alt_pcscf_port and alt_pcscf_port != preflight.pcscf_port:
+                    alt_src = alt_pcscf_port
+                    alt_dst = ue_client_port
+                    observer_events.append(
+                        f"native-ipsec:alt-tuple:{session.pcscf_ip}:{alt_src}->{resolved_host}:{alt_dst}"
+                    )
             native_result = send_via_native_ipsec(
                 container=container,
                 src_ip=session.pcscf_ip,
@@ -495,6 +523,8 @@ class SIPSenderReactor:
                 payload=payload,
                 timeout_seconds=send_timeout,
                 transport=target.transport,
+                alt_src_port=alt_src,
+                alt_dst_port=alt_dst,
             )
             observer_events.extend(native_result.observer_events)
 
