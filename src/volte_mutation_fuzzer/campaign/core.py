@@ -103,6 +103,7 @@ _SUPPORTED_STRATEGIES: dict[str, frozenset[str]] = {
             "alias_port_desync",
             "null_byte_only",
             "boundary_only",
+            "byte_edit_only",
         }
     ),
     "byte": frozenset(

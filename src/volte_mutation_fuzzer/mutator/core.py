@@ -957,6 +957,7 @@ class SIPMutator:
                 "alias_port_desync",
                 "null_byte_only",
                 "boundary_only",
+                "byte_edit_only",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1404,6 +1405,8 @@ class SIPMutator:
             return self._apply_null_byte_only(editable_message, rng)
         if strategy == "boundary_only":
             return self._apply_boundary_only(editable_message, rng)
+        if strategy == "byte_edit_only":
+            return self._apply_byte_edit_only(editable_message, rng)
         return None
 
     def _apply_null_byte_only(
@@ -1510,6 +1513,112 @@ class SIPMutator:
             operator="boundary_only",
             before=(original_header.name, original_header.value),
             after=(original_header.name, after_for_record),
+            note=f"variant={variant}",
+        )
+        return mutated_message, record
+
+    def _apply_byte_edit_only(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        headers = list(editable_message.headers)
+        if not headers:
+            raise ValueError("byte_edit_only requires at least one header")
+
+        # Prefer headers with non-empty values; surgical edits on an empty
+        # value have nothing to grab onto and would degrade to either a
+        # no-op or a single-character insert (already covered by other
+        # strategies). Fall back to any header if every value is empty.
+        candidates = [i for i, h in enumerate(headers) if h.value]
+        if candidates:
+            index = candidates[rng.randrange(len(candidates))]
+        else:
+            index = rng.randrange(len(headers))
+
+        original_header = headers[index]
+        original_value = original_header.value
+
+        if not original_value:
+            mutated_value = "X"
+            variant = "fill_empty"
+        else:
+            length = len(original_value)
+            # Variants requiring length>=2 are pruned for length-1 values.
+            all_variants = (
+                "trim_last",
+                "trim_first",
+                "trim_random",
+                "flip_last",
+                "flip_first",
+                "flip_random",
+                "dup_byte",
+                "swap_adjacent",
+                "insert_byte",
+                "insert_null",
+            )
+            variants = (
+                all_variants
+                if length >= 2
+                else ("trim_last", "flip_last", "dup_byte", "insert_byte", "insert_null")
+            )
+            variant = variants[rng.randrange(len(variants))]
+
+            if variant == "trim_last":
+                mutated_value = original_value[:-1]
+            elif variant == "trim_first":
+                mutated_value = original_value[1:]
+            elif variant == "trim_random":
+                pos = rng.randrange(length)
+                mutated_value = original_value[:pos] + original_value[pos + 1 :]
+            elif variant == "flip_last":
+                mutated_value = original_value[:-1] + chr(rng.randrange(33, 127))
+            elif variant == "flip_first":
+                mutated_value = chr(rng.randrange(33, 127)) + original_value[1:]
+            elif variant == "flip_random":
+                pos = rng.randrange(length)
+                mutated_value = (
+                    original_value[:pos]
+                    + chr(rng.randrange(33, 127))
+                    + original_value[pos + 1 :]
+                )
+            elif variant == "dup_byte":
+                pos = rng.randrange(length)
+                mutated_value = (
+                    original_value[: pos + 1] + original_value[pos] + original_value[pos + 1 :]
+                )
+            elif variant == "swap_adjacent":
+                pos = rng.randrange(length - 1)
+                mutated_value = (
+                    original_value[:pos]
+                    + original_value[pos + 1]
+                    + original_value[pos]
+                    + original_value[pos + 2 :]
+                )
+            elif variant == "insert_byte":
+                pos = rng.randrange(length + 1)
+                mutated_value = (
+                    original_value[:pos]
+                    + chr(rng.randrange(33, 127))
+                    + original_value[pos:]
+                )
+            else:  # insert_null
+                pos = rng.randrange(length + 1)
+                mutated_value = original_value[:pos] + "\x00" + original_value[pos:]
+
+        headers[index] = EditableHeader(
+            name=original_header.name,
+            value=mutated_value,
+        )
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        target = MutationTarget(layer="wire", path=f"header[{index}]")
+        record = self._record_mutation(
+            target=target,
+            operator="byte_edit_only",
+            before=(original_header.name, original_header.value),
+            after=(original_header.name, mutated_value),
             note=f"variant={variant}",
         )
         return mutated_message, record
