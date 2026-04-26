@@ -421,7 +421,15 @@ class CampaignExecutor:
                     serial=config.adb_serial,
                     buffers=config.adb_buffers,
                 )
-                adb_collector = AdbLogCollector(adb_cfg)
+                # Persist every streamed logcat line to a single file at the
+                # campaign-dir top level so post-hoc analysis can correlate
+                # adb events with case-level jsonl entries without paging
+                # through per-case snapshots.
+                full_logcat_path = self._campaign_dir / "logcat_full.txt"
+                adb_collector = AdbLogCollector(
+                    adb_cfg,
+                    output_file=full_logcat_path,
+                )
                 adb_detector = AdbAnomalyDetector()
                 adb_oracle = AdbOracle(adb_collector, adb_detector)
                 self._adb_collector = adb_collector

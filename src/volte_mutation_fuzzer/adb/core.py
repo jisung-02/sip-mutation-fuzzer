@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from volte_mutation_fuzzer.adb.contracts import (
     AdbAnomalyEvent,
@@ -419,6 +419,7 @@ class AdbLogCollector:
         *,
         max_reconnect_attempts: int = 5,
         reconnect_delay: float = 5.0,
+        output_file: Path | None = None,
     ) -> None:
         self._config = config or AdbCollectorConfig()
         self._connector = AdbConnector(serial=self._config.serial)
@@ -432,6 +433,12 @@ class AdbLogCollector:
         self._dead_buffers: set[str] = set()
         self._reconnect_count: int = 0
         self._lock = threading.Lock()
+        # Optional persistent dump: every line streamed from any buffer is also
+        # appended to this file. The reader threads share the handle through
+        # ``_lock`` so cross-buffer interleaving is the cost of a single
+        # campaign-wide log instead of N per-buffer files.
+        self._output_path = output_file
+        self._output_fp: Any | None = None
 
     def start(self, clear: bool = True) -> None:
         if clear:
@@ -442,6 +449,13 @@ class AdbLogCollector:
             )
 
         self.stop()
+        if self._output_path is not None:
+            self._output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Line-buffered text mode: every "\n" is flushed so the file is
+            # safe to tail/inspect mid-campaign and no truncation on crash.
+            self._output_fp = open(
+                self._output_path, "w", buffering=1, encoding="utf-8", errors="replace"
+            )
         self._running.set()
         for buffer_name in self._config.buffers:
             cmd = self._connector._adb_cmd(
@@ -484,6 +498,13 @@ class AdbLogCollector:
         with self._lock:
             self._procs.clear()
             self._dead_buffers.clear()
+            if self._output_fp is not None:
+                try:
+                    self._output_fp.flush()
+                    self._output_fp.close()
+                except Exception:
+                    pass
+                self._output_fp = None
         self._threads.clear()
 
     def get_lines(
@@ -569,6 +590,15 @@ class AdbLogCollector:
                                     line=text,
                                 )
                             )
+                            if self._output_fp is not None:
+                                # Prefix each line with its buffer (main/system/
+                                # radio/crash) because the four reader threads
+                                # interleave into one file and downstream tools
+                                # need to know which logcat buffer it came from.
+                                try:
+                                    self._output_fp.write(f"[{buffer_name}] {text}\n")
+                                except Exception:
+                                    pass
                         self._queue.put((buffer_name, text))
                         got_data = True
                     # EOF reached — adb logcat subprocess died
