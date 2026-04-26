@@ -37,7 +37,10 @@ from volte_mutation_fuzzer.mutator.contracts import (
     MutatedCase,
     PacketModel,
 )
-from volte_mutation_fuzzer.mutator.profile_catalog import profile_supports_strategy
+from volte_mutation_fuzzer.mutator.profile_catalog import (
+    SUPPORTED_STRATEGIES_BY_LAYER as _SUPPORTED_STRATEGIES,
+    profile_supports_strategy,
+)
 from volte_mutation_fuzzer.mutator.core import SIPMutator
 from volte_mutation_fuzzer.mutator.editable import parse_editable_from_wire
 from volte_mutation_fuzzer.oracle.contracts import OracleContext
@@ -89,34 +92,12 @@ _DIALOG_RUNTIME_PATHS: frozenset[PacketRuntimePath] = frozenset(
 )
 
 
-# layer별 지원 전략 매핑 — mutator/core.py _validate_supported_strategy와 동기화
-_SUPPORTED_STRATEGIES: dict[str, frozenset[str]] = {
-    "model": frozenset({"default", "state_breaker"}),
-    "wire": frozenset(
-        {
-            "default",
-            "identity",
-            "safe",
-            "header_whitespace_noise",
-            "final_crlf_loss",
-            "duplicate_content_length_conflict",
-            "alias_port_desync",
-            "null_byte_only",
-            "boundary_only",
-            "byte_edit_only",
-        }
-    ),
-    "byte": frozenset(
-        {
-            "default",
-            "identity",
-            "safe",
-            "header_targeted",
-            "tail_chop_1",
-            "tail_garbage",
-        }
-    ),
-}
+# ``_SUPPORTED_STRATEGIES`` is sourced from ``mutator/profile_catalog`` (see
+# the top-level import). Previously this module kept its own hand-maintained
+# copy that had to be synced with the mutator catalog and the validator in
+# ``mutator/core.py``; forgetting to sync silently dropped every spec whose
+# strategy wasn't in the local copy, producing 0-case campaigns with no
+# error. Single source of truth eliminates that footgun.
 
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,76 @@ BLACKLIST_TAGS_EXACT: frozenset[str] = frozenset({
     "NetworkStatsManager",
     "PowerStatsService",
     "KeyguardViewMediator",
+    # Pixel/Google framework + Google-app tags that throw routine
+    # java.lang.* exceptions during normal background operation. Observed
+    # in 2026-04-26 byte_edit_only campaign on Pixel 10 — every one of
+    # these lit up the ``uncaught_java_exception`` critical pattern despite
+    # having no relation to the SIP/IMS surface under test.
+    "LoadedApk",
+    "NearbyPresence",
+    "PickerSyncController",
+    "TaskFragmentComponent",
+    "NexusCSStateManager",
+    "JavaBinder",
+    "Bundle",
+    "System.err",
+    # Obfuscated Google framework/component tags (eikg, jqxd, dcqy, ...)
+    # — short lowercase tags that appear from minified Google Mobile
+    # Services classes. Always background, never IMS-related.
+    "eikg",
+    "jqxd",
+    "dcqy",
+    "afes",
+    "dqmh",
+    "afcb",
+    "ajbw",
+    "aeyc",
+    "afco",
+    "ajbi",
+    # Generic Android framework background services. They surface
+    # exceptions / "process died" / lifecycle warnings during routine
+    # operation that have no bearing on the IMS / SIP surface.
+    "DropBoxManagerService",
+    "WindowManager",
+    "InputDispatcher",
+    "ConnectivityService",
+    "DisplayManagerService",
+    "ActivityThread",
+    "PackageManager",
+    "AppOps",
+    "NotificationService",
+    "JobScheduler",
+    "AlarmManager",
+    "GnssLocationProvider",
+    "LocationManagerService",
+    "MediaSessionService",
+    "AudioFlinger",
+    # Battery / thermal / sensor — pure hardware telemetry, never SIP-side.
+    "BatteryDump",
+    "BatteryStatsService",
+    "BatteryStatsImpl",
+    "thermal_core",
+    "thermal_service",
+    "seh_thermal_service",
+    "mtk_thermal",
+    # NOTE: We intentionally do *not* blacklist DSRM-* / NRM-C-* even though
+    # their routine recovery / registration-state warnings are noisy. Real
+    # baseband faults and EMM rejects also surface under those tags, and
+    # losing them would mask cellular-side CVE-class signals. The
+    # tightened ``nv_corruption`` regex (``\bNV(?:RAM)?\b ...``) already
+    # neutralises the ``invalid``/``recovery`` substring FP that motivated
+    # adding them, so per-tag suppression is unnecessary and unsafe.
+    # CHRE (Context Hub Runtime) sensor / positioning chatter. Lines like
+    # ``[WallabyPD] Device (0x201) >>> stationary-unspecified <<<`` matched
+    # native_crash regex purely from the ``>>>`` decoration.
+    "CHRE",
+    "WallabyPD",
+    # Samsung-specific routine telemetry.
+    "SEM_SLOG",
+    "SemDvfs",
+    "SemDesktopModeManager",
+    "SemEmergencyManager",
+    "SemPlatform",
 })
 
 
@@ -442,11 +512,20 @@ class AdbLogCollector:
 
     def start(self, clear: bool = True) -> None:
         if clear:
-            subprocess.run(
-                self._connector._adb_cmd("logcat", "-c"),
-                capture_output=True,
-                timeout=10,
-            )
+            # ``adb logcat -c`` without ``-b`` only clears the default (main)
+            # buffer. The radio / system / crash buffers keep their history
+            # and the next ``adb logcat -b <buf>`` stream re-emits old lines
+            # as if they were live, which is the root cause of the
+            # "stale-log scrape" FP — a single hours-old RILJ Unexpected
+            # response would re-match across every case in a campaign.
+            # Clear every buffer the collector will subsequently stream from
+            # so each campaign starts with a truly empty history.
+            for buf in self._config.buffers:
+                subprocess.run(
+                    self._connector._adb_cmd("logcat", "-b", buf, "-c"),
+                    capture_output=True,
+                    timeout=10,
+                )
 
         self.stop()
         if self._output_path is not None:

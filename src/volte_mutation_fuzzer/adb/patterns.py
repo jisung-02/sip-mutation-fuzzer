@@ -38,8 +38,18 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "fatal_signal",
     ),
     AnomalyPattern(
+        # ``Fatal signal X (SIG...)`` and ``F/DEBUG : *** *** *** ...`` are
+        # the two unambiguous markers libc/debuggerd writes when delivering a
+        # native crash. The previous third alternation ``>>> .* <<<`` matched
+        # the process-name banner inside a tombstone, but it also matched
+        # CHRE sensor lines like ``[WallabyPD] Device (0x201) >>>
+        # stationary-unspecified <<<`` and similar non-crash log decorations
+        # — observed on Pixel 10 in 2026-04-26 byte_edit_only campaign as a
+        # bulk source of stack_failure FPs. Drop it; tombstones are still
+        # caught by the dedicated ``tombstone`` pattern and the libc
+        # ``Fatal signal`` line above.
         "native_crash",
-        r"Fatal signal|DEBUG\s*:.*\*\*\*|>>> .* <<<",
+        r"Fatal signal|DEBUG\s*:.*\*{3}",
         "critical",
         "fatal_signal",
     ),
@@ -490,8 +500,18 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "system_anomaly",
     ),
     AnomalyPattern(
+        # The previous regex ``NV(?:RAM)?.*(?:corrupt|invalid|recovery)``
+        # was case-insensitive and lacked word boundaries, so substrings of
+        # unrelated words tripped it. Notably ``i**nv**alid ... recovery``
+        # inside lines like ``D/DSRM-0 ( 2927): skip when network still
+        # remains invalid and recovery was not started yet`` (a routine Data
+        # Service Recovery Manager warning, no NV memory involvement) was
+        # flagged repeatedly across the 2026-04-26 byte_edit_only campaign.
+        # Require the literal token ``NV`` / ``NVRAM`` at a word boundary
+        # and drop the over-broad ``recovery`` alternative; real NV write or
+        # corruption logs use ``NV`` / ``NVRAM`` as a standalone identifier.
         "nv_corruption",
-        r"NV(?:RAM)?.*(?:corrupt|invalid|recovery)",
+        r"\bNV(?:RAM)?\b.*(?:corrupt|invalid|fail)",
         "critical",
         "fatal_signal",
     ),
@@ -500,8 +520,26 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     # System / process death (boost on existing patterns).
     # ---------------------------------------------------------------------
     AnomalyPattern(
+        # Only flag the process names whose death actually breaks the IMS /
+        # RIL / framework layers under test. Earlier looser alternations
+        # (``\S*ims\S*``, ``com\.android\.\S+``, ``com\.sec\.\S+``) caught
+        # routine background lifecycle of unrelated apps (Google Maps /
+        # Files / Chrome) AND of IMS-adjacent apps (RCS UI, MmsService,
+        # carrier-side helpers) that periodically restart on their own.
+        # Match the bare set of system daemons and IMS service processes
+        # whose death would actually invalidate fuzz results.
         "process_died",
-        r"Process\s+\S+\s+\(pid\s+\d+\) has died",
+        r"Process\s+(?:"
+        r"com\.sec\.imsservice"
+        r"|com\.android\.ims(?:\.\S+|\b)"
+        r"|com\.android\.phone\b"
+        r"|com\.android\.cellbroadcast\S*"
+        r"|com\.google\.android\.ims(?:\.\S+|\b)"
+        r"|com\.samsung\.android\.app\.imsservice\S*"
+        r"|com\.\S+\.imsservice(?:\.\S+|\b)"   # generic vendor IMS service
+        r"|imsd|rild|RILD"
+        r"|system_server|surfaceflinger"
+        r")\s+\(pid\s+\d+\) has died",
         "critical",
         "system_anomaly",
     ),
@@ -520,6 +558,65 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     AnomalyPattern(
         "selinux_denial_ims",
         r"avc:\s+denied.*scontext=.*ims",
+        "warning",
+        "system_anomaly",
+    ),
+
+    # ---------------------------------------------------------------------
+    # CVE-class signals not covered by earlier patterns.
+    # Added 2026-04-26 after auditing what real SIP/IMS/baseband CVE
+    # advisories surface in logcat. Each pattern uses tight tokens to keep
+    # FPs low; severity is conservative (warning) where the same token can
+    # appear in routine cell-scan or IPsec rekey traffic.
+    # ---------------------------------------------------------------------
+    AnomalyPattern(
+        # IPsec SA tampering — LTEFuzz / SRsLTE / IMS impersonation PoCs
+        # leave traces under xfrm / ESP error paths. Distinct from a clean
+        # SA expiry: ``replay``, ``integrity``, and ``decrypt`` failures are
+        # all crypto-level events the kernel logs on rejection.
+        "ipsec_sa_failure",
+        r"xfrm\b.*\b(?:replay|integrity|seq)\b.*(?:fail|drop|invalid)"
+        r"|ESP\b.*(?:authentication|integrity|decrypt)\b.*(?:fail|invalid)"
+        r"|\bSA\b.*\b(?:invalidated|tampered)\b",
+        "warning",
+        "system_anomaly",
+    ),
+    AnomalyPattern(
+        # Network-side forced IMS deregister — observed in IMS state-machine
+        # CVEs where a malformed REGISTER / NOTIFY drops the UE from the
+        # registrar. Distinct from UE-side voluntary deregistration on
+        # airplane mode toggle (UE prints ``deregister request`` rather
+        # than the ``BY_NETWORK`` / ``forced`` form).
+        "ims_forced_deregister",
+        r"IMS_DEREGISTERED_BY_NETWORK"
+        r"|deregistered\s+by\s+network"
+        r"|forced[_ -]?deregister"
+        r"|onDeregistered.*network[_ -]?initiated",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        # IMS / 3GPP-AKA authentication breakdown. CVE classes here cover
+        # SQN desync attacks, malformed AUTN, and forged challenge replies.
+        # ``AKA challenge fail`` and ``synchronization failure`` are the
+        # canonical ATIS / 3GPP TS 33.203 wording.
+        "aka_auth_failure",
+        r"AKA\b.*(?:challenge|sync|sqn|mac|autn)\b.*(?:fail|invalid|mismatch|reject)"
+        r"|\bIK\b.*(?:derive|generate)\b.*fail"
+        r"|authentication\s+(?:sync|failure|reject)",
+        "warning",
+        "ims_anomaly",
+    ),
+    AnomalyPattern(
+        # Binder transaction corruption — heap-spray / IPC-overflow CVEs in
+        # Android Telephony surface here when the IMS service's binder
+        # arguments are unmarshalled into corrupt state. Distinct from a
+        # routine ``Binder died`` (already covered) which is a clean
+        # connection drop.
+        "binder_transaction_corrupt",
+        r"Binder\s+transaction\s+(?:fail|reject)\s+with\s+code"
+        r"|TRANSACTION_FAILED.*\bcorrupt"
+        r"|unable\s+to\s+unmarshall.*Parcel.*corrupt",
         "warning",
         "system_anomaly",
     ),
