@@ -101,6 +101,8 @@ _SUPPORTED_STRATEGIES: dict[str, frozenset[str]] = {
             "final_crlf_loss",
             "duplicate_content_length_conflict",
             "alias_port_desync",
+            "null_byte_only",
+            "boundary_only",
         }
     ),
     "byte": frozenset(

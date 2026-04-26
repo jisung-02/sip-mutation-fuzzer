@@ -956,6 +956,7 @@ class SIPMutator:
                 "duplicate_content_length_conflict",
                 "alias_port_desync",
                 "null_byte_only",
+                "boundary_only",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1401,6 +1402,8 @@ class SIPMutator:
             return self._apply_duplicate_content_length_conflict(editable_message, rng)
         if strategy == "null_byte_only":
             return self._apply_null_byte_only(editable_message, rng)
+        if strategy == "boundary_only":
+            return self._apply_boundary_only(editable_message, rng)
         return None
 
     def _apply_null_byte_only(
@@ -1440,6 +1443,68 @@ class SIPMutator:
             operator="null_byte_only",
             before=(original_header.name, original_header.value),
             after=(original_header.name, mutated_value),
+            note=f"variant={variant}",
+        )
+        return mutated_message, record
+
+    def _apply_boundary_only(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        headers = list(editable_message.headers)
+        if not headers:
+            raise ValueError("boundary_only requires at least one header")
+        index = rng.randrange(len(headers))
+        original_header = headers[index]
+
+        # Common SIP/integer-field boundary values that historically expose
+        # off-by-one, signed/unsigned wrap, and width-conversion bugs.
+        numeric_boundaries = (
+            "0", "1", "-1",
+            "127", "128",
+            "255", "256",
+            "32767", "32768",
+            "65535", "65536",
+            "2147483647", "2147483648",
+            "4294967295", "4294967296",
+            "9999999999",
+            "18446744073709551615", "18446744073709551616",
+        )
+        length_boundaries = (1, 1024, 4096, 65535, 65536, 1048576)
+
+        variants = ("numeric", "zero_length", "single_char", "huge_length", "negative_overflow")
+        variant = variants[rng.randrange(len(variants))]
+        if variant == "numeric":
+            mutated_value = numeric_boundaries[rng.randrange(len(numeric_boundaries))]
+        elif variant == "zero_length":
+            mutated_value = ""
+        elif variant == "single_char":
+            mutated_value = "X"
+        elif variant == "huge_length":
+            length = length_boundaries[rng.randrange(len(length_boundaries))]
+            mutated_value = "A" * length
+        else:
+            # negative_overflow: leading minus + boundary digits
+            mutated_value = "-" + numeric_boundaries[rng.randrange(len(numeric_boundaries))]
+
+        headers[index] = EditableHeader(
+            name=original_header.name,
+            value=mutated_value,
+        )
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        target = MutationTarget(layer="wire", path=f"header[{index}]")
+        # Truncate after-snapshot to keep records readable when huge_length picked.
+        after_for_record = (
+            mutated_value if len(mutated_value) <= 80 else f"{mutated_value[:40]}…(len={len(mutated_value)})"
+        )
+        record = self._record_mutation(
+            target=target,
+            operator="boundary_only",
+            before=(original_header.name, original_header.value),
+            after=(original_header.name, after_for_record),
             note=f"variant={variant}",
         )
         return mutated_message, record
