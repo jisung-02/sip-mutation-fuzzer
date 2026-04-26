@@ -401,6 +401,33 @@ class RealUEDirectResolver:
                 return UEContact(msisdn=msisdn, host=ue_ip, port=ue_port, source="xfrm-state")
         return None
 
+    def _xfrm_active_ue_ips(self) -> frozenset[str]:
+        """Return the set of UE IPs currently bound to live IPsec SAs.
+
+        Used as a stale-data sentinel for ``_lookup_ue_contact``: contacts
+        scraped from kamctl / pcscf logs / OPTIONS pings can refer to a UE
+        that has since detached or rekeyed to a new IP, while ``ip xfrm
+        state`` only ever lists currently-active SAs from the kernel.
+        Cross-checking the lookup-chain result against this set lets us
+        discard scrape-cache poisoning without needing to choose a single
+        source winner up front (which is unsafe in multi-UE setups).
+        """
+        pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21")
+        try:
+            result = subprocess.run(
+                ["docker", "exec", self.pcscf_container, "ip", "xfrm", "state"],
+                capture_output=True, text=True, timeout=10.0, check=False,
+            )
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return frozenset()
+        if result.returncode != 0:
+            return frozenset()
+
+        pattern = re.compile(
+            r"sel src ([\d.]+)/\d+ dst " + re.escape(pcscf_ip) + r"/\d+ sport \d+ dport \d+"
+        )
+        return frozenset(m.group(1) for m in pattern.finditer(result.stdout))
+
     def _lookup_imsi_from_pyhss(self, msisdn: str) -> str | None:
         if self.pyhss_url is None:
             return None
@@ -432,17 +459,48 @@ class RealUEDirectResolver:
         ``resolve_protected_ports()``. Chain order matches ``resolve()``:
         kamctl (S-CSCF) → kamctl (P-CSCF) → S-CSCF MySQL → P-CSCF logs →
         OPTIONS ping → xfrm state.
+
+        Each scrape-based candidate (kamctl / pcscf-logs / options-ping) is
+        cross-checked against ``ip xfrm state`` so that a UE which has
+        re-IP'd or detached doesn't poison the result. The xfrm state is
+        the kernel's authoritative live view; if a scrape-source contact
+        is not present there, the contact is treated as stale and the
+        chain falls through to the next source. The xfrm-state lookup
+        itself is left unchecked (it *is* the authoritative source).
         """
+        active_ips = self._xfrm_active_ue_ips()
+
+        def _is_active(c: UEContact | None) -> bool:
+            # If we couldn't read xfrm at all (active_ips empty) we cannot
+            # validate, so accept the contact rather than failing closed.
+            if c is None:
+                return False
+            if not active_ips:
+                return True
+            return c.host in active_ips
+
         contact = self._lookup_via_kamctl(msisdn, container=self.scscf_container)
+        if not _is_active(contact):
+            contact = None
         if contact is None and self.pcscf_container != self.scscf_container:
-            contact = self._lookup_via_kamctl(msisdn, container=self.pcscf_container)
+            candidate = self._lookup_via_kamctl(msisdn, container=self.pcscf_container)
+            if _is_active(candidate):
+                contact = candidate
         if contact is None:
-            contact = self._lookup_via_scscf_mysql(msisdn)
+            candidate = self._lookup_via_scscf_mysql(msisdn)
+            if _is_active(candidate):
+                contact = candidate
         if contact is None:
-            contact = self._lookup_via_pcscf_logs(msisdn)
+            candidate = self._lookup_via_pcscf_logs(msisdn)
+            if _is_active(candidate):
+                contact = candidate
         if contact is None:
-            contact = self._lookup_via_pcscf_options_ping(msisdn, impi=impi)
+            candidate = self._lookup_via_pcscf_options_ping(msisdn, impi=impi)
+            if _is_active(candidate):
+                contact = candidate
         if contact is None:
+            # xfrm-state lookup is the authoritative live source; do not
+            # cross-check (it would be checking against itself).
             contact = self._lookup_via_xfrm_state(msisdn)
         return contact
 

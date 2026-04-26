@@ -607,6 +607,27 @@ class CampaignExecutor:
                                     f"original verdict: {case_result.verdict}",
                                 }
                             )
+                        else:
+                            # SA alive but timeout streak — most likely cause is UE
+                            # re-register or IPsec rekey changing the UE IP / port_pc
+                            # / port_ps under us. The sender re-resolves on every
+                            # case anyway, but we add a short cooldown here so the
+                            # next iteration sees a stabilised xfrm state, plus a
+                            # marker on the verdict so post-mortem analysis can
+                            # tell "fuzzer-side stuck" apart from "UE rekeyed
+                            # mid-campaign". Once per streak only — clears when
+                            # the next normal verdict resets `consecutive_failures`.
+                            case_result = case_result.model_copy(
+                                update={
+                                    "reason": (
+                                        f"{case_result.reason or 'timeout'} "
+                                        f"(streak={consecutive_failures}; "
+                                        "suspected UE rekey or re-register — "
+                                        "applied 2s cooldown before next case)"
+                                    ),
+                                }
+                            )
+                            time.sleep(2.0)
                 else:
                     consecutive_failures = 0
                     sa_checked_dead = False
