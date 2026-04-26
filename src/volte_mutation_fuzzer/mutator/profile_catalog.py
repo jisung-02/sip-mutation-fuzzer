@@ -23,6 +23,7 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "final_crlf_loss",
             "duplicate_content_length_conflict",
             "alias_port_desync",
+            "null_byte_only",
         }
     ),
     "byte": frozenset(
@@ -45,7 +46,7 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
     },
     "delivery_preserving": {
         "model": frozenset({"default"}),
-        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise"}),
+        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise", "null_byte_only"}),
         "byte": frozenset({"default", "identity", "safe", "header_targeted"}),
     },
     "ims_specific": {

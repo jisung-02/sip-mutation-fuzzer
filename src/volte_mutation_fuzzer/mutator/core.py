@@ -955,6 +955,7 @@ class SIPMutator:
                 "final_crlf_loss",
                 "duplicate_content_length_conflict",
                 "alias_port_desync",
+                "null_byte_only",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1398,7 +1399,50 @@ class SIPMutator:
             return self._apply_final_crlf_loss(editable_message)
         if strategy == "duplicate_content_length_conflict":
             return self._apply_duplicate_content_length_conflict(editable_message, rng)
+        if strategy == "null_byte_only":
+            return self._apply_null_byte_only(editable_message, rng)
         return None
+
+    def _apply_null_byte_only(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        headers = list(editable_message.headers)
+        if not headers:
+            raise ValueError("null_byte_only requires at least one header")
+        index = rng.randrange(len(headers))
+        original_header = headers[index]
+        original_value = original_header.value
+
+        variants = ("midpoint", "suffix", "prefix", "scrub")
+        variant = variants[rng.randrange(len(variants))]
+        if variant == "midpoint" and len(original_value) >= 2:
+            pos = rng.randrange(1, len(original_value))
+            mutated_value = original_value[:pos] + "\x00" + original_value[pos:]
+        elif variant == "suffix":
+            mutated_value = original_value + "\x00"
+        elif variant == "prefix":
+            mutated_value = "\x00" + original_value
+        else:
+            mutated_value = "\x00" * rng.randint(1, 5)
+
+        headers[index] = EditableHeader(
+            name=original_header.name,
+            value=mutated_value,
+        )
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        target = MutationTarget(layer="wire", path=f"header[{index}]")
+        record = self._record_mutation(
+            target=target,
+            operator="null_byte_only",
+            before=(original_header.name, original_header.value),
+            after=(original_header.name, mutated_value),
+            note=f"variant={variant}",
+        )
+        return mutated_message, record
 
     def _to_packet_bytes(
         self,
