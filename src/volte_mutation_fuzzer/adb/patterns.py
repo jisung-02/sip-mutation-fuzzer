@@ -129,16 +129,39 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "call_anomaly",
     ),
     AnomalyPattern(
-        # RILJ "Unexpected response" / OEM RIL error indicates the modem's
-        # transaction tracker has gone out of sync with what RILJ expected.
-        # Empirically (2026-04-25 500-case A16 campaign) this fires only
-        # under specific mutations (header[X] whitespace_noise, duplicate
-        # Call-ID, mutate Supported) — i.e. it tracks real cross-layer
-        # impact, not background noise. Promote to critical so the verdict
-        # surfaces it as stack_failure on the campaign dashboard.
+        # Real RIL failures expose themselves with explicit uppercase failure
+        # tokens (GENERIC_FAILURE, REQUEST_NOT_SUPPORTED, NO_RESOURCES, ...)
+        # or with the ``Exception``/``Error`` *class names* suffixed to
+        # ``RILJ:``/``SecRIL:`` log tags. The previous regex
+        # ``oem.*ril.*error|RILJ.*Error|SecRIL.*(?:error|Error)`` matched
+        # case-insensitively, so any line containing ``error: 0`` (e.g. the
+        # routine ``RILJ: processResponse: Unexpected response! serial: N,
+        # error: 0 [PHONE0]`` modem-stale-response notice that bursts
+        # background-noise-style every few minutes on A16) ended up flagged
+        # as a critical RIL failure. That drowned every campaign in
+        # stack_failure FPs. Tighten the alternation so only genuine RIL
+        # failure tokens trip critical, and downgrade the bare
+        # "Unexpected response" tracker to a separate warning pattern
+        # below.
         "oem_ril_error",
-        r"oem.*ril.*error|RILJ.*Error|SecRIL.*(?:error|Error)",
+        r"oem[_ -]ril[_ -]error\b"
+        r"|RILJ:\s*\S*(?:_FAILURE|_FAILED|_ERROR|EXCEPTION|REQUEST_NOT_SUPPORTED|NO_RESOURCES|SECURITY_FAILURE|GENERIC_FAILURE)\b"
+        r"|SecRIL.*\b(?:Exception|FAILURE|FAILED)\b"
+        r"|RIL[Dd][_ -]?(?:died|killed|crash|crashed)\b"
+        r"|rild[_ -]?(?:died|killed|crash|crashed)\b",
         "critical",
+        "call_anomaly",
+    ),
+    AnomalyPattern(
+        # Bare RILJ transaction-tracker-out-of-sync notice. Modem-side
+        # stale responses, batch-processed every few minutes regardless of
+        # what the IMS service is doing, so on its own it is **noise**.
+        # Keep it visible at warning severity so deeper analysis can still
+        # correlate it against suspicious cases, but never let it raise
+        # the verdict to stack_failure on its own.
+        "rilj_unexpected_response",
+        r"RILJ\b.*processResponse:\s*Unexpected response",
+        "warning",
         "call_anomaly",
     ),
     AnomalyPattern(
