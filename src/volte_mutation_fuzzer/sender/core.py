@@ -649,6 +649,37 @@ class SIPSenderReactor:
         observer_events.append(f"route-check:bypassed:bind-container:{container}")
         observer_events.append(f"container-send:deprecated:{container}")
 
+        # When bind_port is unset (=0), the kernel would pick an ephemeral
+        # source port. The UE then routes its SIP reply by the Via sent-by
+        # port (or rport echo), and any value other than the actual source
+        # port leaves the reply heading to a wildcard listener (e.g. kamailio
+        # on :5060) that gets there first. Resolve the same UDP source port
+        # the native path uses (xfrm port_map[ue_port]), so the bind socket,
+        # the rewritten Via header, and the UE's reply destination all line
+        # up. If xfrm has no entry for this UE port, fall back to ephemeral.
+        if bind_port == 0:
+            try:
+                session = resolve_native_ipsec_session(
+                    ue_ip=resolved_host,
+                    pcscf_container=container,
+                    env=self._env,
+                )
+            except RealUEDirectError as exc:
+                observer_events.append(
+                    f"container-send:port-resolve:skipped:{type(exc).__name__}"
+                )
+            else:
+                resolved_bind = session.port_map.get(resolved_port)
+                if resolved_bind is not None:
+                    bind_port = resolved_bind
+                    observer_events.append(
+                        f"container-send:port-resolved:{resolved_port}->{bind_port}"
+                    )
+                else:
+                    observer_events.append(
+                        f"container-send:port-resolve:no-mapping:{resolved_port}"
+                    )
+
         payload, normalization_events = prepare_real_ue_direct_payload(
             artifact,
             local_host=bind_host,

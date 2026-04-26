@@ -66,9 +66,22 @@ if transport == "TCP":
         print(json.dumps({"raw_b64": base64.b64encode(raw).decode(), "host": remote_host, "port": remote_port}), flush=True)
 else:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except (OSError, AttributeError):
+        pass
     sock.bind((bind_host, bind_port))
     sock.settimeout(timeout_secs)
-    sock.sendto(payload, (remote_host, remote_port))
+    # connect() so the kernel scores this socket above any wildcard listener
+    # (e.g. kamailio on :5060) when routing inbound replies from this UE peer.
+    # Without it, replies race into the unconnected listener and recvfrom()
+    # times out even when the UE responded.
+    try:
+        sock.connect((remote_host, remote_port))
+    except OSError as exc:
+        sys.stderr.write(f"connect({remote_host}:{remote_port}) failed: {exc}\n")
+    sock.send(payload)
     count = 0
     while count < MAX_RESPONSES:
         try:
