@@ -270,6 +270,9 @@ def run_command(
         else _field_defaults["ios_filter_processes"].default
     )
 
+    if ios and adb is None:
+        adb = False
+
     try:
         config = CampaignConfig(
             target_host=target_host,
