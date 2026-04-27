@@ -144,6 +144,118 @@ class RealUEDirectHelperTests(unittest.TestCase):
             check=False,
         )
 
+    def test_resolve_protected_ports_xfrm_reads_non_adjacent_pair_from_dport(self) -> None:
+        """iPhone 16e returns non-adjacent (port_pc, port_ps) pairs.
+
+        Real capture from `docker exec pcscf ip xfrm state` for UE 10.20.20.2 / PCSCF 172.22.0.21:
+        - UE→PCSCF dport=5100 → sport=61008 = UE server port (port_ps)
+        - UE→PCSCF dport=6100 → sport=63193 = UE client port (port_pc)
+
+        Strategy 1 (P-CSCF logs) returns nothing here, forcing Strategy 2 (xfrm).
+        Correct return is (63193, 61008); current implementation returns
+        (min({63193, 61008}), min+1) = (61008, 61009) which is wrong on both axes.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout=(
+                        "src 10.20.20.2 dst 172.22.0.21\n"
+                        "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+                        "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+                        "src 172.22.0.21 dst 10.20.20.2\n"
+                        "\tproto esp spi 0x0bf223f6 reqid 200418294 mode transport\n"
+                        "\tsel src 172.22.0.21/32 dst 10.20.20.2/32 sport 6100 dport 63193\n"
+                        "src 172.22.0.21 dst 10.20.20.2\n"
+                        "\tproto esp spi 0x00b82e27 reqid 12070439 mode transport\n"
+                        "\tsel src 172.22.0.21/32 dst 10.20.20.2/32 sport 5100 dport 61008\n"
+                        "src 10.20.20.2 dst 172.22.0.21\n"
+                        "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+                        "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 63193 dport 6100\n"
+                    ),
+                    stderr="",
+                ),
+            ),
+        ):
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111", ue_ip="10.20.20.2",
+            )
+
+        self.assertEqual((port_pc, port_ps), (63193, 61008))
+
+    def test_resolve_protected_ports_reads_both_ports_from_security_client_header(self) -> None:
+        """Kamailio P-CSCF log lines carry port-c and port-s in Security-Client.
+
+        The header gives the authoritative pair without any +1 estimation:
+            Security-Client=ipsec-3gpp;...;port-c=63193;port-s=61008;...
+
+        Current implementation only parses `Term UE connection` lines and falls
+        through to Strategy 2. We deliberately mock Strategy 2 with a
+        *different* port pair (50000/50001) so that any implementation that
+        ignores the Security-Client header and falls back to xfrm parsing
+        yields a wrong answer instead of accidentally matching.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+
+        # Verbatim line shape captured from the running pcscf container during
+        # an iPhone 16e REGISTER (multiple algorithm offers comma-joined inside
+        # the same Security-Client header — production format).
+        security_client_log = (
+            "97(139) NOTICE: {2 2 REGISTER wEi6kYXGzbA39Qqpf6MDkUU4 REGISTER_reply} "
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=aes-cbc;mod=trans;"
+            "port-c=63193;port-s=61008;prot=esp;spi-c=200418294;spi-s=12070439,"
+            "ipsec-3gpp;alg=hmac-md5-96;ealg=null;mod=trans;port-c=63193;port-s=61008;"
+            "prot=esp;spi-c=200418294;spi-s=12070439,"
+            "ipsec-3gpp;alg=hmac-sha-1-96;ealg=aes-cbc;mod=trans;port-c=63193;port-s=61008;"
+            "prot=esp;spi-c=200418294;spi-s=12070439,"
+            "ipsec-3gpp;alg=hmac-sha-1-96;ealg=null;mod=trans;port-c=63193;port-s=61008;"
+            "prot=esp;spi-c=200418294;spi-s=12070439\n"
+        )
+
+        # Decoy xfrm output — different port pair so a fallback-only
+        # implementation returns (50000, 50001) and the assertion fails loudly.
+        decoy_xfrm = (
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 50001 dport 5100\n"
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 50000 dport 6100\n"
+        )
+
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout=security_client_log,
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout=decoy_xfrm,
+                    stderr="",
+                ),
+            ),
+        ):
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111", ue_ip="10.20.20.2",
+            )
+
+        self.assertEqual((port_pc, port_ps), (63193, 61008))
+
     def test_resolve_protected_ports_prefers_matching_msisdn_from_xfrm(self) -> None:
         resolver = RealUEDirectResolver()
 
