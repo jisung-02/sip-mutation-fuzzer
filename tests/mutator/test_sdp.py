@@ -21,10 +21,12 @@ from volte_mutation_fuzzer.mutator.editable import (
     parse_editable_from_wire,
 )
 from volte_mutation_fuzzer.mutator.sdp import (
+    BYTE_EDIT_VARIANTS,
     SDPMutationResult,
     STRUCT_VARIANTS,
     VARIANTS,
     apply_sdp_boundary,
+    apply_sdp_byte_edit,
     apply_sdp_struct,
     parse_sdp_body,
     render_sdp_body,
@@ -688,6 +690,366 @@ class SDPStructReproductionCmdTests(unittest.TestCase):
         executor = self._executor_with(mutations_per_case=3, mt=True)
         cmd = executor._build_mt_template_reproduction_cmd(self._spec())
         self.assertIn("--strategy sdp_struct_only", cmd)
+        self.assertIn("--mutations-per-case 3", cmd)
+
+
+class SDPByteEditVariantTests(unittest.TestCase):
+    """``apply_sdp_byte_edit`` performs a single surgical byte edit
+    inside the SDP body. Each variant must change exactly the targeted
+    byte (or insert/delete one) and leave the rest of the body byte-
+    exact.
+    """
+
+    def _body(self) -> str:
+        return _BASELINE_SDP
+
+    def test_trim_last_drops_one_byte_at_tail(self) -> None:
+        body = self._body()
+        new_body, result = apply_sdp_byte_edit(
+            body, random.Random(0), variant="trim_last"
+        )
+        self.assertEqual(new_body, body[:-1])
+        self.assertEqual(result.operator, "sdp_byte_edit")
+        self.assertEqual(result.note, "variant=trim_last")
+        self.assertTrue(result.path.endswith(f"[{len(body) - 1}]"))
+
+    def test_trim_first_drops_one_byte_at_head(self) -> None:
+        body = self._body()
+        new_body, result = apply_sdp_byte_edit(
+            body, random.Random(0), variant="trim_first"
+        )
+        self.assertEqual(new_body, body[1:])
+        self.assertEqual(result.note, "variant=trim_first")
+        self.assertTrue(result.path.endswith("[0]"))
+
+    def test_flip_random_changes_one_byte(self) -> None:
+        body = self._body()
+        new_body, result = apply_sdp_byte_edit(
+            body, random.Random(7), variant="flip_random"
+        )
+        # Same length; exactly one byte differs.
+        self.assertEqual(len(new_body), len(body))
+        diff_positions = [
+            i for i in range(len(body)) if body[i] != new_body[i]
+        ]
+        self.assertEqual(len(diff_positions), 1)
+        self.assertTrue(result.note.startswith("variant=flip_random"))
+
+    def test_dup_byte_inserts_a_copy(self) -> None:
+        body = self._body()
+        new_body, result = apply_sdp_byte_edit(
+            body, random.Random(1), variant="dup_byte"
+        )
+        self.assertEqual(len(new_body), len(body) + 1)
+        self.assertTrue(result.note.startswith("variant=dup_byte"))
+
+    def test_swap_adjacent_swaps_two_neighbors(self) -> None:
+        body = self._body()
+        new_body, result = apply_sdp_byte_edit(
+            body, random.Random(2), variant="swap_adjacent"
+        )
+        self.assertEqual(len(new_body), len(body))
+        self.assertEqual(sorted(new_body), sorted(body))
+        self.assertTrue(result.note.startswith("variant=swap_adjacent"))
+
+    def test_insert_null_inserts_a_zero_byte(self) -> None:
+        body = self._body()
+        new_body, result = apply_sdp_byte_edit(
+            body, random.Random(0), variant="insert_null"
+        )
+        self.assertEqual(len(new_body), len(body) + 1)
+        self.assertIn("\x00", new_body)
+        self.assertTrue(result.note.startswith("variant=insert_null"))
+
+    def test_random_variant_picks_from_full_set(self) -> None:
+        body = self._body()
+        seen: set[str] = set()
+        for seed in range(80):
+            _new_body, result = apply_sdp_byte_edit(body, random.Random(seed))
+            seen.add(result.note.split(".")[0].split("=", 1)[1])
+        # Probabilistic: with 10 variants and 80 seeds we should see at
+        # least 5 distinct ones.
+        self.assertGreaterEqual(len(seen), 5)
+
+    def test_unknown_variant_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown sdp byte_edit variant"):
+            apply_sdp_byte_edit(
+                self._body(), random.Random(0), variant="not_a_variant"
+            )
+
+    def test_empty_body_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-empty SDP body"):
+            apply_sdp_byte_edit("", random.Random(0))
+
+    def test_length1_body_raises_on_length2_only_variant(self) -> None:
+        # ``swap_adjacent`` needs >= 2 bytes; explicit request must raise.
+        with self.assertRaisesRegex(ValueError, "length >= 2"):
+            apply_sdp_byte_edit("x", random.Random(0), variant="swap_adjacent")
+
+    def test_same_seed_is_deterministic(self) -> None:
+        body = self._body()
+        a_body, a_result = apply_sdp_byte_edit(body, random.Random(11))
+        b_body, b_result = apply_sdp_byte_edit(body, random.Random(11))
+        self.assertEqual(a_body, b_body)
+        self.assertEqual(a_result.path, b_result.path)
+        self.assertEqual(a_result.note, b_result.note)
+
+    def test_byte_edit_variants_set_matches_byte_edit_only(self) -> None:
+        # Stage 3 reuses the same 10 variant names as the wire-layer
+        # ``byte_edit_only`` strategy. Lock the contract so divergence
+        # would fail the test.
+        self.assertEqual(
+            set(BYTE_EDIT_VARIANTS),
+            {
+                "trim_last",
+                "trim_first",
+                "trim_random",
+                "flip_last",
+                "flip_first",
+                "flip_random",
+                "dup_byte",
+                "swap_adjacent",
+                "insert_byte",
+                "insert_null",
+            },
+        )
+
+
+class SDPByteEditStrategyIntegrationTests(unittest.TestCase):
+    """Wire-layer dispatch through ``SIPMutator.mutate_editable`` when
+    strategy is ``sdp_byte_edit``: SIP framing (start_line + headers
+    excluding Content-Length) must stay byte-exact, only the SDP body
+    bytes change, and Content-Length is auto-recomputed.
+    """
+
+    def _editable_with_sdp(self) -> EditableSIPMessage:
+        start_line = EditableStartLine(text="INVITE sip:fuzz@host SIP/2.0")
+        headers = (
+            EditableHeader(name="Via", value="SIP/2.0/UDP host:5060;branch=z9hG4bK-x"),
+            EditableHeader(name="From", value='"f" <sip:f@host>;tag=a'),
+            EditableHeader(name="To", value='"t" <sip:t@host>'),
+            EditableHeader(name="Call-ID", value="x@host"),
+            EditableHeader(name="CSeq", value="1 INVITE"),
+            EditableHeader(name="Content-Type", value="application/sdp"),
+            EditableHeader(
+                name="Content-Length",
+                value=str(len(_BASELINE_SDP.encode("utf-8"))),
+            ),
+        )
+        return EditableSIPMessage(
+            start_line=start_line,
+            headers=headers,
+            body=_BASELINE_SDP,
+        )
+
+    def test_strategy_mutates_via_wire_dispatch(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp()
+
+        case = mutator.mutate_editable(
+            editable,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="sdp_byte_edit",
+            ),
+        )
+
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(case.records[0].operator, "sdp_byte_edit")
+        self.assertTrue(
+            case.records[0].target.path.startswith("body:sdp:byte_edit.")
+        )
+        self.assertIsNotNone(case.wire_text)
+
+    def test_strategy_leaves_sip_framing_byte_exact(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp()
+        case = mutator.mutate_editable(
+            editable,
+            MutationConfig(
+                seed=4,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="sdp_byte_edit",
+            ),
+        )
+        wire = case.wire_text or ""
+        head, _sep, body = wire.partition("\r\n\r\n")
+        # Start line and every header except Content-Length must match
+        # the original byte-for-byte.
+        head_lines = head.split("\r\n")
+        self.assertEqual(head_lines[0], "INVITE sip:fuzz@host SIP/2.0")
+        non_cl = [
+            line for line in head_lines[1:]
+            if not line.lower().startswith("content-length:")
+        ]
+        original = self._editable_with_sdp()
+        original_non_cl = [
+            f"{h.name}: {h.value}"
+            for h in original.headers
+            if h.name.casefold() != "content-length"
+        ]
+        self.assertEqual(non_cl, original_non_cl)
+        # Body changed (at least one byte differs from baseline).
+        self.assertNotEqual(body, _BASELINE_SDP)
+
+    def test_strategy_updates_content_length(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp()
+        case = mutator.mutate_editable(
+            editable,
+            MutationConfig(
+                seed=2,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="sdp_byte_edit",
+            ),
+        )
+        wire = case.wire_text or ""
+        cl_line = next(
+            line
+            for line in wire.split("\r\n")
+            if line.lower().startswith("content-length:")
+        )
+        new_cl = int(cl_line.split(":", 1)[1].strip())
+        body_text = wire.split("\r\n\r\n", 1)[1]
+        self.assertEqual(new_cl, len(body_text.encode("utf-8")))
+
+    def test_strategy_raises_when_body_not_sdp(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp().model_copy(
+            update={
+                "headers": tuple(
+                    EditableHeader(name="Content-Type", value="text/plain")
+                    if h.name.casefold() == "content-type"
+                    else h
+                    for h in self._editable_with_sdp().headers
+                ),
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "application/sdp"):
+            mutator.mutate_editable(
+                editable,
+                MutationConfig(
+                    seed=0,
+                    layer="wire",
+                    profile="delivery_preserving",
+                    strategy="sdp_byte_edit",
+                ),
+            )
+
+    def test_strategy_raises_when_body_empty(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp().model_copy(update={"body": ""})
+
+        with self.assertRaisesRegex(ValueError, "non-empty SDP body"):
+            mutator.mutate_editable(
+                editable,
+                MutationConfig(
+                    seed=0,
+                    layer="wire",
+                    profile="delivery_preserving",
+                    strategy="sdp_byte_edit",
+                ),
+            )
+
+    def test_multi_mutation_stacks_byte_edits(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp()
+        case = mutator.mutate_editable(
+            editable,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="sdp_byte_edit",
+                max_operations=4,
+            ),
+        )
+        self.assertEqual(len(case.records), 4)
+        for record in case.records:
+            self.assertEqual(record.operator, "sdp_byte_edit")
+            self.assertTrue(
+                record.target.path.startswith("body:sdp:byte_edit.")
+            )
+
+    def test_ims_specific_profile_supports_sdp_byte_edit(self) -> None:
+        mutator = SIPMutator()
+        editable = self._editable_with_sdp()
+        case = mutator.mutate_editable(
+            editable,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="ims_specific",
+                strategy="sdp_byte_edit",
+            ),
+        )
+        self.assertEqual(case.records[0].operator, "sdp_byte_edit")
+
+
+class SDPByteEditReproductionCmdTests(unittest.TestCase):
+    """Replay command for ``sdp_byte_edit`` campaigns must propagate the
+    strategy *and* ``--mutations-per-case`` when N>1, mirroring the
+    Stage 2 ``sdp_struct_only`` parity coverage so the three SDP-aware
+    strategies move in lockstep.
+    """
+
+    def _executor_with(
+        self, *, mutations_per_case: int, mt: bool = False
+    ) -> "object":
+        import tempfile
+        from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
+        from volte_mutation_fuzzer.campaign.core import CampaignExecutor
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs: dict[str, object] = {
+                "target_msisdn": "111111",
+                "mode": "real-ue-direct",
+                "methods": ("INVITE",),
+                "ipsec_mode": "native",
+                "mutations_per_case": mutations_per_case,
+                "results_dir": tmp,
+                "output_name": "sdp-byte-edit-replay",
+            }
+            if mt:
+                kwargs.update(
+                    mt_invite_template="3gpp",
+                    impi="001010000123511@ims.mnc001.mcc001.3gppnetwork.org",
+                )
+            cfg = CampaignConfig(**kwargs)
+            return CampaignExecutor(cfg)
+
+    def _spec(self, **overrides: object):
+        from volte_mutation_fuzzer.campaign.contracts import CaseSpec
+
+        defaults: dict[str, object] = {
+            "case_id": 0,
+            "seed": 0,
+            "method": "INVITE",
+            "layer": "wire",
+            "strategy": "sdp_byte_edit",
+            "profile": "delivery_preserving",
+        }
+        defaults.update(overrides)
+        return CaseSpec(**defaults)
+
+    def test_replay_cmd_carries_strategy_and_mutations(self) -> None:
+        executor = self._executor_with(mutations_per_case=4)
+        cmd = executor._build_reproduction_cmd(self._spec())
+        self.assertIn("--strategy sdp_byte_edit", cmd)
+        self.assertIn("--mutations-per-case 4", cmd)
+        mutate_part, _pipe, send_part = cmd.partition(" | ")
+        self.assertIn("--mutations-per-case 4", mutate_part)
+        self.assertNotIn("--mutations-per-case", send_part)
+
+    def test_mt_template_replay_cmd_also_carries_mutations(self) -> None:
+        executor = self._executor_with(mutations_per_case=3, mt=True)
+        cmd = executor._build_mt_template_reproduction_cmd(self._spec())
+        self.assertIn("--strategy sdp_byte_edit", cmd)
         self.assertIn("--mutations-per-case 3", cmd)
 
 

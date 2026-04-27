@@ -93,6 +93,32 @@ STRUCT_VARIANTS: Final[tuple[str, ...]] = (
     "direction_conflict",
 )
 
+BYTE_EDIT_VARIANTS: Final[tuple[str, ...]] = (
+    "trim_last",
+    "trim_first",
+    "trim_random",
+    "flip_last",
+    "flip_first",
+    "flip_random",
+    "dup_byte",
+    "swap_adjacent",
+    "insert_byte",
+    "insert_null",
+)
+
+# Variants that require ``len(body) >= 2``. ``swap_adjacent`` needs two
+# adjacent bytes to swap; ``trim_first``/``flip_first`` overlap with
+# ``trim_last``/``flip_last`` on length-1 bodies, and ``trim_random`` /
+# ``flip_random`` on length-1 bodies degrade to "first/last" anyway —
+# we keep them in the length>=2 set for clarity.
+_BYTE_EDIT_VARIANTS_LEN1: Final[tuple[str, ...]] = (
+    "trim_last",
+    "flip_last",
+    "dup_byte",
+    "insert_byte",
+    "insert_null",
+)
+
 _DIRECTION_ATTRS: Final[tuple[str, ...]] = (
     "sendrecv",
     "sendonly",
@@ -612,3 +638,88 @@ def _struct_direction_conflict(
         after="a=sendrecv + a=sendonly",
         note="variant=direction_conflict.added=sendrecv+sendonly",
     )
+
+
+def apply_sdp_byte_edit(
+    body: str,
+    rng: random.Random,
+    *,
+    variant: str | None = None,
+) -> tuple[str, SDPMutationResult]:
+    """Apply one ``sdp_byte_edit`` variant restricted to the SDP body.
+
+    Where ``apply_sdp_boundary`` mutates *tokens within* SDP lines and
+    ``apply_sdp_struct`` mutates the *line set*, this helper is grammar-
+    blind: it picks a single byte position inside ``body`` and applies
+    one of ten surgical edits (``trim_*``/``flip_*``/``dup_byte``/
+    ``swap_adjacent``/``insert_byte``/``insert_null``).
+
+    Returns ``(new_body, result)``. Raises ``ValueError`` if ``body`` is
+    empty (the caller's multi-mutation loop treats that as a graceful
+    break, identical to the other SDP strategies). The same byte-level
+    logic lives in ``_apply_byte_edit_only`` over header values; this
+    helper restricts it to the SDP body so the SIP parser keeps a clean
+    framing while corruption lands inside the SDP / media stack.
+    """
+    if not body:
+        raise ValueError("sdp_byte_edit requires a non-empty SDP body")
+
+    length = len(body)
+    if variant is None:
+        pool = BYTE_EDIT_VARIANTS if length >= 2 else _BYTE_EDIT_VARIANTS_LEN1
+        variant = pool[rng.randrange(len(pool))]
+    elif variant not in BYTE_EDIT_VARIANTS:
+        raise ValueError(f"unknown sdp byte_edit variant: {variant!r}")
+    elif length < 2 and variant not in _BYTE_EDIT_VARIANTS_LEN1:
+        raise ValueError(
+            f"variant {variant!r} requires sdp body length >= 2 (got {length})"
+        )
+
+    if variant == "trim_last":
+        new_body = body[:-1]
+        pos = length - 1
+    elif variant == "trim_first":
+        new_body = body[1:]
+        pos = 0
+    elif variant == "trim_random":
+        pos = rng.randrange(length)
+        new_body = body[:pos] + body[pos + 1 :]
+    elif variant == "flip_last":
+        pos = length - 1
+        new_body = body[:-1] + chr(rng.randrange(33, 127))
+    elif variant == "flip_first":
+        pos = 0
+        new_body = chr(rng.randrange(33, 127)) + body[1:]
+    elif variant == "flip_random":
+        pos = rng.randrange(length)
+        new_body = body[:pos] + chr(rng.randrange(33, 127)) + body[pos + 1 :]
+    elif variant == "dup_byte":
+        pos = rng.randrange(length)
+        new_body = body[: pos + 1] + body[pos] + body[pos + 1 :]
+    elif variant == "swap_adjacent":
+        pos = rng.randrange(length - 1)
+        new_body = (
+            body[:pos] + body[pos + 1] + body[pos] + body[pos + 2 :]
+        )
+    elif variant == "insert_byte":
+        pos = rng.randrange(length + 1)
+        new_body = body[:pos] + chr(rng.randrange(33, 127)) + body[pos:]
+    else:  # insert_null
+        pos = rng.randrange(length + 1)
+        new_body = body[:pos] + "\x00" + body[pos:]
+
+    # Snapshot before/after with the affected byte position; record paths
+    # match the boundary/struct path conventions so report rendering can
+    # treat them uniformly.
+    before_byte = body[pos] if pos < length else ""
+    after_byte = (
+        new_body[pos] if pos < len(new_body) else ""
+    )
+    result = SDPMutationResult(
+        path=f"body:sdp:byte_edit.{variant}[{pos}]",
+        operator="sdp_byte_edit",
+        before=repr(before_byte),
+        after=repr(after_byte),
+        note=f"variant={variant}",
+    )
+    return new_body, result

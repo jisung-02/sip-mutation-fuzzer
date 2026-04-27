@@ -28,6 +28,7 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "byte_edit_only",
             "sdp_boundary_only",
             "sdp_struct_only",
+            "sdp_byte_edit",
         }
     ),
     "byte": frozenset(
@@ -50,13 +51,13 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
     },
     "delivery_preserving": {
         "model": frozenset({"default"}),
-        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise", "null_byte_only", "boundary_only", "byte_edit_only", "sdp_boundary_only", "sdp_struct_only"}),
+        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise", "null_byte_only", "boundary_only", "byte_edit_only", "sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}),
         "byte": frozenset({"default", "identity", "safe", "header_targeted"}),
     },
     "ims_specific": {
         "model": frozenset(),
         "wire": frozenset(
-            {"default", "identity", "safe", "alias_port_desync", "sdp_boundary_only", "sdp_struct_only"}
+            {"default", "identity", "safe", "alias_port_desync", "sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}
         ),
         "byte": frozenset({"default", "identity", "header_targeted"}),
     },
