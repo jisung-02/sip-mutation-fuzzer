@@ -56,47 +56,35 @@ _CONTACT_HOSTPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
-# MSISDN → UE IP fallback mapping. Live resolvers (kamctl, P-CSCF logs,
-# xfrm state) are tried first; this dict is consulted only when those
-# all return nothing. Keep entries here in sync with the testbed —
-# stale values silently mis-route packets to a different UE.
-#
-# Override per session via VMF_MSISDN_TO_IP_<msisdn>=<ip>.
-_DEFAULT_MSISDN_TO_IP: Final[dict[str, str]] = {
-    "111111": "10.20.20.8",  # legacy slot — Samsung A31 historically; current testbed varies (Pixel 9, Galaxy A17)
-    "222222": "10.20.20.2",  # iPhone 16e (verified 2026-04-27, IMSI 001010000123512)
-}
-
-
 def resolve_ue_ip_from_msisdn(
     msisdn: str, *, env: Mapping[str, str] | None = None
 ) -> str:
-    """Resolve UE IP address from MSISDN.
+    """Resolve UE IP from MSISDN via environment-variable override only.
+
+    There is intentionally no hardcoded MSISDN→IP fallback table — a stale
+    entry would silently mis-route packets to whichever UE happens to be
+    holding that IP today. Authoritative live resolution (kamctl, P-CSCF
+    logs, xfrm state) is the responsibility of ``RealUEDirectResolver``;
+    this function only honours an explicit per-session override.
 
     Args:
-        msisdn: Target MSISDN (e.g., "111111")
-        env: Environment variables for mapping overrides
+        msisdn: Target MSISDN (e.g., "222222").
+        env: Environment mapping (defaults to ``os.environ``).
 
     Returns:
-        UE IP address (e.g., "10.20.20.8")
+        UE IP address from ``VMF_MSISDN_TO_IP_<msisdn>``.
 
     Raises:
-        ValueError: If MSISDN is not found in mapping table
+        ValueError: If no override is set. Callers wrap this in
+            try/except so that the live-resolver chain can take over.
     """
     source = os.environ if env is None else env
-
-    # Check for environment variable override: VMF_MSISDN_TO_IP_<msisdn>
     env_key = f"VMF_MSISDN_TO_IP_{msisdn}"
     if env_key in source:
         return source[env_key]
-
-    # Check default mapping table
-    if msisdn in _DEFAULT_MSISDN_TO_IP:
-        return _DEFAULT_MSISDN_TO_IP[msisdn]
-
     raise ValueError(
-        f"Unknown MSISDN {msisdn!r}. Available: {list(_DEFAULT_MSISDN_TO_IP.keys())}. "
-        f"Override with environment variable {env_key}=<ip>"
+        f"No UE IP override for MSISDN {msisdn!r}. "
+        f"Set {env_key}=<ip> if the live resolvers cannot find the UE."
     )
 
 
@@ -528,11 +516,12 @@ class RealUEDirectResolver:
 
         1. Explicit *ue_ip* (caller already did a live lookup).
         2. Live lookup chain via ``_lookup_ue_contact`` (kamctl → logs → xfrm).
-        3. ``resolve_ue_ip_from_msisdn`` hardcoded mapping + ``VMF_MSISDN_TO_IP_<msisdn>``
-           env override — only as a last resort inside ``resolve_ue_protected_ports``.
+        3. ``VMF_MSISDN_TO_IP_<msisdn>`` env override (last resort, opt-in).
 
-        The live-lookup step is what prevents the hardcoded mapping from poisoning
-        the filter after server reboots or UE re-IP.
+        There is no hardcoded MSISDN→IP table — stale entries would
+        silently mis-route to a different UE. If the live chain fails,
+        either the UE is not registered, or the operator must set the
+        env override.
         """
         if ue_ip is None:
             contact = self._lookup_ue_contact(msisdn)

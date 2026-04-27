@@ -116,7 +116,7 @@ src/volte_mutation_fuzzer/
 - **bypass**: xfrm policy selector 회피 (호환성)
 
 ### 4. **자동화 기능**
-- MSISDN → UE IP 자동 resolve (kamctl/P-CSCF 로그/xfrm state 우선, hardcoded fallback)
+- MSISDN → UE IP 자동 resolve (kamctl → P-CSCF logs → xfrm state. hardcoded 매핑 없음 — stale 위험. live resolver 실패 시 `VMF_MSISDN_TO_IP_<msisdn>` 환경변수로 명시적 override.)
 - port_pc/port_ps 동적 조회 (재등록 시마다 변경, dport 기반 매핑 — A31 같은 인접 포트 가정 없음)
 - Via sent-by ↔ bind_port 자동 동기화
 
@@ -162,9 +162,11 @@ uv sync
 
 ### 환경 변수
 ```bash
-# 커스텀 MSISDN → IP 매핑 (live resolver 가 실패할 때 fallback. 현재 testbed 기본값)
-export VMF_MSISDN_TO_IP_111111=10.20.20.8   # Pixel 9 / Galaxy A17 (가변)
-export VMF_MSISDN_TO_IP_222222=10.20.20.2   # iPhone 16e
+# MSISDN → IP override. 평소엔 live resolver(kamctl/P-CSCF/xfrm)가 알아서 찾으므로
+# 설정 불필요. live resolver 가 UE 를 못 찾는 환경(예: kamctl Contact 가 user-less
+# 형식이라 매칭 실패)에서만 명시적으로 박는다.
+# export VMF_MSISDN_TO_IP_222222=10.20.20.2
+
 export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 ```
 
