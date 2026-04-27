@@ -116,9 +116,23 @@ src/volte_mutation_fuzzer/
 - **bypass**: xfrm policy selector 회피 (호환성)
 
 ### 4. **자동화 기능**
-- MSISDN → UE IP 자동 resolve (111111 → 10.20.20.8)
-- port_pc/port_ps 동적 조회 (재등록 시마다 변경)
+- MSISDN → UE IP 자동 resolve (kamctl → P-CSCF logs → xfrm state. hardcoded 매핑 없음 — stale 위험. live resolver 실패 시 `VMF_MSISDN_TO_IP_<msisdn>` 환경변수로 명시적 override.)
+- port_pc/port_ps 동적 조회 (재등록 시마다 변경, dport 기반 매핑 — A31 같은 인접 포트 가정 없음)
 - Via sent-by ↔ bind_port 자동 동기화
+
+### 5. **현재 testbed 디바이스 매핑** (2026-04-27 기준)
+
+서버 `163.180.185.51` 의 IMS testbed 에 등록된 UE 들:
+
+| MSISDN | IMSI | UE IP | 디바이스 | 비고 |
+|--------|------|-------|---------|------|
+| 111111 | 001010000123511 | (가변) | Pixel 9 / Galaxy A17 | 외부 LG U+/KT RF 우세로 셀 attach 까다로움 |
+| 222222 | 001010000123512 | 10.20.20.2 | iPhone 16e (iOS 26.1) | manual PLMN select 로 attach 성공 |
+
+이력 노트:
+- 메모리 `project_a31_real_ue_direct_breakthrough.md` 에 박힌 "111111 = A31, IP=10.20.20.8" 은 2026-04-11 시점 환경. 현재는 A31 슬롯이 다른 디바이스로 회전 중. attach 성공 시 IP 가 다를 수 있어 live resolver 결과를 신뢰하고, hardcoded 매핑은 fallback 으로만 본다.
+- iPhone 16e 의 protected port 페어는 `port_pc=63193 / port_ps=61008` 처럼 비-인접. fuzzer 의 native IPsec 경로는 `Security-Client` 헤더 + xfrm `dport` 매핑으로 정확 추출 (commit `0a03f78`).
+- iPhone 전용 mt-invite-template 부재 — 현재 `a31` template 가 generic 3GPP MT-INVITE 형식이라 일단 호환되지만 iPhone 응답 검증은 미완. SDP fuzzing 캠페인 시 baseline (identity strategy) 으로 정상 attach/응답 확인 후 진행 권장.
 
 ## 🔑 핵심 성과
 
@@ -136,7 +150,7 @@ src/volte_mutation_fuzzer/
 ### 요구사항
 - Python 3.12+, uv package manager
 - Docker (IMS 서버 환경)
-- Samsung A31 (MSISDN 111111, UE IP 10.20.20.8)
+- 실기기 UE 1대 이상 (현재 testbed: Pixel 9 / Galaxy A17 = 111111, iPhone 16e = 222222)
 - 서버: ubuntu@163.180.185.51
 
 ### 설치
@@ -148,8 +162,11 @@ uv sync
 
 ### 환경 변수
 ```bash
-# 커스텀 MSISDN → IP 매핑
-export VMF_MSISDN_TO_IP_111111=10.20.20.8
+# MSISDN → IP override. 평소엔 live resolver(kamctl/P-CSCF/xfrm)가 알아서 찾으므로
+# 설정 불필요. live resolver 가 UE 를 못 찾는 환경(예: kamctl Contact 가 user-less
+# 형식이라 매칭 실패)에서만 명시적으로 박는다.
+# export VMF_MSISDN_TO_IP_222222=10.20.20.2
+
 export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 ```
 
@@ -191,6 +208,14 @@ export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 | **stack_failure** | adb logcat 또는 iOS syslog/`.ips` 크래시 리포트에서 anomaly 감지 |
 
 ## 📝 최근 업데이트
+
+**2026-04-27**:
+- SDP-aware wire 변이 3종 추가 (`sdp_boundary_only`, `sdp_struct_only`, `sdp_byte_edit`)
+- `--strategy default` pool 에 SDP 전략 통합 (`delivery_preserving` / `ims_specific` 프로필)
+- `--mutations-per-case N` 지원 (한 케이스당 N회 변이 stacking)
+- Phase 0 fix: `_resolve_ports_live` 에 `ue_ip` 결합으로 uncoupled-lookup silent timeout 차단 (`a3578d9`)
+- hardcoded MSISDN→IP fallback table 완전 제거 — live resolver 실패 시 정직하게 raise
+- UE protected port 를 `Security-Client` 헤더 + xfrm `dport` 매핑으로 정확 추출 (비-인접 포트 페어 지원)
 
 **2026-04-15**:
 - iOS(iPhone) 로그 수집 모듈 추가 (`src/volte_mutation_fuzzer/ios/`)
