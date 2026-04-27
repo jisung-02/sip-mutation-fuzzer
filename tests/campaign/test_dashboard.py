@@ -116,6 +116,22 @@ class ConsoleProgressReporterTests(unittest.TestCase):
         self.assertIn("parser_breaker:wire/final_crlf_loss", output)
         self.assertNotIn("legacy:wire/default", output)
 
+    def test_summary_block_without_status_line_does_not_insert_blank_gap(self) -> None:
+        buf = self._capture()
+        try:
+            reporter = ConsoleProgressReporter(
+                total_cases=10, campaign_id="test2c", summary_interval=100
+            )
+            summary = CampaignSummary(total=1, normal=1)
+            reporter.on_case_complete(_make_spec(0), _make_result(0), summary)
+            output = buf.getvalue()
+        finally:
+            self._restore()
+
+        lines = output.splitlines()
+        verdict_index = next(i for i, line in enumerate(lines) if "normal 1(100%)" in line)
+        self.assertTrue(lines[verdict_index + 1].startswith("  [1/10]"))
+
     def test_crash_verdict_prints_alert(self) -> None:
         buf = self._capture()
         try:

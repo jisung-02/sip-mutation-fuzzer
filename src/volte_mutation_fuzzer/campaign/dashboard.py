@@ -114,6 +114,7 @@ class ConsoleProgressReporter:
     ) -> None:
         elapsed = time.monotonic() - self._start_time
         rate = self._case_count / elapsed if elapsed > 0 else 0.0
+        status_line = self._format_status_line(adb_healthy)
 
         self._print("")
         total_str = str(self._total) if self._total > 0 else "\u221e"
@@ -124,7 +125,8 @@ class ConsoleProgressReporter:
             f"{rate:.2f}/s ---"
         )
         self._print(self._format_verdict_line(summary))
-        self._print(self._format_status_line(adb_healthy))
+        if status_line:
+            self._print(status_line)
         self._print(self._last_line)
 
     def _format_verdict_line(self, summary: CampaignSummary) -> str:
