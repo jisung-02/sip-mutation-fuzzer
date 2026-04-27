@@ -962,6 +962,39 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
                 self.assertIn("type", obj)
 
 
+    def test_resolve_ports_live_forwards_ue_ip_to_resolver(self) -> None:
+        """The MT campaign path resolves ue_ip and ports separately. The fix
+        threads the already-resolved ue_ip into resolve_protected_ports so
+        a re-registration between the two lookups cannot land us on a
+        different generation of port_pc/port_ps."""
+        cfg = self._make_config(
+            "127.0.0.1",
+            5060,
+            methods=("INVITE",),
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        captured: dict[str, object] = {}
+
+        def fake_resolve_protected_ports(msisdn: str, *, ue_ip: str | None = None):
+            captured["msisdn"] = msisdn
+            captured["ue_ip"] = ue_ip
+            return (8100, 8101)
+
+        with unittest.mock.patch.object(
+            executor._ue_resolver,
+            "resolve_protected_ports",
+            side_effect=fake_resolve_protected_ports,
+        ):
+            port_pc, port_ps = executor._resolve_ports_live(
+                "111111", ue_ip="10.20.20.8"
+            )
+
+        self.assertEqual((port_pc, port_ps), (8100, 8101))
+        self.assertEqual(captured["msisdn"], "111111")
+        self.assertEqual(captured["ue_ip"], "10.20.20.8")
+
+
 # ---------------------------------------------------------------------------
 # CampaignExecutor integration tests
 # ---------------------------------------------------------------------------
