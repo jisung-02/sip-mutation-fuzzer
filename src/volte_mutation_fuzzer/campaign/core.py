@@ -1515,6 +1515,15 @@ class CampaignExecutor:
         else:
             call_id_hex = f"{random.Random(seed).getrandbits(128):032x}"
             call_id = f"campaign-{call_id_hex}"
+        # In real-ue-direct mode host is None (resolved from MSISDN at send
+        # time).  SIPURI requires a non-None host, so fall back to a
+        # placeholder that keeps validation happy for context-only uses such
+        # as response generation and reproduction command building.
+        host = self._target.host or (
+            f"{self._config.target_msisdn}.ims.local"
+            if self._config.target_msisdn
+            else "ue.local"
+        )
         return DialogContext(
             call_id=call_id,
             local_tag="campaign-local",
@@ -1523,7 +1532,7 @@ class CampaignExecutor:
             remote_cseq=1,
             request_uri=SIPURI(
                 user="target",
-                host=self._target.host,
+                host=host,
                 port=self._target.port,
             ),
         )

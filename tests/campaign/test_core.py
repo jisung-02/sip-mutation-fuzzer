@@ -3309,6 +3309,27 @@ class CampaignBuildPacketDeterminismTests(unittest.TestCase):
         ctx_b = executor._synthetic_dialog_context()
         self.assertNotEqual(ctx_a.call_id, ctx_b.call_id)
 
+    def test_synthetic_context_real_ue_direct_no_host(self) -> None:
+        # real-ue-direct with msisdn-only: target.host is None.
+        # _synthetic_dialog_context must not raise ValidationError.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                methods=("INVITE",),
+                response_codes=(200,),
+                max_cases=1,
+                results_dir=tmpdir,
+                output_name="test",
+            )
+            executor = CampaignExecutor(cfg)
+        ctx = executor._synthetic_dialog_context()
+        self.assertIsNotNone(ctx.request_uri.host)
+        self.assertIn("111111", ctx.request_uri.host)
+
+        ctx_seeded = executor._synthetic_dialog_context(seed=7)
+        self.assertIsNotNone(ctx_seeded.request_uri.host)
+
 
 class CampaignConfigMutationsPerCaseTests(unittest.TestCase):
     """Field-level validation for the new ``mutations_per_case`` knob."""
