@@ -9,16 +9,8 @@ from volte_mutation_fuzzer.campaign.contracts import CaseResult
 
 logger = logging.getLogger(__name__)
 
-# Timeout is included because in native-IPsec real-UE campaigns, "timeout"
-# frequently means "UE responded but the recv path missed it" (e.g., the
-# driver caught a CRLF keepalive instead of the actual SIP response, or an
-# xfrm SA was rotated mid-case). The pcap and adb snapshot for those cases
-# are exactly the evidence needed to tell apart "UE silent" from "fuzzer
-# missed reply" — losing them was the dominant analysis gap on the
-# 2026-04-27 INVITE null_byte_only Pixel campaign (12/13 timeouts, all
-# with substantial UE → fuzzer ESP responses visible in pcap).
 INTERESTING_VERDICTS: frozenset[str] = frozenset(
-    {"crash", "stack_failure", "suspicious", "timeout"}
+    {"crash", "stack_failure", "suspicious"}
 )
 
 

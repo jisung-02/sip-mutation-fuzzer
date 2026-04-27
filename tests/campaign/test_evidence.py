@@ -116,17 +116,12 @@ class EvidenceCollectorTests(unittest.TestCase):
             evidence_dir = collector.collect(result, sent_payload="test")
             self.assertIsNone(evidence_dir)
 
-    def test_collects_evidence_for_timeout_verdict(self) -> None:
-        # Timeout was previously skipped, but native-IPsec real-UE
-        # campaigns showed most timeouts are recv-path misses (UE replied,
-        # fuzzer driver caught a CRLF keepalive or alt-SA reply mismatch).
-        # The pcap + adb snapshot for those cases is essential evidence
-        # for telling "UE silent" apart from "fuzzer missed reply".
+    def test_skips_timeout_verdict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             collector = EvidenceCollector(Path(tmpdir))
             result = _make_result(verdict="timeout", raw_response=None)
             evidence_dir = collector.collect(result, sent_payload="test")
-            self.assertIsNotNone(evidence_dir)
+            self.assertIsNone(evidence_dir)
 
     def test_binary_payload_saved_as_bin(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

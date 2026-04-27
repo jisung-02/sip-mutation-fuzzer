@@ -35,11 +35,8 @@ _VERDICT_ORDER: tuple[str, ...] = (
     "unknown",
 )
 
-# Mirrors ``evidence.INTERESTING_VERDICTS`` — keep both in sync. ``timeout``
-# is included because most real-UE timeouts are recv-path losses, not
-# silent UEs; the rendered report should expose them for analysis.
 _INTERESTING_VERDICTS: frozenset[str] = frozenset(
-    {"crash", "stack_failure", "suspicious", "timeout"}
+    {"crash", "stack_failure", "suspicious"}
 )
 
 
