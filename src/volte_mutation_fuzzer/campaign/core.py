@@ -877,7 +877,9 @@ class CampaignExecutor:
                 case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
 
-    def _resolve_ports_live(self, msisdn: str) -> tuple[int, int]:
+    def _resolve_ports_live(
+        self, msisdn: str, *, ue_ip: str | None = None,
+    ) -> tuple[int, int]:
         """Resolve (port_pc, port_ps) fresh on every call.
 
         Caching was previously used to avoid docker-logs overhead per case,
@@ -886,8 +888,14 @@ class CampaignExecutor:
         sends to the old protected ports for the rest of the run, which
         masquerades as "all timeout" — indistinguishable from a real
         non-responsive UE. The ~150 ms per case is worth the correctness.
+
+        ``ue_ip`` is forwarded so the resolver filters protected-port
+        candidates by the same generation of UE IP that the caller already
+        resolved. Without it, a re-registration between the caller's
+        ``resolve()`` and this call could land us on a port pair from a
+        newer or older generation than the host we are about to send to.
         """
-        return self._ue_resolver.resolve_protected_ports(msisdn)
+        return self._ue_resolver.resolve_protected_ports(msisdn, ue_ip=ue_ip)
 
     def _teardown_invite(
         self,
@@ -1014,8 +1022,12 @@ class CampaignExecutor:
                 )
 
             # 2. Resolve live port_pc / port_ps (no caching — UE re-registration
-            #    invalidates ports and stale values silently masquerade as timeouts)
-            port_pc, port_ps = self._resolve_ports_live(config.target_msisdn)
+            #    invalidates ports and stale values silently masquerade as timeouts).
+            #    Pass ue_ip so the protected-port lookup is filtered against the
+            #    same generation as the host we just resolved on the line above.
+            port_pc, port_ps = self._resolve_ports_live(
+                config.target_msisdn, ue_ip=ue_ip,
+            )
 
             # 3. Build wire text
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
