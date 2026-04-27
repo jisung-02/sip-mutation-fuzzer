@@ -1150,5 +1150,153 @@ class SIPMutatorWireAndByteFailureTests(SIPMutatorTestCase):
             )
 
 
+class SIPMutatorMultiMutationTests(SIPMutatorTestCase):
+    """Verify ``max_operations`` stacks deterministic strategies across N rounds.
+
+    Single-shot strategies (null_byte_only, boundary_only, byte_edit_only)
+    historically applied one mutation per case. ``max_operations`` was wired
+    into wire/byte deterministic dispatch so a single case can carry multiple
+    mutations. Default ``max_operations=1`` must keep the legacy single-shot
+    behaviour byte-for-byte.
+    """
+
+    def test_default_max_operations_emits_single_record(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="null_byte_only",
+            ),
+        )
+
+        # Default max_operations=1 keeps legacy single-shot semantics.
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(case.records[0].operator, "null_byte_only")
+
+    def test_max_operations_n_stacks_null_byte_only(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        for n in (2, 3, 5):
+            with self.subTest(n=n):
+                case = mutator.mutate(
+                    packet,
+                    MutationConfig(
+                        seed=0,
+                        layer="wire",
+                        profile="delivery_preserving",
+                        strategy="null_byte_only",
+                        max_operations=n,
+                    ),
+                )
+                self.assertEqual(len(case.records), n)
+                for record in case.records:
+                    self.assertEqual(record.operator, "null_byte_only")
+
+    def test_max_operations_n_stacks_boundary_only(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="boundary_only",
+                max_operations=4,
+            ),
+        )
+        self.assertEqual(len(case.records), 4)
+        for record in case.records:
+            self.assertEqual(record.operator, "boundary_only")
+
+    def test_max_operations_n_stacks_byte_edit_only(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="byte_edit_only",
+                max_operations=3,
+            ),
+        )
+        self.assertEqual(len(case.records), 3)
+        for record in case.records:
+            self.assertEqual(record.operator, "byte_edit_only")
+
+    def test_max_operations_byte_layer_deterministic_strategy_stacks(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        # ``tail_chop_1`` is a deterministic byte-layer strategy. Repeated
+        # rounds chop one byte off the buffer each time, so we expect N
+        # records when N is small enough that bytes remain to chop.
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="byte",
+                profile="parser_breaker",
+                strategy="tail_chop_1",
+                max_operations=3,
+            ),
+        )
+        self.assertEqual(len(case.records), 3)
+        for record in case.records:
+            self.assertEqual(record.operator, "tail_chop_1")
+
+    def test_max_operations_breaks_when_strategy_returns_none(self) -> None:
+        # ``boundary_only`` requires at least one header value. If the
+        # implementation ever runs out of mutable headers mid-stack it
+        # should stop early instead of crashing — verified here by asking
+        # for an absurdly large ``max_operations`` and asserting we get
+        # *up to* that many records, never more, and no exception.
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="null_byte_only",
+                max_operations=1000,
+            ),
+        )
+        self.assertGreaterEqual(len(case.records), 1)
+        self.assertLessEqual(len(case.records), 1000)
+
+    def test_max_operations_one_matches_legacy_byte_for_byte(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config_default = MutationConfig(
+            seed=42,
+            layer="wire",
+            profile="delivery_preserving",
+            strategy="null_byte_only",
+        )
+        config_explicit_one = config_default.model_copy(
+            update={"max_operations": 1}
+        )
+
+        case_default = mutator.mutate(packet, config_default)
+        case_explicit = mutator.mutate(packet, config_explicit_one)
+
+        # Same seed + same max_operations=1 must yield identical wire text.
+        self.assertEqual(case_default.wire_text, case_explicit.wire_text)
+        self.assertEqual(len(case_default.records), len(case_explicit.records))
+
+
 if __name__ == "__main__":
     unittest.main()

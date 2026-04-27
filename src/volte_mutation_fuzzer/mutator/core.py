@@ -1355,6 +1355,33 @@ class SIPMutator:
         if deterministic_wire_mutation is not None:
             current_message, record = deterministic_wire_mutation
             records.append(record)
+            # Multi-mutation: apply ``max_operations - 1`` additional rounds
+            # of the same deterministic strategy. Each round operates on the
+            # message already produced by the previous round, so multiple
+            # null-byte / boundary / byte-edit injections accumulate in one
+            # case. ``max_operations`` defaults to 1, so single-shot
+            # behaviour is unchanged for callers that don't opt in.
+            #
+            # Some strategies are *once-only* by construction —
+            # ``final_crlf_loss`` removes the trailing blank line and
+            # cannot reapply, ``duplicate_content_length_conflict`` already
+            # produced a duplicate, etc. They raise ValueError instead of
+            # returning None on the second round. Treat the raise as a
+            # natural break point so multi-mutation degrades gracefully to
+            # whatever rounds the strategy can support.
+            for _ in range(config.max_operations - 1):
+                try:
+                    next_mutation = self._apply_deterministic_wire_strategy(
+                        current_message,
+                        config.strategy,
+                        rng,
+                    )
+                except ValueError:
+                    break
+                if next_mutation is None:
+                    break
+                current_message, record = next_mutation
+                records.append(record)
         elif target is not None:
             selected_target = self._build_canonical_wire_target(target, current_message)
             operator = self._resolve_wire_operator(
@@ -1798,6 +1825,26 @@ class SIPMutator:
             if deterministic_byte_mutation is not None:
                 current_bytes, record = deterministic_byte_mutation
                 records.append(record)
+                # Multi-mutation rounds for byte-layer deterministic
+                # strategies. See ``_mutate_wire`` for the rationale —
+                # default ``max_operations=1`` preserves single-shot.
+                # Once-only byte strategies (``tail_chop_1`` once the
+                # buffer's already a single byte, etc.) raise ValueError on
+                # subsequent rounds; we treat that as a natural stopping
+                # point so the case still emits whatever rounds succeeded.
+                for _ in range(config.max_operations - 1):
+                    try:
+                        next_mutation = self._apply_deterministic_byte_strategy(
+                            current_bytes,
+                            config.strategy,
+                            rng,
+                        )
+                    except ValueError:
+                        break
+                    if next_mutation is None:
+                        break
+                    current_bytes, record = next_mutation
+                    records.append(record)
             elif config.strategy == "header_targeted":
                 # Target bytes within a specific non-protected header region.
                 header_ranges = self._collect_profile_header_byte_ranges(

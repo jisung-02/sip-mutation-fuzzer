@@ -86,6 +86,15 @@ def run_command(
     max_cases: Annotated[
         int, typer.Option("--max-cases", help="Maximum number of test cases.")
     ] = 1000,
+    mutations_per_case: Annotated[
+        int,
+        typer.Option(
+            "--mutations-per-case",
+            help="Number of mutation rounds applied per case. >1 stacks "
+            "deterministic strategies (null_byte_only / boundary_only / "
+            "byte_edit_only) so a single packet carries N mutations.",
+        ),
+    ] = 1,
     timeout: Annotated[
         float, typer.Option("--timeout", help="Socket timeout in seconds.")
     ] = 5.0,
@@ -274,6 +283,7 @@ def run_command(
             strategies=strategies,
             layers=layers,
             max_cases=max_cases,
+            mutations_per_case=mutations_per_case,
             timeout_seconds=timeout,
             cooldown_seconds=cooldown,
             seed_start=seed_start,

@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -775,6 +776,7 @@ class CampaignExecutor:
                     profile=spec.profile,
                     strategy=spec.strategy,
                     layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
+                    max_operations=config.mutations_per_case,
                 ),
             )
             artifact = self._artifact_from_mutated(mutated)
@@ -1094,6 +1096,7 @@ class CampaignExecutor:
                     layer=cast(
                         Literal["model", "wire", "byte", "auto"], effective_layer
                     ),
+                    max_operations=config.mutations_per_case,
                 ),
             )
 
@@ -1268,6 +1271,15 @@ class CampaignExecutor:
         profile_value = spec.profile if profile is None else profile
         strategy_value = spec.strategy if strategy is None else strategy
 
+        # Mirror the campaign's multi-mutation count into the replay command
+        # so the reproduced run applies the same N rounds. Without this, MT
+        # template campaigns with mutations_per_case>1 were silently
+        # replayed single-shot and produced different packets.
+        mutations_arg = (
+            f" --mutations-per-case {cfg.mutations_per_case}"
+            if cfg.mutations_per_case > 1
+            else ""
+        )
         reproduction_cmd = (
             f"uv run fuzzer campaign run"
             f" --mode real-ue-direct"
@@ -1283,6 +1295,7 @@ class CampaignExecutor:
             f" --strategy {strategy_value}"
             f" --seed-start {spec.seed}"
             f" --max-cases 1"
+            f"{mutations_arg}"
             # note: port_pc/port_ps are re-queried live; may differ if UE re-registered
         )
         if cfg.ipsec_mode != "native":
@@ -1323,6 +1336,7 @@ class CampaignExecutor:
             profile=spec.profile,
             strategy=spec.strategy,
             layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
+            max_operations=self._config.mutations_per_case,
         )
         config = self._config
         capture: PcapCapture | None = None
@@ -1450,13 +1464,22 @@ class CampaignExecutor:
         )
 
     def _build_packet(self, spec: CaseSpec) -> PacketModel:
+        # Forward the per-case seed into baseline generation so identical
+        # (method, response_code, seed, mutations_per_case) inputs produce
+        # byte-exact identical wires. The dialog context is also seeded —
+        # otherwise its random ``call_id`` would override the generator's
+        # seeded path (the generator prefers ``context.call_id`` when a
+        # context is supplied) and silently re-break reproduction.
         if spec.response_code is None:
             context = (
-                self._synthetic_dialog_context() if self._config.with_dialog else None
+                self._synthetic_dialog_context(seed=spec.seed)
+                if self._config.with_dialog
+                else None
             )
             return self._generator.generate_request(
                 RequestSpec(method=SIPMethod(spec.method)),
                 context,
+                seed=spec.seed,
             )
 
         related_method = SIPMethod(spec.related_method or spec.method)
@@ -1465,12 +1488,23 @@ class CampaignExecutor:
                 status_code=spec.response_code,
                 related_method=related_method,
             ),
-            self._synthetic_dialog_context(),
+            self._synthetic_dialog_context(seed=spec.seed),
+            seed=spec.seed,
         )
 
-    def _synthetic_dialog_context(self) -> DialogContext:
+    def _synthetic_dialog_context(self, seed: int | None = None) -> DialogContext:
+        # When ``seed`` is supplied, derive a deterministic call-id from it
+        # so seeded baseline generation (``_build_packet``) is reproducible
+        # end-to-end. The generator prefers ``context.call_id`` over its
+        # own seeded path, so leaving this random would silently re-break
+        # reproduction even after generator-side seed plumbing landed.
+        if seed is None:
+            call_id = f"campaign-{uuid.uuid4().hex}"
+        else:
+            call_id_hex = f"{random.Random(seed).getrandbits(128):032x}"
+            call_id = f"campaign-{call_id_hex}"
         return DialogContext(
-            call_id=f"campaign-{uuid.uuid4().hex}",
+            call_id=call_id,
             local_tag="campaign-local",
             remote_tag="campaign-remote",
             local_cseq=1,
@@ -1562,6 +1596,14 @@ class CampaignExecutor:
             f" --transport {cfg.transport}" if cfg.transport.upper() != "UDP" else ""
         )
         ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
+        # Carry the multi-mutation count into the replay command so the
+        # reproduced ``mutate`` step applies the same N rounds of mutation
+        # the campaign used. Default 1 stays bare for backward-compat.
+        max_ops_arg = (
+            f" --mutations-per-case {cfg.mutations_per_case}"
+            if cfg.mutations_per_case > 1
+            else ""
+        )
         profile_value = spec.profile if profile is None else profile
         strategy_value = spec.strategy if strategy is None else strategy
         if spec.response_code is not None:
@@ -1577,6 +1619,7 @@ class CampaignExecutor:
                 f" --strategy {strategy_value}"
                 f" --layer {spec.layer}"
                 f" --seed {spec.seed}"
+                f"{max_ops_arg}"
                 f" | uv run fuzzer send packet"
                 f" --mode {cfg.mode}"
                 f"{target_args}"
@@ -1590,6 +1633,7 @@ class CampaignExecutor:
             f" --strategy {strategy_value}"
             f" --layer {spec.layer}"
             f" --seed {spec.seed}"
+            f"{max_ops_arg}"
             f" | uv run fuzzer send packet"
             f" --mode {cfg.mode}"
             f"{target_args}"

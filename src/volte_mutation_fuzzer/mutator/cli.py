@@ -86,13 +86,18 @@ def _parse_context(raw_value: str | None, *, required: bool) -> DialogContext | 
 
 
 def _build_config(
-    profile: str, strategy: str, layer: str, seed: int | None
+    profile: str,
+    strategy: str,
+    layer: str,
+    seed: int | None,
+    max_operations: int = 1,
 ) -> MutationConfig:
     return MutationConfig(
         profile=profile,
         strategy=strategy,
         layer=layer,
         seed=seed,
+        max_operations=max_operations,
     )  # type: ignore[arg-type]
 
 
@@ -156,22 +161,45 @@ def _run_mutation_command(
     seed: int | None,
     target: str | None,
     context: DialogContext | None = None,
+    max_operations: int = 1,
+    multi_mutation_option_name: str = "--mutations-per-case",
 ) -> MutatedCase:
     try:
         resolved_layer = _resolve_cli_layer(profile, strategy, layer)
-        config = _build_config(profile, strategy, resolved_layer, seed)
+        config = _build_config(profile, strategy, resolved_layer, seed, max_operations)
         mutation_target = _build_target(target, resolved_layer)
         mutator = SIPMutator()
-        return _apply_profile(
+        case = _apply_profile(
             _execute_mutation(mutator, packet, config, mutation_target, context),
             config.profile,
         )
+        # ``--target`` pins mutation to a specific path and the explicit-target
+        # branches in the mutator only apply a single op before returning.
+        # Warn only after the mutation succeeds so invalid target/profile
+        # combinations fail with their real error instead of a misleading
+        # "ignored" banner.
+        if mutation_target is not None and max_operations > 1:
+            typer.secho(
+                f"warning: {multi_mutation_option_name}={max_operations} ignored because "
+                "--target is set; explicit-target mutations are single-shot. "
+                "Drop --target to apply multiple rounds.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        return case
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
 
 def _render_result(case: MutatedCase) -> str:
-    payload = case.model_dump(mode="json", by_alias=True, exclude_none=True)
+    # ``mode="python"`` keeps ``bytes`` as ``bytes`` instead of running
+    # pydantic's UTF-8 decode for ``mode="json"``. Byte-layer mutations
+    # legitimately produce non-UTF-8 buffers (e.g. flip_byte ``0x20`` →
+    # ``0xe9``), so the JSON serializer's strict UTF-8 path was crashing
+    # the entire output. We re-encode via latin-1 below — every byte maps
+    # 1:1 to a code point, so the round-trip is lossless and the JSON
+    # output stays human-readable.
+    payload = case.model_dump(mode="python", by_alias=True, exclude_none=True)
 
     # The on-the-wire SIP text gets split into two outputs so neither path is
     # awkward to read:
@@ -180,15 +208,20 @@ def _render_result(case: MutatedCase) -> str:
     #   2. The human-friendly LF-only form is rendered *above* the JSON as
     #      a separate block so SIP messages display with real line breaks
     #      instead of escaped ``\n`` runs inside a JSON string.
-    # Wire-layer mutations populate ``wire_text``; byte-layer mutations
-    # populate ``packet_bytes`` — handle both under the same banner so the
-    # output shape doesn't surprise on layer change.
+    # Wire-layer mutations populate ``wire_text`` (str); byte-layer mutations
+    # populate ``packet_bytes`` (bytes) — normalise both to a latin-1 string
+    # under the same ``raw_wire_text`` banner.
     formatted_wire: str | None = None
     for source_key in ("wire_text", "packet_bytes"):
         if source_key in payload:
-            raw = payload.pop(source_key)
-            payload["raw_wire_text"] = raw
-            formatted_wire = raw.replace("\r\n", "\n")
+            raw_value = payload.pop(source_key)
+            raw_text = (
+                raw_value.decode("latin-1")
+                if isinstance(raw_value, (bytes, bytearray))
+                else str(raw_value)
+            )
+            payload["raw_wire_text"] = raw_text
+            formatted_wire = raw_text.replace("\r\n", "\n")
             break
 
     # Records hold the structured before/after snapshots, but spotting *what*
@@ -221,7 +254,16 @@ def _render_result(case: MutatedCase) -> str:
     if raw_wire and records:
         change_context = _format_change_context(records, raw_wire)
 
-    json_block = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    json_block = json.dumps(
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        # Safety net: any stray ``bytes`` left over from ``mode="python"``
+        # (e.g. nested in ``records[*].before/after`` Any fields) gets
+        # latin-1-decoded so it never aborts the whole output.
+        default=lambda obj: obj.decode("latin-1") if isinstance(obj, (bytes, bytearray)) else repr(obj),
+    )
     if formatted_wire is None:
         return json_block
 
@@ -440,6 +482,17 @@ def packet_command(
     target: Annotated[
         str | None, typer.Option("--target", help="Explicit mutation target path.")
     ] = None,
+    max_operations: Annotated[
+        int,
+        typer.Option(
+            "--max-operations",
+            help="Number of mutation rounds to apply per case (default 1). "
+            "Each round operates on the result of the previous one, so multiple "
+            "single-shot strategies (null_byte_only / boundary_only / byte_edit_only) "
+            "stack their effects. Combine with deterministic strategies for "
+            "compound fuzz pressure.",
+        ),
+    ] = 1,
 ) -> None:
     """Mutate a SIP packet from JSON read on stdin."""
     raw = sys.stdin.read()
@@ -451,6 +504,8 @@ def packet_command(
         layer=layer,
         seed=seed,
         target=target,
+        max_operations=max_operations,
+        multi_mutation_option_name="--max-operations",
     )
     typer.echo(_render_result(case))
 
@@ -477,12 +532,24 @@ def request_command(
     target: Annotated[
         str | None, typer.Option("--target", help="Explicit mutation target path.")
     ] = None,
+    max_operations: Annotated[
+        int,
+        typer.Option(
+            "--mutations-per-case",
+            help="Number of mutation rounds to apply per case (default 1).",
+        ),
+    ] = 1,
 ) -> None:
     """Generate a SIP request baseline and mutate it."""
     generator = SIPGenerator(GeneratorSettings.from_env(prefix=None))
     spec = RequestSpec(method=method)
     try:
-        packet = generator.generate_request(spec, None)
+        # Pass the same seed used for mutation through to baseline generation
+        # so transaction-unique IDs (Call-ID / branch / tag / nonce / icid)
+        # are reproducible too — without this, two runs with identical
+        # ``--seed`` produce byte-different wires (the mutation is the same,
+        # but the IDs are fresh ``uuid4`` every time).
+        packet = generator.generate_request(spec, None, seed=seed)
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -493,6 +560,8 @@ def request_command(
         layer=layer,
         seed=seed,
         target=target,
+        max_operations=max_operations,
+        multi_mutation_option_name="--mutations-per-case",
     )
     typer.echo(_render_result(case))
 
@@ -523,6 +592,13 @@ def response_command(
     target: Annotated[
         str | None, typer.Option("--target", help="Explicit mutation target path.")
     ] = None,
+    max_operations: Annotated[
+        int,
+        typer.Option(
+            "--mutations-per-case",
+            help="Number of mutation rounds to apply per case (default 1).",
+        ),
+    ] = 1,
 ) -> None:
     """Generate a SIP response baseline and mutate it."""
     dialog_context = _parse_context(context, required=True)
@@ -531,7 +607,9 @@ def response_command(
     generator = SIPGenerator(GeneratorSettings.from_env(prefix=None))
     spec = ResponseSpec(status_code=status_code, related_method=related_method)
     try:
-        packet = generator.generate_response(spec, dialog_context)
+        # Same reasoning as ``request_command``: forward the seed so the
+        # generated baseline is byte-exact reproducible.
+        packet = generator.generate_response(spec, dialog_context, seed=seed)
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -543,6 +621,8 @@ def response_command(
         seed=seed,
         target=target,
         context=dialog_context,
+        max_operations=max_operations,
+        multi_mutation_option_name="--mutations-per-case",
     )
     typer.echo(_render_result(case))
 

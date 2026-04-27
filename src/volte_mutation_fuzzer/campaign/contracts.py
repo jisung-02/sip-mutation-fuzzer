@@ -26,6 +26,10 @@ class CampaignConfig(BaseModel):
     strategies: tuple[str, ...] = ("default", "state_breaker")
     layers: tuple[str, ...] = ("model", "wire", "byte")
     max_cases: int = Field(default=1000, ge=0)
+    # Number of mutation rounds applied per case. Default 1 = single-shot
+    # (legacy behaviour). >1 stacks deterministic strategies (null_byte_only,
+    # boundary_only, byte_edit_only) so a single packet carries N mutations.
+    mutations_per_case: int = Field(default=1, ge=1, le=100)
     timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     cooldown_seconds: float = Field(default=0.2, ge=0.0, le=10.0)
     seed_start: int = Field(default=0, ge=0)

@@ -1042,5 +1042,110 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.content_length, 0)
 
 
+class SIPGeneratorSeedDeterminismTests(unittest.TestCase):
+    """Verify the same ``seed`` produces byte-identical baselines.
+
+    Without seed control, transaction-unique IDs (Call-ID, Via branch,
+    From tag, nonce, sip_etag, ICID) come from ``uuid4()`` and break
+    reproduction of fuzz cases. With ``seed`` forwarded to the generator,
+    ``mutate request --seed N`` two runs back-to-back must yield the
+    exact same wire — not just the same mutation pattern.
+    """
+
+    def setUp(self) -> None:
+        self.generator = SIPGenerator(GeneratorSettings())
+
+    def test_same_seed_yields_identical_call_id_and_branch(self) -> None:
+        first = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS), seed=42
+        )
+        second = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS), seed=42
+        )
+
+        self.assertEqual(first.call_id, second.call_id)
+        self.assertEqual(first.via[0].branch, second.via[0].branch)
+        self.assertEqual(
+            first.from_.parameters.get("tag"),
+            second.from_.parameters.get("tag"),
+        )
+
+    def test_different_seed_yields_different_ids(self) -> None:
+        first = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS), seed=1
+        )
+        second = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS), seed=2
+        )
+
+        # At least one of the per-call IDs must differ.
+        self.assertTrue(
+            first.call_id != second.call_id
+            or first.via[0].branch != second.via[0].branch
+        )
+
+    def test_no_seed_uses_uuid4_each_call(self) -> None:
+        # Without ``seed``, behaviour falls back to the standard
+        # ``uuid4`` path so transaction IDs stay unique per call. Pinning
+        # this preserves the spec-compliant default for ad-hoc invocations
+        # outside the campaign loop.
+        first = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
+        second = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
+        self.assertNotEqual(first.call_id, second.call_id)
+
+    def test_seed_is_per_call_no_state_leak(self) -> None:
+        # A seeded call must not leave a deterministic stream behind for
+        # the next unseeded call — otherwise unrelated invocations on the
+        # same generator instance start producing repeating IDs.
+        seeded = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS), seed=99
+        )
+        unseeded_a = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
+        unseeded_b = self.generator.generate_request(
+            RequestSpec(method=SIPMethod.OPTIONS)
+        )
+        self.assertNotEqual(unseeded_a.call_id, unseeded_b.call_id)
+        self.assertNotEqual(seeded.call_id, unseeded_a.call_id)
+
+    def test_response_seed_also_deterministic(self) -> None:
+        context = DialogContext(call_id="abc@host", local_tag="t1", local_cseq=1)
+        first = self.generator.generate_response(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+            seed=7,
+        )
+        second = self.generator.generate_response(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+            seed=7,
+        )
+        self.assertEqual(first.via[0].branch, second.via[0].branch)
+
+    def test_response_seed_makes_timestamp_deterministic(self) -> None:
+        # Catches the regression where ``timestamp`` was wall-clock-derived
+        # and silently broke seeded response equality even after the rest
+        # of the IDs were locked down.
+        context = DialogContext(call_id="abc@host", local_tag="t1", local_cseq=1)
+        first = self.generator.generate_response(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+            seed=11,
+        )
+        second = self.generator.generate_response(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+            seed=11,
+        )
+        self.assertEqual(first.timestamp, second.timestamp)
+        # Whole packets must be identical, not just one field.
+        self.assertEqual(first.model_dump(mode="json"), second.model_dump(mode="json"))
+
+
 if __name__ == "__main__":
     unittest.main()

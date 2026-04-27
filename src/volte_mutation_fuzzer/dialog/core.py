@@ -172,10 +172,17 @@ class DialogOrchestrator:
         mutation_config: MutationConfig | None,
     ) -> DialogStepResult:
         """Generate (and optionally mutate) a request, send it, and collect responses."""
+        # Forward the mutation seed into baseline generation so seeded
+        # dialog scenarios are byte-reproducible. Without this, the
+        # generator falls back to ``uuid4`` for every Via branch / Call-ID
+        # / tag in the setup → fuzz → teardown sequence, defeating
+        # campaign-level determinism for dialog runtime methods.
+        baseline_seed = mutation_config.seed if mutation_config is not None else None
         try:
             packet = self._generator.generate_request(
                 self._build_request_spec(step),
                 context,
+                seed=baseline_seed,
             )
         except Exception as exc:
             return DialogStepResult(

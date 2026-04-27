@@ -3133,3 +3133,174 @@ class InviteTeardownTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertIn("teardown:cancel-ok:attempt=1", events[0])
         self.assertIn("code=487", events[0])
+
+
+class ReproductionCmdMultiMutationTests(unittest.TestCase):
+    """Verify the replay command surfaces ``--mutations-per-case`` only when
+    the campaign actually used multi-round mutation.
+
+    Reasoning: a campaign run with ``mutations_per_case=N>1`` produces
+    packets that depend on N rounds of mutation; replaying them with the
+    default single-shot ``mutate`` step would yield a different packet and
+    silently mis-reproduce the case. When ``mutations_per_case=1`` (the
+    default) the flag is omitted to keep replay commands short.
+    """
+
+    def _executor_with_mutations(self, mutations_per_case: int) -> CampaignExecutor:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = CampaignConfig(
+                target_host="127.0.0.1",
+                target_port=5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                results_dir=tmpdir,
+                output_name="test",
+                mutations_per_case=mutations_per_case,
+            )
+            executor = CampaignExecutor(cfg)
+        return executor
+
+    def _spec(self) -> CaseSpec:
+        return CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="wire",
+            strategy="null_byte_only",
+            profile="delivery_preserving",
+        )
+
+    def test_default_omits_mutations_per_case(self) -> None:
+        executor = self._executor_with_mutations(1)
+        cmd = executor._build_reproduction_cmd(self._spec())
+        self.assertNotIn("--mutations-per-case", cmd)
+        # Sanity: regular flags still present.
+        self.assertIn("uv run fuzzer mutate request OPTIONS", cmd)
+        self.assertIn("--strategy null_byte_only", cmd)
+        self.assertIn("--seed 0", cmd)
+
+    def test_multi_mutation_includes_flag(self) -> None:
+        executor = self._executor_with_mutations(5)
+        cmd = executor._build_reproduction_cmd(self._spec())
+        self.assertIn("--mutations-per-case 5", cmd)
+        # Order: flag must sit on the mutate side of the pipe, not the send side.
+        mutate_part, _pipe, send_part = cmd.partition(" | ")
+        self.assertIn("--mutations-per-case 5", mutate_part)
+        self.assertNotIn("--mutations-per-case", send_part)
+
+    def test_response_reproduction_also_propagates_flag(self) -> None:
+        executor = self._executor_with_mutations(3)
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="wire",
+            strategy="null_byte_only",
+            profile="delivery_preserving",
+            response_code=200,
+            related_method="INVITE",
+        )
+        cmd = executor._build_reproduction_cmd(spec)
+        self.assertIn("--mutations-per-case 3", cmd)
+        self.assertIn("uv run fuzzer mutate response 200", cmd)
+
+
+class CampaignBuildPacketDeterminismTests(unittest.TestCase):
+    """``CampaignExecutor._build_packet`` must produce byte-identical
+    packets across reruns for the same ``CaseSpec``, including the
+    ``with_dialog=True`` and response-code branches that route through
+    ``_synthetic_dialog_context``.
+
+    Without seeded ``call_id`` in the synthetic context, the generator
+    inherits a fresh random ``call_id`` on every run and the seed
+    propagation fix is silently defeated.
+    """
+
+    def _executor(self, **overrides) -> CampaignExecutor:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = CampaignConfig(
+                target_host="127.0.0.1",
+                target_port=5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                results_dir=tmpdir,
+                output_name="test",
+                **overrides,
+            )
+            return CampaignExecutor(cfg)
+
+    def _spec(self, *, response_code: int | None = None) -> CaseSpec:
+        return CaseSpec(
+            case_id=0,
+            seed=42,
+            method="OPTIONS" if response_code is None else "INVITE",
+            layer="wire",
+            strategy="default",
+            profile="legacy",
+            response_code=response_code,
+            related_method="INVITE" if response_code is not None else None,
+        )
+
+    def test_build_packet_request_with_dialog_is_deterministic(self) -> None:
+        executor = self._executor(with_dialog=True)
+        spec = self._spec()
+        first = executor._build_packet(spec)
+        second = executor._build_packet(spec)
+        self.assertEqual(first.call_id, second.call_id)
+        self.assertEqual(first.via[0].branch, second.via[0].branch)
+
+    def test_build_packet_response_is_deterministic(self) -> None:
+        executor = self._executor()
+        spec = self._spec(response_code=200)
+        first = executor._build_packet(spec)
+        second = executor._build_packet(spec)
+        self.assertEqual(
+            first.model_dump(mode="json"),
+            second.model_dump(mode="json"),
+        )
+
+    def test_synthetic_context_seed_changes_call_id(self) -> None:
+        executor = self._executor()
+        ctx_a = executor._synthetic_dialog_context(seed=1)
+        ctx_b = executor._synthetic_dialog_context(seed=2)
+        ctx_a_repeat = executor._synthetic_dialog_context(seed=1)
+        self.assertEqual(ctx_a.call_id, ctx_a_repeat.call_id)
+        self.assertNotEqual(ctx_a.call_id, ctx_b.call_id)
+
+    def test_synthetic_context_unseeded_stays_random(self) -> None:
+        # No seed → fresh ``uuid4``-style id every call. Otherwise
+        # production code paths that call ``_synthetic_dialog_context()``
+        # without a seed would start producing collisions.
+        executor = self._executor()
+        ctx_a = executor._synthetic_dialog_context()
+        ctx_b = executor._synthetic_dialog_context()
+        self.assertNotEqual(ctx_a.call_id, ctx_b.call_id)
+
+
+class CampaignConfigMutationsPerCaseTests(unittest.TestCase):
+    """Field-level validation for the new ``mutations_per_case`` knob."""
+
+    def test_default_is_single_shot(self) -> None:
+        cfg = CampaignConfig(target_host="127.0.0.1")
+        self.assertEqual(cfg.mutations_per_case, 1)
+
+    def test_zero_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            CampaignConfig(target_host="127.0.0.1", mutations_per_case=0)
+
+    def test_negative_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            CampaignConfig(target_host="127.0.0.1", mutations_per_case=-1)
+
+    def test_upper_bound_enforced(self) -> None:
+        # Field is capped at 100 to prevent runaway loops.
+        with self.assertRaises(Exception):
+            CampaignConfig(target_host="127.0.0.1", mutations_per_case=101)
+
+    def test_typical_values_accepted(self) -> None:
+        for n in (1, 5, 10, 100):
+            with self.subTest(n=n):
+                cfg = CampaignConfig(
+                    target_host="127.0.0.1", mutations_per_case=n
+                )
+                self.assertEqual(cfg.mutations_per_case, n)

@@ -28,7 +28,15 @@ class SIPMutatorCLITests(unittest.TestCase):
 
     def parse_output(self, result) -> dict[str, Any]:
         self.assertEqual(result.exit_code, 0, msg=result.output)
-        return json.loads(result.stdout)
+        # ``mutate`` CLI now prefixes its JSON payload with a ``=== wire_text
+        # ===`` block (rendered SIP message, LF separators) and a
+        # ``=== change context ===`` block. The JSON-parseable section
+        # starts after the ``=== mutation_result (json) ===`` marker.
+        output = result.stdout
+        marker = "=== mutation_result (json) ==="
+        if marker in output:
+            output = output.split(marker, 1)[1].strip()
+        return json.loads(output)
 
     def test_packet_command_mutates_generator_cli_json_from_stdin(self) -> None:
         baseline_json = self.generate_request_baseline_json("OPTIONS")
@@ -56,9 +64,13 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertEqual(payload["strategy"], "final_crlf_loss")
         self.assertEqual(payload["seed"], 7)
         self.assertEqual(payload["original_packet"]["method"], "OPTIONS")
-        self.assertIn("wire_text", payload)
-        self.assertTrue(payload["wire_text"].endswith("\r\n"))
-        self.assertFalse(payload["wire_text"].endswith("\r\n\r\n"))
+        # ``wire_text`` is now split: ``raw_wire_text`` keeps CRLF for byte-
+        # exact replay, and the human-readable LF-only form is rendered
+        # outside the JSON. Tests that need the on-the-wire bytes use
+        # ``raw_wire_text``.
+        self.assertIn("raw_wire_text", payload)
+        self.assertTrue(payload["raw_wire_text"].endswith("\r\n"))
+        self.assertFalse(payload["raw_wire_text"].endswith("\r\n\r\n"))
         self.assertGreaterEqual(len(payload["records"]), 1)
 
     def test_request_command_generates_and_mutates_request_packet(self) -> None:
@@ -129,7 +141,9 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertEqual(payload["profile"], "parser_breaker")
         self.assertEqual(payload["final_layer"], "byte")
         self.assertEqual(payload["strategy"], "tail_chop_1")
-        self.assertIn("packet_bytes", payload)
+        # Both wire- and byte-layer mutations now publish the on-the-wire
+        # bytes under the unified ``raw_wire_text`` key.
+        self.assertIn("raw_wire_text", payload)
 
     def test_response_command_generates_and_mutates_response_packet(self) -> None:
         result = self.runner.invoke(
@@ -188,8 +202,59 @@ class SIPMutatorCLITests(unittest.TestCase):
 
         self.assertEqual(payload["strategy"], "final_crlf_loss")
         self.assertEqual(payload["final_layer"], "wire")
-        self.assertTrue(payload["wire_text"].endswith("\r\n"))
-        self.assertFalse(payload["wire_text"].endswith("\r\n\r\n"))
+        self.assertTrue(payload["raw_wire_text"].endswith("\r\n"))
+        self.assertFalse(payload["raw_wire_text"].endswith("\r\n\r\n"))
+
+    def test_packet_command_warns_with_packet_flag_name_for_targeted_multi_mutation(self) -> None:
+        baseline_json = self.generate_request_baseline_json("OPTIONS")
+
+        result = self.runner.invoke(
+            self.app,
+            [
+                "packet",
+                "--profile",
+                "legacy",
+                "--layer",
+                "wire",
+                "--strategy",
+                "default",
+                "--target",
+                "header[0]",
+                "--max-operations",
+                "3",
+            ],
+            input=baseline_json,
+        )
+
+        payload = self.parse_output(result)
+
+        self.assertEqual(payload["final_layer"], "wire")
+        self.assertIn("warning: --max-operations=3 ignored", result.output)
+        self.assertNotIn("--mutations-per-case=3 ignored", result.output)
+
+    def test_request_command_does_not_warn_when_invalid_target_combo_fails_early(self) -> None:
+        result = self.runner.invoke(
+            self.app,
+            [
+                "request",
+                "OPTIONS",
+                "--profile",
+                "delivery_preserving",
+                "--strategy",
+                "null_byte_only",
+                "--target",
+                "header[0]",
+                "--mutations-per-case",
+                "3",
+            ],
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn(
+            "profile-scoped mutation does not support explicit targets",
+            result.output,
+        )
+        self.assertNotIn("ignored because --target is set", result.output)
 
     def test_help_exposes_basic_mutation_options(self) -> None:
         expected_options = ("--profile", "--strategy", "--layer", "--seed", "--target")

@@ -1,3 +1,4 @@
+import random
 import time
 from copy import deepcopy
 from uuid import uuid4
@@ -73,11 +74,53 @@ class SIPGenerator:
         self.settings = settings
         self.catalog = SIP_CATALOG if catalog is None else catalog
         self._body_factory = BodyFactory()
+        # Per-call deterministic RNG. ``None`` falls back to ``uuid4`` so the
+        # default behaviour (no seed) keeps producing transaction-unique
+        # identifiers. Set by ``generate_request`` / ``generate_response``
+        # when ``seed`` is supplied; cleared again on exit so subsequent
+        # callers don't accidentally inherit the deterministic stream.
+        self._tx_rng: random.Random | None = None
+        # Seed value held alongside the RNG so derived helpers like
+        # ``_timestamp`` can produce stable values from the seed itself
+        # rather than the RNG stream — that way the result doesn't depend
+        # on how many ``_uuid_hex`` draws happened earlier in the call.
+        self._tx_seed: int | None = None
+
+    def _uuid_hex(self, length: int = 32) -> str:
+        """Return a hex string mimicking ``uuid4().hex`` slicing.
+
+        When ``self._tx_rng`` is set (because a seed was passed to the
+        active ``generate_*`` call), we draw 128 bits from it so the same
+        seed produces byte-identical Call-ID / branch / tag / nonce / etc.
+        Without the seed we keep using ``uuid4`` so the standard
+        transaction-unique behaviour is preserved.
+        """
+        if self._tx_rng is None:
+            return uuid4().hex[:length]
+        return f"{self._tx_rng.getrandbits(128):032x}"[:length]
+
+    def _timestamp(self) -> float:
+        """Wall-clock time, but deterministic when seeded.
+
+        Responses carry a ``timestamp`` derived from ``time.time()`` —
+        which is fine for spec-faithful real-time behaviour but breaks
+        seeded reproduction (two seeded ``generate_response`` calls would
+        differ on the timestamp alone). When seeded, return a stable
+        epoch derived **directly from the seed value** (not from the RNG
+        stream) so internal call order doesn't change the result —
+        otherwise a code path that draws an extra hex value before
+        ``_timestamp`` would shift it on the next rerun.
+        """
+        if self._tx_seed is None:
+            return round(time.time(), 3)
+        return round(1_700_000_000 + (self._tx_seed % 100_000_000), 3)
 
     def generate_request(
         self,
         spec: RequestSpec,
         context: DialogContext | None = None,
+        *,
+        seed: int | None = None,
     ) -> SIPRequest:
         model = self._resolve_request_model(spec)
         definition = self.catalog.get_request(spec.method)
@@ -87,18 +130,29 @@ class SIPGenerator:
             preconditions=definition.preconditions,
         )
 
-        payload = self._build_request_defaults(spec, context)
-        if spec.has_overrides:
-            payload = self._apply_overrides(payload, spec.overrides)
-        self._populate_body_header_defaults(payload)
+        prior_rng = self._tx_rng
+        prior_seed = self._tx_seed
+        if seed is not None:
+            self._tx_rng = random.Random(seed)
+            self._tx_seed = seed
+        try:
+            payload = self._build_request_defaults(spec, context)
+            if spec.has_overrides:
+                payload = self._apply_overrides(payload, spec.overrides)
+            self._populate_body_header_defaults(payload)
 
-        # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
-        return model.model_validate(payload)
+            # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
+            return model.model_validate(payload)
+        finally:
+            self._tx_rng = prior_rng
+            self._tx_seed = prior_seed
 
     def generate_response(
         self,
         spec: ResponseSpec,
         context: DialogContext,
+        *,
+        seed: int | None = None,
     ) -> SIPResponse:
         model = self._resolve_response_model(spec)
         definition = self.catalog.get_response(spec.status_code)
@@ -108,25 +162,34 @@ class SIPGenerator:
             preconditions=definition.preconditions,
         )
 
-        payload = self._build_response_defaults(spec, context)
-        if spec.has_overrides:
-            payload = self._apply_overrides(payload, spec.overrides)
-        self._populate_body_header_defaults(payload)
-        policy = get_response_policy(spec.related_method, spec.status_code)
-        body = payload.get("body")
-        if policy.body_forbidden and body is not None:
-            raise ValueError(
-                "response policy forbids a body for "
-                f"{spec.related_method.value} {spec.status_code}"
-            )
-        if policy.body_required and (body is None or body == ""):
-            raise ValueError(
-                "response policy requires a body for "
-                f"{spec.related_method.value} {spec.status_code}"
-            )
+        prior_rng = self._tx_rng
+        prior_seed = self._tx_seed
+        if seed is not None:
+            self._tx_rng = random.Random(seed)
+            self._tx_seed = seed
+        try:
+            payload = self._build_response_defaults(spec, context)
+            if spec.has_overrides:
+                payload = self._apply_overrides(payload, spec.overrides)
+            self._populate_body_header_defaults(payload)
+            policy = get_response_policy(spec.related_method, spec.status_code)
+            body = payload.get("body")
+            if policy.body_forbidden and body is not None:
+                raise ValueError(
+                    "response policy forbids a body for "
+                    f"{spec.related_method.value} {spec.status_code}"
+                )
+            if policy.body_required and (body is None or body == ""):
+                raise ValueError(
+                    "response policy requires a body for "
+                    f"{spec.related_method.value} {spec.status_code}"
+                )
 
-        # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
-        return model.model_validate(payload)
+            # Pydantic BaseModel 내부 메서드이며, payload 검증과 최종 모델 인스턴스 생성을 함께 수행한다.
+            return model.model_validate(payload)
+        finally:
+            self._tx_rng = prior_rng
+            self._tx_seed = prior_seed
 
     def _resolve_request_model(self, spec: RequestSpec) -> type[SIPRequest]:
         try:
@@ -377,7 +440,12 @@ class SIPGenerator:
             ),
             "server": self.settings.user_agent,
             "content_length": 0,
-            "timestamp": round(time.time(), 3),
+            # When ``seed`` was supplied, derive a deterministic timestamp
+            # from the RNG so two seeded calls produce identical packets.
+            # Without ``seed`` we keep wall-clock time so spec-faithful
+            # responses still encode "now". Resolution is 0.001s, matching
+            # the original wall-clock rounding.
+            "timestamp": self._timestamp(),
         }
 
         if context.route_set:
@@ -429,7 +497,7 @@ class SIPGenerator:
 
         if spec.related_method == SIPMethod.REGISTER and 200 <= spec.status_code < 300:
             defaults.setdefault("service_route", (self._build_from_name_address().uri,))
-            defaults.setdefault("sip_etag", uuid4().hex)
+            defaults.setdefault("sip_etag", self._uuid_hex())
 
         for header_name in policy.forbidden_headers:
             defaults.pop(header_name, None)
@@ -482,7 +550,7 @@ class SIPGenerator:
             return (
                 AuthChallenge(
                     realm=self.settings.from_host,
-                    nonce=uuid4().hex,
+                    nonce=self._uuid_hex(),
                 ),
             )
 
@@ -600,7 +668,7 @@ class SIPGenerator:
             transport=self.settings.transport,
             host=self.settings.via_host,
             port=self.settings.via_port,
-            branch=f"z9hG4bK-{uuid4().hex}",
+            branch=f"z9hG4bK-{self._uuid_hex()}",
             rport=True,
         )
 
@@ -671,7 +739,7 @@ class SIPGenerator:
         if context is not None and context.call_id is not None:
             return context.call_id
 
-        call_id = f"{uuid4().hex}@{self.settings.from_host}"
+        call_id = f"{self._uuid_hex()}@{self.settings.from_host}"
         if context is not None:
             context.call_id = call_id
         return call_id
@@ -713,7 +781,7 @@ class SIPGenerator:
         return EventHeader(package="presence")
 
     def _new_tag(self) -> str:
-        return uuid4().hex[:16]
+        return self._uuid_hex(16)
 
     def _build_from_name_address(self) -> NameAddress:
         """Build a tag-less NameAddress from the from_* settings."""
@@ -825,7 +893,7 @@ class SIPGenerator:
             "urn:urn-7:3gpp-service.ims.icsi.mmtel")
         defaults.setdefault("p_early_media", "supported")
         defaults.setdefault("p_charging_vector",
-            f"icid-value={uuid4().hex[:32].upper()};icid-generated-at={pcscf_ip}")
+            f"icid-value={self._uuid_hex(32).upper()};icid-generated-at={pcscf_ip}")
 
         # Supported / Allow / Accept
         defaults.setdefault("supported",
