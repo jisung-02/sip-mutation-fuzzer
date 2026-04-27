@@ -280,7 +280,21 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     ),
     AnomalyPattern(
         "telephony_crash",
-        r"(?:com\.android\.phone|telephony).*(?:crash|died|killed|restart)",
+        # Tightened: require explicit AMS process-death markers
+        # (``Process``, ``am_kill``, ``am_proc_died``) immediately before
+        # the package name, OR an explicit FATAL/killed suffix. The
+        # earlier loose ``(?:phone|telephony).*(?:crash|died|killed|
+        # restart)`` matched binder-unbind lines like
+        # ``handleConnectionServiceDeath: ... componentName={
+        # com.android.phone/...} died:`` which Telecom emits on every
+        # call cleanup. On Pixel this fired 20+ times per fuzzed-INVITE
+        # campaign — see 2026-04-27 SDP byte_edit campaign. Real process
+        # deaths are still caught here (and by the stricter
+        # ``process_died`` pattern above).
+        r"(?:Process|am_kill|am_proc_died|killing\s+pid)[\s:\d]+"
+        r"(?:com\.android\.phone|com\.android\.telephony)\b|"
+        r"(?:com\.android\.phone|com\.android\.telephony)"
+        r"(?:\s+\(pid\s+\d+\)\s+has died|:\s+FATAL\b|:\s+killed\b)",
         "critical",
         "system_anomaly",
     ),
@@ -483,7 +497,18 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     ),
     AnomalyPattern(
         "radio_subsystem_restart",
-        r"subsys.*(?:Restart|crash)|SubsysRestartLevel|ssr_state",
+        # Tightened to require subsys/subsystem followed by an explicit
+        # restart/crash keyword via a tight separator. The earlier
+        # ``subsys.*(?:Restart|crash)`` form (with re.IGNORECASE) matched
+        # any line containing both substrings — notably
+        # ``updateAudioSubSystemInfo =MicStatus: -1, CrashCounter: -1``
+        # from ConnectivityMonitorStateMachine where SubSystem and Crash
+        # are 30+ chars apart and represent audio-stats lifecycle, not
+        # SSR. Real SSR signals are kernel ``subsys-modem: Restart ...``,
+        # framework ``subsystem_restart`` / ``Subsystem Restart``,
+        # Samsung ``SubsysRestartLevel``, and ``ssr_state``.
+        r"\bsubsys(?:tem|[-_])\S*[\s:_-]+(?:restart|crash(?:ed)?)\b|"
+        r"SubsysRestartLevel\b|\bssr_state\b",
         "critical",
         "system_anomaly",
     ),

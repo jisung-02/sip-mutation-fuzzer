@@ -759,6 +759,32 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         # line, but BluetoothPowerStatsCollector is in the exact-blacklist.
         self.assertEqual(events, [])
 
+    def test_pixel_audio_metric_ext_noise_is_suppressed(self) -> None:
+        # Regression: 2026-04-27 SDP byte_edit campaign on Pixel had
+        # GRIL-AudioMetricExt fire java.util.NoSuchElementException on
+        # every call setup — 5/13 stack_failure FPs. Tag is now in
+        # BLACKLIST_TAGS_EXACT.
+        detector = AdbAnomalyDetector()
+        line = (
+            "04-27 14:21:12.603 E/GRIL-AudioMetricExt( 2664): "
+            "initAudioMetricExtHal: Exception: java.util.NoSuchElementException"
+        )
+        self.assertIsNone(detector.feed_line("radio", line))
+
+    def test_pixel_connectivity_monitor_noise_is_suppressed(self) -> None:
+        # Regression: 2026-04-27 SDP byte_edit campaign on Pixel had
+        # ConnectivityMonitorStateMachine fire updateAudioSubSystemInfo
+        # lines whose ``SubSystem`` + ``Crash`` substrings tripped
+        # radio_subsystem_restart under IGNORECASE — 8/13 stack_failure
+        # FPs. Both the tightened regex AND the tag blacklist guard this.
+        detector = AdbAnomalyDetector()
+        line = (
+            "04-27 14:21:12.603 I/ConnectivityMonitorStateMachine( 3061): "
+            "[OnCallLteOrNr] {subId=11} updateAudioSubSystemInfo "
+            "=MicStatus: -1, CrashCounter: -1, SpeakerImpedenceLeft: 0.0"
+        )
+        self.assertIsNone(detector.feed_line("main", line))
+
     def test_sipmsg_outbound_echo_suppressed(self) -> None:
         detector = AdbAnomalyDetector()
         events = detector.feed_lines(

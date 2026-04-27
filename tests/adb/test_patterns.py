@@ -50,9 +50,35 @@ class AnomalyPatternsTests(unittest.TestCase):
         self.assertIsNone(_match_pattern("Audio route changed successfully"))
 
     def test_telephony_crash_matches(self) -> None:
-        pattern = _match_pattern("telephony service died after watchdog")
+        # Real AMS process-kill signal — the kind of line that should
+        # promote a verdict.
+        pattern = _match_pattern(
+            "I/ActivityManager( 1234): am_kill: 5678:com.android.phone (adj 0): killed"
+        )
         assert pattern is not None
         self.assertEqual(pattern.name, "telephony_crash")
+
+    def test_telephony_crash_matches_proc_died(self) -> None:
+        # AMS am_proc_died trace — also a real death signal.
+        pattern = _match_pattern(
+            "I/ActivityManager( 1234): am_proc_died: 5678 com.android.phone proc died"
+        )
+        assert pattern is not None
+        self.assertEqual(pattern.name, "telephony_crash")
+
+    def test_telephony_crash_does_not_match_binder_unbind_fp(self) -> None:
+        # Regression: case 10 of the 2026-04-27 SDP byte_edit Pixel
+        # campaign matched the loose old regex on a normal Telecom
+        # binder unbind line — the bound TelephonyConnectionService had
+        # disconnected after a missed-call cleanup, but the process
+        # ``com.android.phone`` never died (logged again 200ms later).
+        line = (
+            "04-27 14:12:06.900 I/Telecom ( 1702): CallsManager: "
+            "handleConnectionServiceDeath: service [ConnectionServiceWrapper "
+            "componentName=ComponentInfo{com.android.phone/com.android."
+            "services.telephony.TelephonyConnectionService}] died: ..."
+        )
+        self.assertIsNone(_match_pattern(line))
 
     # ---- sip_server_error: echo regex tightening ----
 
@@ -162,6 +188,39 @@ class AnomalyPatternsTests(unittest.TestCase):
         assert pattern is not None
         # could match modem_crash or radio_subsystem_restart depending on order
         self.assertIn(pattern.name, ("modem_crash", "radio_subsystem_restart"))
+
+    def test_radio_subsystem_restart_matches_underscore_form(self) -> None:
+        pattern = _match_pattern(
+            "I/Kernel ( 1234): subsystem_restart: peripheral=modem reason=panic"
+        )
+        assert pattern is not None
+        # ``baseband_reset`` regex (``Subsystem.*restart``) often catches
+        # this first; ``radio_subsystem_restart`` is a fallback. Either
+        # critical signal is acceptable.
+        self.assertIn(
+            pattern.name,
+            ("modem_crash", "radio_subsystem_restart", "baseband_reset"),
+        )
+
+    def test_radio_subsystem_restart_matches_samsung_level(self) -> None:
+        pattern = _match_pattern(
+            "I/Shannon ( 5678): SubsysRestartLevel changed: 1 -> 0"
+        )
+        assert pattern is not None
+        self.assertEqual(pattern.name, "radio_subsystem_restart")
+
+    def test_radio_subsystem_restart_does_not_match_audio_stats_fp(self) -> None:
+        # Regression: ConnectivityMonitorStateMachine periodic call-state
+        # reporter contains both ``SubSystem`` and ``Crash`` substrings 30+
+        # chars apart. Earlier ``subsys.*(?:Restart|crash)`` matched it
+        # under IGNORECASE on every fuzzed INVITE on Pixel — see
+        # 2026-04-27 SDP byte_edit campaign (8/13 stack_failure FPs).
+        line = (
+            "I/ConnectivityMonitorStateMachine( 3061): [OnCallLteOrNr] "
+            "{subId=11} updateAudioSubSystemInfo =MicStatus: -1, "
+            "CrashCounter: -1, SpeakerImpedenceLeft: 0.0"
+        )
+        self.assertIsNone(_match_pattern(line))
 
     def test_rild_died_matches(self) -> None:
         pattern = _match_pattern("rild: died with signal 9")

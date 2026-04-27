@@ -142,6 +142,22 @@ BLACKLIST_TAGS_EXACT: frozenset[str] = frozenset({
     "SemDesktopModeManager",
     "SemEmergencyManager",
     "SemPlatform",
+    # Samsung Connectivity Monitor — fires per-call lifecycle reporter
+    # lines like ``updateAudioSubSystemInfo =MicStatus: -1, CrashCounter:
+    # -1, ...`` whose ``SubSystem`` + ``Crash`` substrings tripped
+    # radio_subsystem_restart under IGNORECASE on every fuzzed INVITE.
+    # Never indicates an actual subsystem restart.
+    "ConnectivityMonitorStateMachine",
+    # Samsung Galaxy RIL audio metric init — periodic
+    # ``initAudioMetricExtHal: Exception: java.util.NoSuchElementException``
+    # fires on every call setup. Lifecycle, not a crash; was the dominant
+    # source of ``uncaught_java_exception`` FPs on Pixel campaigns.
+    "GRIL-AudioMetricExt",
+    # AOSP UI jank measurement framework. Throws routine
+    # ``java.lang.IllegalArgumentException: invalid view`` whenever a
+    # tracked notification row is detached before the jank measurement
+    # window closes. Pure UI metric noise, never SIP/IMS-relevant.
+    "InteractionJankMonitor",
 })
 
 
