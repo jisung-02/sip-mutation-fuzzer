@@ -26,6 +26,11 @@ from volte_mutation_fuzzer.mutator.profile_catalog import (
     resolve_effective_strategy,
     validate_profile_strategy,
 )
+from volte_mutation_fuzzer.mutator.sdp import (
+    apply_sdp_boundary,
+    parse_sdp_body,
+    render_sdp_body,
+)
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import (
     AbsoluteURI,
@@ -334,16 +339,35 @@ class SIPMutator:
             )
 
         if effective_layer == "wire":
+            rng = self._rng_from_seed(effective_config.seed)
             deterministic_wire_mutation = self._apply_deterministic_wire_strategy(
                 message,
                 effective_config.strategy,
-                self._rng_from_seed(effective_config.seed),
+                rng,
             )
             if deterministic_wire_mutation is not None:
                 mutated_msg, record = deterministic_wire_mutation
+                records: list[MutationRecord] = [record]
+                # Multi-mutation: apply ``max_operations - 1`` additional
+                # rounds, identical to ``_mutate_wire``. Mirrors the same
+                # ValueError-tolerant loop so once-only strategies degrade
+                # gracefully rather than aborting the whole case.
+                for _ in range(effective_config.max_operations - 1):
+                    try:
+                        next_mutation = self._apply_deterministic_wire_strategy(
+                            mutated_msg,
+                            effective_config.strategy,
+                            rng,
+                        )
+                    except ValueError:
+                        break
+                    if next_mutation is None:
+                        break
+                    mutated_msg, record = next_mutation
+                    records.append(record)
                 return MutatedWireCase(
                     wire_text=self._finalize_wire_message(mutated_msg),
-                    records=(record,),
+                    records=tuple(records),
                     seed=effective_config.seed,
                     profile=effective_config.profile,
                     strategy=effective_config.strategy,
@@ -958,6 +982,7 @@ class SIPMutator:
                 "null_byte_only",
                 "boundary_only",
                 "byte_edit_only",
+                "sdp_boundary_only",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1434,6 +1459,8 @@ class SIPMutator:
             return self._apply_boundary_only(editable_message, rng)
         if strategy == "byte_edit_only":
             return self._apply_byte_edit_only(editable_message, rng)
+        if strategy == "sdp_boundary_only":
+            return self._apply_sdp_boundary_only(editable_message, rng)
         return None
 
     def _apply_null_byte_only(
@@ -1647,6 +1674,70 @@ class SIPMutator:
             before=(original_header.name, original_header.value),
             after=(original_header.name, mutated_value),
             note=f"variant={variant}",
+        )
+        return mutated_message, record
+
+    def _apply_sdp_boundary_only(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        """Apply one ``sdp_boundary_only`` variant to the SDP body.
+
+        Requires ``Content-Type: application/sdp`` and a non-empty body.
+        Raises ``ValueError`` otherwise so the multi-mutation loop in
+        ``_mutate_wire`` can break gracefully (treated as natural stop
+        point, identical handling to ``final_crlf_loss``).
+
+        Auto-updates ``Content-Length`` to match the new body byte count
+        so the mutation lands inside the SDP parser instead of being
+        rejected at the SIP message-framing layer.
+        """
+        content_types = editable_message.header_values("Content-Type")
+        if not any("application/sdp" in ct.lower() for ct in content_types):
+            raise ValueError(
+                "sdp_boundary_only requires Content-Type: application/sdp"
+            )
+        if not editable_message.body:
+            raise ValueError("sdp_boundary_only requires a non-empty SDP body")
+
+        sdp_lines = parse_sdp_body(editable_message.body)
+        result = apply_sdp_boundary(sdp_lines, rng)
+        new_body = render_sdp_body(sdp_lines)
+
+        # Re-emit Content-Length to match the new body length. Otherwise
+        # the SIP framing layer rejects the message before the SDP parser
+        # ever sees the mutation, defeating the whole purpose.
+        new_body_bytes = len(new_body.encode("utf-8"))
+        new_headers = []
+        cl_updated = False
+        for header in editable_message.headers:
+            if header.name.casefold() == "content-length":
+                new_headers.append(
+                    EditableHeader(
+                        name=header.name,
+                        separator=header.separator,
+                        value=str(new_body_bytes),
+                    )
+                )
+                cl_updated = True
+            else:
+                new_headers.append(header)
+        update: dict[str, object] = {
+            "body": new_body,
+            "headers": tuple(new_headers),
+        }
+        if not cl_updated:
+            update["declared_content_length"] = new_body_bytes
+        mutated_message = editable_message.model_copy(update=update)
+
+        target = MutationTarget(layer="wire", path=result.path)
+        record = self._record_mutation(
+            target=target,
+            operator=result.operator,
+            before=result.before,
+            after=result.after,
+            note=result.note,
         )
         return mutated_message, record
 
