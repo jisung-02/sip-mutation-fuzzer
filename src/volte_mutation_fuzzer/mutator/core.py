@@ -28,6 +28,7 @@ from volte_mutation_fuzzer.mutator.profile_catalog import (
 )
 from volte_mutation_fuzzer.mutator.sdp import (
     apply_sdp_boundary,
+    apply_sdp_struct,
     parse_sdp_body,
     render_sdp_body,
 )
@@ -983,6 +984,7 @@ class SIPMutator:
                 "boundary_only",
                 "byte_edit_only",
                 "sdp_boundary_only",
+                "sdp_struct_only",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1461,6 +1463,8 @@ class SIPMutator:
             return self._apply_byte_edit_only(editable_message, rng)
         if strategy == "sdp_boundary_only":
             return self._apply_sdp_boundary_only(editable_message, rng)
+        if strategy == "sdp_struct_only":
+            return self._apply_sdp_struct_only(editable_message, rng)
         return None
 
     def _apply_null_byte_only(
@@ -1708,6 +1712,68 @@ class SIPMutator:
         # Re-emit Content-Length to match the new body length. Otherwise
         # the SIP framing layer rejects the message before the SDP parser
         # ever sees the mutation, defeating the whole purpose.
+        new_body_bytes = len(new_body.encode("utf-8"))
+        new_headers = []
+        cl_updated = False
+        for header in editable_message.headers:
+            if header.name.casefold() == "content-length":
+                new_headers.append(
+                    EditableHeader(
+                        name=header.name,
+                        separator=header.separator,
+                        value=str(new_body_bytes),
+                    )
+                )
+                cl_updated = True
+            else:
+                new_headers.append(header)
+        update: dict[str, object] = {
+            "body": new_body,
+            "headers": tuple(new_headers),
+        }
+        if not cl_updated:
+            update["declared_content_length"] = new_body_bytes
+        mutated_message = editable_message.model_copy(update=update)
+
+        target = MutationTarget(layer="wire", path=result.path)
+        record = self._record_mutation(
+            target=target,
+            operator=result.operator,
+            before=result.before,
+            after=result.after,
+            note=result.note,
+        )
+        return mutated_message, record
+
+    def _apply_sdp_struct_only(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        """Apply one ``sdp_struct_only`` variant to the SDP body.
+
+        Same Content-Type/empty-body validation as
+        ``_apply_sdp_boundary_only``: the body must declare
+        ``application/sdp`` and be non-empty, otherwise raises
+        ``ValueError`` (the multi-mutation loop treats this as a graceful
+        break).
+
+        Auto-updates ``Content-Length`` after the structural change so
+        the SIP framing layer accepts the message and the SDP parser
+        actually sees the mutated body.
+        """
+        content_types = editable_message.header_values("Content-Type")
+        if not any("application/sdp" in ct.lower() for ct in content_types):
+            raise ValueError(
+                "sdp_struct_only requires Content-Type: application/sdp"
+            )
+        if not editable_message.body:
+            raise ValueError("sdp_struct_only requires a non-empty SDP body")
+
+        sdp_lines = parse_sdp_body(editable_message.body)
+        result = apply_sdp_struct(sdp_lines, rng)
+        new_body = render_sdp_body(sdp_lines)
+
         new_body_bytes = len(new_body.encode("utf-8"))
         new_headers = []
         cl_updated = False

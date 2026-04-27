@@ -84,6 +84,35 @@ VARIANTS: Final[tuple[str, ...]] = (
     "bandwidth",
 )
 
+STRUCT_VARIANTS: Final[tuple[str, ...]] = (
+    "extra_media",
+    "extra_attribute",
+    "missing_session_name",
+    "missing_origin",
+    "version_corrupt",
+    "direction_conflict",
+)
+
+_DIRECTION_ATTRS: Final[tuple[str, ...]] = (
+    "sendrecv",
+    "sendonly",
+    "recvonly",
+    "inactive",
+)
+
+_VERSION_CORRUPT_VALUES: Final[tuple[str, ...]] = (
+    "99",
+    "",
+    "A",
+)
+
+_EXTRA_ATTRS: Final[tuple[str, ...]] = (
+    "garbage:42 random_value",
+    "fuzz-attr",
+    "x-fuzz:1",
+    "unknown-attr:bogus",
+)
+
 
 def parse_sdp_body(text: str) -> list[SDPLine]:
     """Split an SDP body into ``[(type_letter, value), ...]`` pairs.
@@ -334,4 +363,252 @@ def _mutate_bandwidth(
         before=f"b={before_value}",
         after=f"b={after_value}",
         note="variant=bandwidth",
+    )
+
+
+def apply_sdp_struct(
+    lines: list[SDPLine],
+    rng: random.Random,
+    *,
+    variant: str | None = None,
+) -> SDPMutationResult:
+    """Apply one ``sdp_struct_only`` variant in place on ``lines``.
+
+    Where ``apply_sdp_boundary`` mutates *tokens within* SDP lines, this
+    helper mutates the *line set itself* — adds/removes/reorders whole
+    lines, exercising the SDP parser's state machine and line-ordering
+    assumptions.
+
+    If ``variant`` is None, pick from variants whose target line(s)
+    actually exist in the body. Variants without a hard target prereq
+    (``extra_attribute``, ``direction_conflict``) are always viable.
+    Raises ``ValueError`` when no fuzzable opportunity exists, or when
+    an explicit ``variant`` is given but its target line is absent — the
+    multi-mutation loop in core.py treats that as a graceful break.
+    """
+    if variant is None:
+        viable: list[str] = []
+        if _line_indices(lines, "m"):
+            viable.append("extra_media")
+        # extra_attribute is always viable — we just append a new a= line.
+        viable.append("extra_attribute")
+        if _line_indices(lines, "s"):
+            viable.append("missing_session_name")
+        if _line_indices(lines, "o"):
+            viable.append("missing_origin")
+        if _line_indices(lines, "v"):
+            viable.append("version_corrupt")
+        # direction_conflict is always viable — we either inject a second
+        # direction next to an existing one, or add two direction attrs.
+        viable.append("direction_conflict")
+        if not viable:
+            raise ValueError(
+                "sdp body has no fuzzable structure for sdp_struct_only"
+            )
+        variant = viable[rng.randrange(len(viable))]
+
+    if variant == "extra_media":
+        return _struct_extra_media(lines, rng)
+    if variant == "extra_attribute":
+        return _struct_extra_attribute(lines, rng)
+    if variant == "missing_session_name":
+        return _struct_missing_session_name(lines, rng)
+    if variant == "missing_origin":
+        return _struct_missing_origin(lines, rng)
+    if variant == "version_corrupt":
+        return _struct_version_corrupt(lines, rng)
+    if variant == "direction_conflict":
+        return _struct_direction_conflict(lines, rng)
+    raise ValueError(f"unknown sdp struct variant: {variant!r}")
+
+
+def _struct_extra_media(
+    lines: list[SDPLine], rng: random.Random
+) -> SDPMutationResult:
+    """Insert a second ``m=audio <port> RTP/AVP 0`` line after the c= line
+    (or after the existing m= line if no c= follows it), exercising
+    SDP parsers that assume only one media stream.
+    """
+    m_indices = _line_indices(lines, "m")
+    if not m_indices:
+        raise ValueError("sdp body has no m= line for extra_media variant")
+    base_idx = m_indices[0]
+    base_value = lines[base_idx][1]
+    base_parts = base_value.split()
+    if len(base_parts) < 2:
+        raise ValueError(
+            f"malformed m-line at index {base_idx}: {base_value!r}"
+        )
+    try:
+        base_port = int(base_parts[1])
+    except ValueError:
+        base_port = 49170
+    new_port = (base_port + 10) if 0 <= base_port <= 65000 else 49180
+    new_line_value = f"audio {new_port} RTP/AVP 0"
+
+    # Prefer to insert after the c= line that follows base m=, otherwise
+    # right after the m= line itself.
+    insert_idx = base_idx + 1
+    for i in range(base_idx + 1, len(lines)):
+        k, _v = lines[i]
+        if k == "c":
+            insert_idx = i + 1
+            break
+        if k == "m":
+            # Reached another media section — stop scanning.
+            break
+
+    lines.insert(insert_idx, ("m", new_line_value))
+    return SDPMutationResult(
+        path=f"body:sdp:struct.extra_media[{insert_idx}]",
+        operator="sdp_struct_only",
+        before="<no second m-line>",
+        after=f"m={new_line_value}",
+        note="variant=extra_media",
+    )
+
+
+def _struct_extra_attribute(
+    lines: list[SDPLine], rng: random.Random
+) -> SDPMutationResult:
+    """Insert an unknown ``a=...`` attribute at a random position.
+
+    If a-lines already exist, we splice between them; otherwise we
+    append at the end (just before the trailing blank line if present).
+    """
+    attr_value = _EXTRA_ATTRS[rng.randrange(len(_EXTRA_ATTRS))]
+    a_indices = _line_indices(lines, "a")
+    if a_indices:
+        # Insert at one of the boundary positions inside (or just after)
+        # the a-line block, to maximise placement diversity.
+        insert_choices = a_indices + [a_indices[-1] + 1]
+        insert_idx = insert_choices[rng.randrange(len(insert_choices))]
+    else:
+        # No a-lines — append, but keep trailing blank ("", "") last.
+        insert_idx = len(lines)
+        if lines and lines[-1] == ("", ""):
+            insert_idx = len(lines) - 1
+    lines.insert(insert_idx, ("a", attr_value))
+    return SDPMutationResult(
+        path=f"body:sdp:struct.extra_attribute[{insert_idx}]",
+        operator="sdp_struct_only",
+        before="<no extra attribute>",
+        after=f"a={attr_value}",
+        note="variant=extra_attribute",
+    )
+
+
+def _struct_missing_session_name(
+    lines: list[SDPLine], rng: random.Random
+) -> SDPMutationResult:
+    """Remove the (mandatory) ``s=`` line."""
+    indices = _line_indices(lines, "s")
+    if not indices:
+        raise ValueError(
+            "sdp body has no s= line for missing_session_name variant"
+        )
+    idx = indices[rng.randrange(len(indices))]
+    before_value = lines[idx][1]
+    del lines[idx]
+    return SDPMutationResult(
+        path=f"body:sdp:struct.missing_session_name[{idx}]",
+        operator="sdp_struct_only",
+        before=f"s={before_value}",
+        after="<s= line removed>",
+        note="variant=missing_session_name",
+    )
+
+
+def _struct_missing_origin(
+    lines: list[SDPLine], rng: random.Random
+) -> SDPMutationResult:
+    """Remove the (mandatory) ``o=`` line."""
+    indices = _line_indices(lines, "o")
+    if not indices:
+        raise ValueError(
+            "sdp body has no o= line for missing_origin variant"
+        )
+    idx = indices[rng.randrange(len(indices))]
+    before_value = lines[idx][1]
+    del lines[idx]
+    return SDPMutationResult(
+        path=f"body:sdp:struct.missing_origin[{idx}]",
+        operator="sdp_struct_only",
+        before=f"o={before_value}",
+        after="<o= line removed>",
+        note="variant=missing_origin",
+    )
+
+
+def _struct_version_corrupt(
+    lines: list[SDPLine], rng: random.Random
+) -> SDPMutationResult:
+    """Replace ``v=0`` with ``v=99`` / ``v=`` / ``v=A``."""
+    indices = _line_indices(lines, "v")
+    if not indices:
+        raise ValueError(
+            "sdp body has no v= line for version_corrupt variant"
+        )
+    idx = indices[rng.randrange(len(indices))]
+    before_value = lines[idx][1]
+    new_value = _VERSION_CORRUPT_VALUES[
+        rng.randrange(len(_VERSION_CORRUPT_VALUES))
+    ]
+    lines[idx] = ("v", new_value)
+    return SDPMutationResult(
+        path=f"body:sdp:struct.version_corrupt[{idx}]",
+        operator="sdp_struct_only",
+        before=f"v={before_value}",
+        after=f"v={new_value}",
+        note=f"variant=version_corrupt.value={new_value!r}",
+    )
+
+
+def _struct_direction_conflict(
+    lines: list[SDPLine], rng: random.Random
+) -> SDPMutationResult:
+    """Inject conflicting direction attributes.
+
+    If a direction attribute already exists, append a *different*
+    direction immediately after it. If none exists, add both
+    ``a=sendrecv`` and ``a=sendonly`` at the end of the a-line block.
+    """
+    existing_dir_idx: int | None = None
+    existing_dir_value: str | None = None
+    for i, (k, v) in enumerate(lines):
+        if k == "a" and v in _DIRECTION_ATTRS:
+            existing_dir_idx = i
+            existing_dir_value = v
+            break
+
+    if existing_dir_idx is not None and existing_dir_value is not None:
+        # Pick a different direction.
+        candidates = [d for d in _DIRECTION_ATTRS if d != existing_dir_value]
+        new_dir = candidates[rng.randrange(len(candidates))]
+        insert_idx = existing_dir_idx + 1
+        lines.insert(insert_idx, ("a", new_dir))
+        return SDPMutationResult(
+            path=f"body:sdp:struct.direction_conflict[{insert_idx}]",
+            operator="sdp_struct_only",
+            before=f"a={existing_dir_value}",
+            after=f"a={existing_dir_value} + a={new_dir}",
+            note=f"variant=direction_conflict.added={new_dir}",
+        )
+
+    # No existing direction attribute — add two conflicting ones.
+    a_indices = _line_indices(lines, "a")
+    if a_indices:
+        insert_idx = a_indices[-1] + 1
+    else:
+        insert_idx = len(lines)
+        if lines and lines[-1] == ("", ""):
+            insert_idx = len(lines) - 1
+    lines.insert(insert_idx, ("a", "sendrecv"))
+    lines.insert(insert_idx + 1, ("a", "sendonly"))
+    return SDPMutationResult(
+        path=f"body:sdp:struct.direction_conflict[{insert_idx}]",
+        operator="sdp_struct_only",
+        before="<no direction attr>",
+        after="a=sendrecv + a=sendonly",
+        note="variant=direction_conflict.added=sendrecv+sendonly",
     )
