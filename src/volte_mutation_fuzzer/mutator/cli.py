@@ -488,7 +488,7 @@ def packet_command(
             "--max-operations",
             help="Number of mutation rounds to apply per case (default 1). "
             "Each round operates on the result of the previous one, so multiple "
-            "single-shot strategies (null_byte_only / boundary_only / byte_edit_only) "
+            "single-shot strategies (null_byte_only / boundary_only / byte_edit_only / edge_boundary) "
             "stack their effects. Combine with deterministic strategies for "
             "compound fuzz pressure.",
         ),

@@ -26,6 +26,7 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "null_byte_only",
             "boundary_only",
             "byte_edit_only",
+            "edge_boundary",
             "sdp_boundary_only",
             "sdp_struct_only",
             "sdp_byte_edit",
@@ -51,7 +52,7 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
     },
     "delivery_preserving": {
         "model": frozenset({"default"}),
-        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise", "null_byte_only", "boundary_only", "byte_edit_only", "sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}),
+        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise", "null_byte_only", "boundary_only", "byte_edit_only", "edge_boundary", "sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}),
         "byte": frozenset({"default", "identity", "safe", "header_targeted"}),
     },
     "ims_specific": {
@@ -64,7 +65,7 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
     "parser_breaker": {
         "model": frozenset(),
         "wire": frozenset(
-            {"default", "identity", "final_crlf_loss", "duplicate_content_length_conflict"}
+            {"default", "identity", "final_crlf_loss", "duplicate_content_length_conflict", "edge_boundary"}
         ),
         "byte": frozenset({"default", "identity", "tail_chop_1", "tail_garbage"}),
     },
@@ -98,7 +99,7 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "byte": ("header_targeted",),
     },
     "parser_breaker": {
-        "wire": ("final_crlf_loss", "duplicate_content_length_conflict"),
+        "wire": ("final_crlf_loss", "duplicate_content_length_conflict", "edge_boundary"),
         "byte": ("tail_chop_1", "tail_garbage"),
     },
 }

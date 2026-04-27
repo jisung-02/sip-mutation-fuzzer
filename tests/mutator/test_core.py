@@ -1301,5 +1301,135 @@ class SIPMutatorMultiMutationTests(SIPMutatorTestCase):
         self.assertEqual(len(case_default.records), len(case_explicit.records))
 
 
+class SIPMutatorEdgeBoundaryTests(SIPMutatorTestCase):
+    """Cover the 8 edge_boundary variants and their wire rendering."""
+
+    EXPECTED_VARIANTS = {
+        "trailing_backslash",
+        "bare_cr",
+        "bare_lf",
+        "double_crlf",
+        "crlf_header_smuggle",
+        "tab_fold",
+        "format_string",
+        "space_before_colon",
+    }
+
+    def _collect_variants(
+        self, n_seeds: int = 400
+    ) -> dict[str, tuple[str, str]]:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        seen: dict[str, tuple[str, str]] = {}
+        for seed in range(n_seeds):
+            case = mutator.mutate(
+                packet,
+                MutationConfig(
+                    seed=seed,
+                    layer="wire",
+                    profile="parser_breaker",
+                    strategy="edge_boundary",
+                ),
+            )
+            self.assertEqual(len(case.records), 1)
+            record = case.records[0]
+            self.assertEqual(record.operator, "edge_boundary")
+            variant = (record.note or "").removeprefix("variant=")
+            if variant not in seen:
+                _, after_value = record.after
+                seen[variant] = (case.wire_text, after_value)
+            if set(seen) >= self.EXPECTED_VARIANTS:
+                break
+        return seen
+
+    def test_all_eight_variants_reachable(self) -> None:
+        seen = self._collect_variants()
+        self.assertEqual(set(seen.keys()), self.EXPECTED_VARIANTS)
+
+    def test_trailing_backslash_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["trailing_backslash"]
+        # A header line ends with a literal '\' just before the CRLF.
+        self.assertRegex(wire, r"\\\r\n")
+
+    def test_bare_cr_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["bare_cr"]
+        # value\r + \r\n line terminator → three consecutive bytes \r\r\n
+        self.assertIn("\r\r\n", wire)
+
+    def test_bare_lf_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["bare_lf"]
+        # value\n + \r\n line terminator → \n\r\n (bare LF before the CRLF)
+        self.assertIn("\n\r\n", wire)
+
+    def test_double_crlf_terminator_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["double_crlf"]
+        # value + \r\n\r\n + line CRLF → \r\n\r\n\r\n (three CRLFs in a row)
+        self.assertIn("\r\n\r\n\r\n", wire)
+
+    def test_crlf_header_smuggle_injects_fake_header(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["crlf_header_smuggle"]
+        self.assertRegex(wire, r"\r\nX-Smuggled-[0-9a-f]{8}: pwn\r\n")
+
+    def test_tab_fold_injects_continuation(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["tab_fold"]
+        self.assertRegex(wire, r"\r\n\tfolded-[0-9a-f]{8}\r\n")
+
+    def test_format_string_replaces_value_with_percent_token(self) -> None:
+        seen = self._collect_variants()
+        _, after_value = seen["format_string"]
+        self.assertIn("%", after_value)
+
+    def test_space_before_colon_uses_3char_separator(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["space_before_colon"]
+        # Default separator is ': ' (2 chars). This variant emits ' : '.
+        self.assertIn(" : ", wire)
+
+    def test_max_operations_stacks(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="parser_breaker",
+                strategy="edge_boundary",
+                max_operations=3,
+            ),
+        )
+        self.assertEqual(len(case.records), 3)
+        for record in case.records:
+            self.assertEqual(record.operator, "edge_boundary")
+
+    def test_profiles_advertise_edge_boundary(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            profile_supports_strategy,
+        )
+
+        for profile in ("legacy", "delivery_preserving", "parser_breaker"):
+            with self.subTest(profile=profile):
+                self.assertTrue(
+                    profile_supports_strategy(profile, "wire", "edge_boundary")
+                )
+
+    def test_ims_specific_profile_does_not_advertise_edge_boundary(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            profile_supports_strategy,
+        )
+
+        # ims_specific deliberately stays narrow (alias_port_desync + sdp_*),
+        # so edge_boundary must not leak in.
+        self.assertFalse(
+            profile_supports_strategy("ims_specific", "wire", "edge_boundary")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

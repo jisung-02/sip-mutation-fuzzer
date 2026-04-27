@@ -1002,6 +1002,7 @@ class SIPMutator:
                 "null_byte_only",
                 "boundary_only",
                 "byte_edit_only",
+                "edge_boundary",
                 "sdp_boundary_only",
                 "sdp_struct_only",
                 "sdp_byte_edit",
@@ -1481,6 +1482,8 @@ class SIPMutator:
             return self._apply_boundary_only(editable_message, rng)
         if strategy == "byte_edit_only":
             return self._apply_byte_edit_only(editable_message, rng)
+        if strategy == "edge_boundary":
+            return self._apply_edge_boundary(editable_message, rng)
         if strategy == "sdp_boundary_only":
             return self._apply_sdp_boundary_only(editable_message, rng)
         if strategy == "sdp_struct_only":
@@ -1593,6 +1596,93 @@ class SIPMutator:
             operator="boundary_only",
             before=(original_header.name, original_header.value),
             after=(original_header.name, after_for_record),
+            note=f"variant={variant}",
+        )
+        return mutated_message, record
+
+    def _apply_edge_boundary(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        headers = list(editable_message.headers)
+        if not headers:
+            raise ValueError("edge_boundary requires at least one header")
+        index = rng.randrange(len(headers))
+        original_header = headers[index]
+        original_value = original_header.value
+
+        # Format-string payloads target unsafe printf-family logging in the
+        # parser/transport layers (modem RIL, P-CSCF debug logs).
+        format_strings = (
+            "%s%s%s%n",
+            "%x%x%x%x",
+            "%p%p%p",
+            "%n%n%n",
+            "%999999s",
+            "%.99999d",
+            "%s" * 16,
+        )
+
+        variants = (
+            "trailing_backslash",
+            "bare_cr",
+            "bare_lf",
+            "double_crlf",
+            "crlf_header_smuggle",
+            "tab_fold",
+            "format_string",
+            "space_before_colon",
+        )
+        variant = variants[rng.randrange(len(variants))]
+        new_separator = original_header.separator
+
+        if variant == "trailing_backslash":
+            mutated_value = original_value + "\\"
+        elif variant == "bare_cr":
+            mutated_value = original_value + "\r"
+        elif variant == "bare_lf":
+            mutated_value = original_value + "\n"
+        elif variant == "double_crlf":
+            # Early body-section terminator inside a header value. Splits
+            # the message into headers/body prematurely from a permissive
+            # parser's perspective.
+            mutated_value = original_value + "\r\n\r\n"
+        elif variant == "crlf_header_smuggle":
+            token = f"{rng.getrandbits(32):08x}"
+            mutated_value = f"{original_value}\r\nX-Smuggled-{token}: pwn"
+        elif variant == "tab_fold":
+            # RFC 3261 LWS line folding: a CRLF + HTAB inside a value is a
+            # legal continuation. Tests parsers that mishandle folded lines.
+            token = f"{rng.getrandbits(32):08x}"
+            mutated_value = f"{original_value}\r\n\tfolded-{token}"
+        elif variant == "format_string":
+            mutated_value = format_strings[rng.randrange(len(format_strings))]
+        else:
+            # space_before_colon: ``Name : value`` — HCOLON allows SP/HTAB
+            # before ``:`` per RFC 3261 but strict parsers often reject it.
+            mutated_value = original_value
+            new_separator = " : "
+
+        headers[index] = EditableHeader(
+            name=original_header.name,
+            value=mutated_value,
+            separator=new_separator,
+        )
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        target = MutationTarget(layer="wire", path=f"header[{index}]")
+        visible_after = (
+            mutated_value
+            if len(mutated_value) <= 80
+            else f"{mutated_value[:40]}…(len={len(mutated_value)})"
+        )
+        record = self._record_mutation(
+            target=target,
+            operator="edge_boundary",
+            before=(original_header.name, original_value),
+            after=(original_header.name, visible_after),
             note=f"variant={variant}",
         )
         return mutated_message, record

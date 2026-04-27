@@ -118,7 +118,7 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertEqual(payload["final_layer"], "wire")
         self.assertIn(
             payload["strategy"],
-            {"final_crlf_loss", "duplicate_content_length_conflict"},
+            {"final_crlf_loss", "duplicate_content_length_conflict", "edge_boundary"},
         )
 
     def test_request_command_auto_selects_byte_layer_for_explicit_byte_strategy(self) -> None:
