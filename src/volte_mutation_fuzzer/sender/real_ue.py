@@ -28,6 +28,15 @@ _DEFAULT_PCSCF_LOG_TAIL: Final[int] = 500
 _PCSCF_TERM_UE_PORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"Term UE connection information\s*:\s*IP is ([\d.]+) and Port is (\d+)"
 )
+# Matches the Security-Client header that kamailio P-CSCF logs for every
+# REGISTER. The header carries the authoritative pair without any +1
+# estimation: ``port-c`` is the UE protected client port (port_pc) and
+# ``port-s`` is the UE protected server port (port_ps). A single header
+# may contain several comma-joined algorithm offers — they all carry the
+# same port-c/port-s so we just match the first occurrence per line.
+_PCSCF_SECURITY_CLIENT_PORTS_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"Security-Client=[^\n]*?port-c=(?P<port_c>\d+)\s*;\s*port-s=(?P<port_s>\d+)"
+)
 _XFRM_DPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"proto esp\s.*?src\s+\S+\s+dst\s+([\d.]+).*?\n.*?sport\s+(\d+)\s+dport\s+(\d+)",
     re.DOTALL,
@@ -575,16 +584,42 @@ def resolve_ue_protected_ports(
 ) -> tuple[int, int]:
     """Return ``(port_pc, port_ps)`` for *msisdn* by querying the P-CSCF container.
 
-    Strategy:
-    1. Resolve the UE IP for *msisdn* and use it to filter candidates.
-       Priority: explicit *ue_ip* > ``VMF_MSISDN_TO_IP_<msisdn>`` env override >
-       hardcoded default mapping. If none resolves, candidates are not filtered
-       by IP (single-UE fallback).
-    2. Parse the last matching ``Term UE connection`` log line from the P-CSCF container.
-    3. Fallback: parse ``ip xfrm state`` output for matching UE port pairs.
-    4. Raise ``RealUEDirectResolutionError`` if neither succeeds.
+    Both ports are read from authoritative sources — never estimated. The
+    legacy ``port_ps = port_pc + 1`` heuristic is gone: 3GPP TS 33.203
+    permits non-adjacent pairs (iPhone 16e: port_pc=63193, port_ps=61008)
+    and guessing silently misroutes traffic onto the wrong SA.
 
-    ``port_ps`` is assumed to be ``port_pc + 1`` when derived from logs.
+    Resolution order (single ``docker logs`` invocation feeds both
+    log-based strategies; xfrm is queried only if logs yield nothing):
+
+    1. **Security-Client header** in kamailio P-CSCF logs — emitted on
+       every REGISTER as ``Security-Client=ipsec-3gpp;...;port-c=N;
+       port-s=M;...``. This is the authoritative pair straight from the
+       UE. When *requested_ue_ip* is known and a nearby log line carries
+       that IP we prefer those Security-Client matches; otherwise we
+       take the most recent one (single-UE deployments).
+    2. **``ip xfrm state``** inside the container — collects ``(sport,
+       dport)`` tuples for UE→PCSCF SAs and applies the dport-ordering
+       convention (PCSCF protected client port < server port, e.g. 5100
+       < 6100 in Open5GS):
+
+       - SA whose ``dport`` is the smaller value → that ``sport`` is the
+         UE ``port_ps`` (UE was responding to a packet originated by
+         the PCSCF client port).
+       - SA whose ``dport`` is the larger value → that ``sport`` is the
+         UE ``port_pc`` (UE originated a packet to the PCSCF server
+         port).
+
+       Only consulted when the matched UE has *exactly two* distinct
+       dports; ambiguity (one or 3+) falls through rather than being
+       resolved by guessing.
+    3. **``Term UE connection`` log lines** — legacy fallback for log
+       lines that don't carry a Security-Client header. Only consulted
+       when both prior strategies came up empty; uses ``port_ps =
+       port_pc + 1`` purely to honour the historical log shape and is
+       only correct when the UE actually allocates adjacent ports.
+
+    Raises ``RealUEDirectResolutionError`` if all three strategies fail.
     """
     requested_ue_ip: str | None = ue_ip
     if requested_ue_ip is None:
@@ -595,7 +630,9 @@ def resolve_ue_protected_ports(
     source = os.environ if env is None else env
     pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_REAL_UE_PCSCF_IP)
 
-    # Strategy 1: P-CSCF logs
+    # Single docker-logs read powers both Security-Client (Strategy 1)
+    # and Term UE (Strategy 3 fallback) parsing.
+    log_text: str | None = None
     try:
         result = subprocess.run(
             ["docker", "logs", pcscf_container, "--since", "5m"],
@@ -604,8 +641,47 @@ def resolve_ue_protected_ports(
             timeout=15.0,
             check=False,
         )
-        combined = (result.stdout or "") + (result.stderr or "")
-        matches = list(_PCSCF_TERM_UE_PORT_PATTERN.finditer(combined))
+        log_text = (result.stdout or "") + (result.stderr or "")
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        log_text = None
+
+    # Strategy 1: Security-Client header (authoritative — both ports read,
+    # never estimated).
+    if log_text:
+        ports = _parse_security_client_ports(
+            log_text, requested_ue_ip=requested_ue_ip
+        )
+        if ports is not None:
+            return ports
+
+    # Strategy 2: ip xfrm state — read both ports from the kernel-installed
+    # SAs via dport ordering. Ambiguous UE sets fall through.
+    try:
+        result = subprocess.run(
+            ["docker", "exec", pcscf_container, "ip", "xfrm", "state"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout:
+            ports = _parse_xfrm_protected_ports(
+                result.stdout,
+                requested_ue_ip=requested_ue_ip,
+                pcscf_ip=pcscf_ip,
+            )
+            if ports is not None:
+                return ports
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+
+    # Strategy 3: Term UE connection log fallback. Only consulted after
+    # Security-Client and xfrm have both failed — and only correct when
+    # the UE genuinely allocates adjacent ports. Retained for backward
+    # compatibility with deployments whose log format predates the
+    # Security-Client header dump.
+    if log_text:
+        matches = list(_PCSCF_TERM_UE_PORT_PATTERN.finditer(log_text))
         if matches:
             if requested_ue_ip is not None:
                 matching_ports = [
@@ -619,62 +695,133 @@ def resolve_ue_protected_ports(
             else:
                 port_pc = int(matches[-1].group(2))
                 return port_pc, port_pc + 1
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        pass
-
-    # Strategy 2: ip xfrm state inside container
-    try:
-        result = subprocess.run(
-            ["docker", "exec", pcscf_container, "ip", "xfrm", "state"],
-            capture_output=True,
-            text=True,
-            timeout=10.0,
-            check=False,
-        )
-        if result.returncode == 0 and result.stdout:
-            lines = result.stdout.splitlines()
-            current_src: str | None = None
-            current_dst: str | None = None
-            # UE→pcscf SA의 sport들: 하나는 port_pc, 다른 하나는 port_ps.
-            # 관례상 min = port_pc, port_ps = port_pc + 1.
-            ue_sports: list[int] = []
-            for line in lines:
-                stripped = line.strip()
-                # Track SA direction: "src X dst Y" header line
-                if stripped.startswith("src ") and " dst " in stripped:
-                    parts = stripped.split()
-                    if len(parts) >= 4:
-                        current_src = parts[1]
-                        current_dst = parts[3]
-                # "sel src .../32 dst .../32 sport N dport M" — starts with "sel"
-                if stripped.startswith("sel ") and "sport" in stripped and "dport" in stripped:
-                    parts = stripped.split()
-                    s: int | None = None
-                    for idx, part in enumerate(parts):
-                        if part == "sport" and idx + 1 < len(parts):
-                            try:
-                                s = int(parts[idx + 1])
-                            except ValueError:
-                                pass
-                    # UE→pcscf 방향: current_src가 UE IP (10.20.20.x)
-                    if (
-                        current_src is not None
-                        and (requested_ue_ip is None or current_src == requested_ue_ip)
-                        and (current_dst is None or current_dst == pcscf_ip)
-                        and s is not None
-                        and s > 1024
-                    ):
-                        ue_sports.append(s)
-            if ue_sports:
-                port_pc = min(ue_sports)
-                return port_pc, port_pc + 1
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        pass
 
     raise RealUEDirectResolutionError(
         f"could not resolve protected ports for UE via container {pcscf_container!r}. "
         "Ensure the UE is registered and logs are available."
     )
+
+
+def _parse_security_client_ports(
+    log_text: str, *, requested_ue_ip: str | None,
+) -> tuple[int, int] | None:
+    """Extract ``(port_pc, port_ps)`` from kamailio P-CSCF Security-Client lines.
+
+    The header is emitted once per REGISTER and looks like::
+
+        Security-Client=ipsec-3gpp;alg=...;port-c=63193;port-s=61008;...
+
+    A single header may carry multiple comma-joined algorithm offers; all
+    of them carry the same port-c/port-s pair, so we keep just the first
+    match per line.
+
+    When *requested_ue_ip* is supplied, prefer matches whose surrounding
+    log window references that IP — kamailio interleaves several lines
+    per REGISTER (Source IP, Contact, Security-Client, Security-Verify,
+    Destination URI, etc.) and the UE-IP-bearing line is typically the
+    `PCSCF: REGISTER ... (<ue-ip>:<port>)` line that precedes the
+    Security-Client header by several entries. We use a ±20-line window
+    to span a full REGISTER block without spilling into the next one.
+
+    If no nearby match is found, fall back to the most recent global
+    match — that's the correct behaviour for a single-UE deployment
+    where the REGISTER block layout may legitimately omit the UE IP.
+    """
+    lines = log_text.splitlines()
+    matches: list[tuple[int, int, int]] = []  # (line_index, port_c, port_s)
+    for line_index, line in enumerate(lines):
+        match = _PCSCF_SECURITY_CLIENT_PORTS_PATTERN.search(line)
+        if match is None:
+            continue
+        port_c = int(match.group("port_c"))
+        port_s = int(match.group("port_s"))
+        matches.append((line_index, port_c, port_s))
+
+    if not matches:
+        return None
+
+    if requested_ue_ip is not None:
+        nearby_matches: list[tuple[int, int, int]] = []
+        for line_index, port_c, port_s in matches:
+            window_start = max(0, line_index - 20)
+            window_end = min(len(lines), line_index + 21)
+            window_text = "\n".join(lines[window_start:window_end])
+            if requested_ue_ip in window_text:
+                nearby_matches.append((line_index, port_c, port_s))
+        if nearby_matches:
+            _, port_c, port_s = nearby_matches[-1]
+            return port_c, port_s
+
+    # No UE IP filter, or filter found nothing nearby — last match wins.
+    _, port_c, port_s = matches[-1]
+    return port_c, port_s
+
+
+def _parse_xfrm_protected_ports(
+    xfrm_output: str,
+    *,
+    requested_ue_ip: str | None,
+    pcscf_ip: str,
+) -> tuple[int, int] | None:
+    """Extract ``(port_pc, port_ps)`` from ``ip xfrm state`` output.
+
+    Walks ``src X dst Y`` SA headers paired with their ``sel ... sport N
+    dport M`` selector lines. Collects ``(sport, dport)`` tuples for
+    UE→PCSCF SAs (filtered by *requested_ue_ip* when provided, and by
+    *pcscf_ip* on the destination), then applies the dport-ordering
+    convention to map them onto UE port_pc / port_ps.
+
+    Returns ``None`` if the matched UE has anything other than exactly
+    two distinct dports — read, don't guess. A single-dport result
+    (e.g. only one direction of the SA pair is installed yet) is
+    ambiguous and must fall through to the next strategy rather than be
+    completed with a ``+1`` heuristic.
+    """
+    current_src: str | None = None
+    current_dst: str | None = None
+    # dport → sport for UE→PCSCF SAs that match the UE IP filter.
+    dport_to_sport: dict[int, int] = {}
+
+    for raw_line in xfrm_output.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("src ") and " dst " in stripped:
+            parts = stripped.split()
+            if len(parts) >= 4:
+                current_src = parts[1]
+                current_dst = parts[3]
+            else:
+                current_src = None
+                current_dst = None
+            continue
+        if not stripped.startswith("sel "):
+            continue
+        sport_match = re.search(r"\bsport\s+(\d+)\b", stripped)
+        dport_match = re.search(r"\bdport\s+(\d+)\b", stripped)
+        if sport_match is None or dport_match is None:
+            continue
+        sport = int(sport_match.group(1))
+        dport = int(dport_match.group(1))
+        if sport <= 1024:
+            continue
+        if current_src is None:
+            continue
+        if requested_ue_ip is not None and current_src != requested_ue_ip:
+            continue
+        if current_dst is not None and current_dst != pcscf_ip:
+            continue
+        # Last-write-wins per dport — duplicate SAs from rekey overwrite
+        # with the most recent sport, which is what we want.
+        dport_to_sport[dport] = sport
+
+    if len(dport_to_sport) != 2:
+        return None
+
+    smaller_dport, larger_dport = sorted(dport_to_sport)
+    port_ps = dport_to_sport[smaller_dport]
+    port_pc = dport_to_sport[larger_dport]
+    return port_pc, port_ps
 
 
 def resolve_native_ipsec_session(

@@ -117,16 +117,36 @@ class RealUEDirectHelperTests(unittest.TestCase):
         self.assertEqual(events, ("direct-normalization:bytes-unmodified",))
 
     def test_resolve_protected_ports_prefers_matching_msisdn_from_logs(self) -> None:
+        """Multi-UE Security-Client logs are filtered by nearby UE IP context.
+
+        Each REGISTER processing block has its UE IP echoed near the
+        Security-Client header line; the resolver prefers the block whose
+        nearby context matches *requested_ue_ip* over the most-recent global
+        match. With both blocks present, asking for 10.20.20.8 must yield
+        that UE's pair (8100, 8101) — not 10.20.20.9's (7000, 7001).
+        """
         resolver = RealUEDirectResolver()
 
+        # The nearby-UE-IP window is ±20 lines around the Security-Client
+        # line, so the two UE blocks must be separated by enough unrelated
+        # log lines that 10.20.20.9's block sits outside 10.20.20.8's
+        # window (and vice versa). 30 unrelated lines is plenty.
+        unrelated_block = "".join(
+            f"<script>: unrelated log line {i}\n" for i in range(30)
+        )
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             return_value=subprocess.CompletedProcess(
                 args=["docker"],
                 returncode=0,
                 stdout=(
-                    "Term UE connection information : IP is 10.20.20.8 and Port is 8100\n"
-                    "Term UE connection information : IP is 10.20.20.9 and Port is 7000\n"
+                    "REGISTER from 10.20.20.8 received\n"
+                    "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+                    "mod=trans;port-c=8100;port-s=8101;prot=esp;spi-c=1;spi-s=2\n"
+                    + unrelated_block
+                    + "REGISTER from 10.20.20.9 received\n"
+                    "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+                    "mod=trans;port-c=7000;port-s=7001;prot=esp;spi-c=3;spi-s=4\n"
                 ),
                 stderr="",
             ),
@@ -257,6 +277,16 @@ class RealUEDirectHelperTests(unittest.TestCase):
         self.assertEqual((port_pc, port_ps), (63193, 61008))
 
     def test_resolve_protected_ports_prefers_matching_msisdn_from_xfrm(self) -> None:
+        """Multi-UE xfrm output is filtered by *requested_ue_ip* before mapping.
+
+        Each UE has the full SA pair installed (both directions, two
+        distinct PCSCF protected ports). Asking for 10.20.20.8 must
+        ignore 10.20.20.9's SAs entirely and apply the dport-ordering
+        convention only to UE 8's tuples:
+
+        - dport=5102 (smaller, PCSCF client) → UE sport=8101 = port_ps
+        - dport=5103 (larger,  PCSCF server) → UE sport=8100 = port_pc
+        """
         resolver = RealUEDirectResolver()
 
         with patch(
@@ -284,6 +314,12 @@ class RealUEDirectHelperTests(unittest.TestCase):
                         "src 10.20.20.8 dst 172.22.0.21\n"
                         "\tproto esp spi 0xdddd reqid 4 mode transport\n"
                         "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8100 dport 5103\n"
+                        "src 172.22.0.21 dst 10.20.20.8\n"
+                        "\tproto esp spi 0xeeee reqid 5 mode transport\n"
+                        "\tsel src 172.22.0.21/32 dst 10.20.20.8/32 sport 5102 dport 8101\n"
+                        "src 10.20.20.8 dst 172.22.0.21\n"
+                        "\tproto esp spi 0xffff reqid 6 mode transport\n"
+                        "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8101 dport 5102\n"
                     ),
                     stderr="",
                 ),
@@ -303,6 +339,90 @@ class RealUEDirectHelperTests(unittest.TestCase):
             mock_run.call_args_list[1].args[0],
             ["docker", "exec", "pcscf", "ip", "xfrm", "state"],
         )
+
+    def test_resolve_protected_ports_xfrm_returns_none_with_one_dport(self) -> None:
+        """A half-installed SA pair (only one direction) is ambiguous.
+
+        Old behaviour completed it via min+1; new behaviour falls through to
+        the next strategy. With logs and xfrm both empty after the partial
+        SA, the resolver must raise rather than guess.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        partial_xfrm = (
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="", stderr=""),
+                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=partial_xfrm, stderr=""),
+            ),
+        ):
+            with self.assertRaises(RealUEDirectResolutionError):
+                resolver.resolve_protected_ports("111111", ue_ip="10.20.20.2")
+
+    def test_resolve_protected_ports_xfrm_returns_none_with_three_dports(self) -> None:
+        """Rekey overlap can leave 3+ dports installed simultaneously.
+
+        Three-or-more is also ambiguous and must fall through, not pick one.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        rekey_overlap_xfrm = (
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 63193 dport 6100\n"
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001002 reqid 4098 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 65000 dport 7100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="", stderr=""),
+                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=rekey_overlap_xfrm, stderr=""),
+            ),
+        ):
+            with self.assertRaises(RealUEDirectResolutionError):
+                resolver.resolve_protected_ports("111111", ue_ip="10.20.20.2")
+
+    def test_resolve_protected_ports_falls_back_to_xfrm_when_security_client_malformed(self) -> None:
+        """Malformed Security-Client header (missing port-s) must not poison the chain.
+
+        The regex requires both port-c= and port-s=; if only port-c is present,
+        Strategy 1 returns None and the resolver falls through to xfrm. This
+        test fixture has Strategy 1 fail by malformation, Strategy 2 succeed
+        with the canonical iPhone SA shape, and asserts the answer comes
+        from xfrm.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        malformed_log = (
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=aes-cbc;mod=trans;"
+            "port-c=63193;prot=esp;spi-c=200418294;spi-s=12070439\n"
+        )
+        canonical_xfrm = (
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+            "src 10.20.20.2 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 63193 dport 6100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=malformed_log, stderr=""),
+                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=canonical_xfrm, stderr=""),
+            ),
+        ):
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111", ue_ip="10.20.20.2",
+            )
+        self.assertEqual((port_pc, port_ps), (63193, 61008))
 
 
 class IPsecSACheckTests(unittest.TestCase):
