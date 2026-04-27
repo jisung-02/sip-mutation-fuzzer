@@ -172,7 +172,98 @@ def _run_mutation_command(
 
 def _render_result(case: MutatedCase) -> str:
     payload = case.model_dump(mode="json", by_alias=True, exclude_none=True)
-    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    # The on-the-wire SIP text gets split into two outputs so neither path is
+    # awkward to read:
+    #   1. ``raw_wire_text`` stays inside the JSON payload, byte-exact with
+    #      ``\r\n`` line separators, for byte-level inspection.
+    #   2. The human-friendly LF-only form is rendered *above* the JSON as
+    #      a separate block so SIP messages display with real line breaks
+    #      instead of escaped ``\n`` runs inside a JSON string.
+    formatted_wire: str | None = None
+    if "wire_text" in payload:
+        raw = payload.pop("wire_text")
+        payload["raw_wire_text"] = raw
+        formatted_wire = raw.replace("\r\n", "\n")
+
+    # Records hold the structured before/after snapshots, but spotting *what*
+    # changed inside a 50-line packet from those alone is tedious. Add a
+    # ``mutation_diff`` block that renders each record as a unified-diff-ish
+    # ``@ <target>`` / ``- before`` / ``+ after`` triple with control chars
+    # made visible, so the diff is readable inline.
+    records = payload.get("records") or []
+    if records:
+        diff_lines: list[str] = []
+        for record in records:
+            target = (record.get("target") or {}).get("path", "?")
+            operator = record.get("operator", "?")
+            note = record.get("note")
+            header = f"@ {target}  operator={operator}"
+            if note:
+                header += f"  note={note}"
+            diff_lines.append(header)
+            diff_lines.append(f"  - {_format_record_side(record.get('before'))}")
+            diff_lines.append(f"  + {_format_record_side(record.get('after'))}")
+        payload["mutation_diff"] = diff_lines
+
+    json_block = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    if formatted_wire is None:
+        return json_block
+    return (
+        "=== wire_text ===\n"
+        f"{formatted_wire}\n"
+        "=== mutation_result (json) ===\n"
+        f"{json_block}"
+    )
+
+
+def _format_record_side(value: object) -> str:
+    """Render a record's before/after side as a single readable line.
+
+    Control characters (\t, \r, \n, \x00, ...) and high-bit bytes are made
+    visible via ``repr``-style escapes; structured snapshots (header dicts,
+    name/value tuples) are flattened to ``Name<separator>Value``.
+    """
+    if value is None:
+        return "<none>"
+    if isinstance(value, dict):
+        # Header snapshot: {"name": ..., "separator": ..., "value": ...}
+        if "name" in value and ("value" in value or "separator" in value):
+            name = value.get("name", "")
+            separator = value.get("separator", ": ")
+            inner = value.get("value", "")
+            return _escape_visible(f"{name}{separator}{inner}")
+        return _escape_visible(repr(value))
+    if isinstance(value, (list, tuple)):
+        # mutate_header_value uses (name, value) tuples; duplicate_header
+        # uses tuple of header snapshots; render either compactly.
+        if len(value) == 2 and all(isinstance(part, str) for part in value):
+            name, inner = value
+            return _escape_visible(f"{name}: {inner}")
+        return _escape_visible(repr(list(value)))
+    if isinstance(value, str):
+        return _escape_visible(value)
+    return _escape_visible(repr(value))
+
+
+def _escape_visible(text: str) -> str:
+    """Make whitespace/control chars visible without breaking the line."""
+    out: list[str] = []
+    for ch in text:
+        codepoint = ord(ch)
+        if ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\x00":
+            out.append("\\x00")
+        elif codepoint < 0x20 or codepoint == 0x7F:
+            out.append(f"\\x{codepoint:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 _STRATEGY_HELP = (
