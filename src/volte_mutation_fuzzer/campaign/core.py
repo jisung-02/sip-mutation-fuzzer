@@ -1340,13 +1340,19 @@ class CampaignExecutor:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
         except Exception as exc:
+            # Capture exception class even when ``str(exc)`` is empty so the
+            # post-mortem reason isn't a bare ``dialog executor error:`` —
+            # observed on PRACK/BYE campaigns where the underlying setup
+            # exception has no message (e.g. ``socket.timeout()``).
+            exc_type = type(exc).__name__
+            exc_msg = str(exc) or "(no message)"
             return self._build_case_result(
                 spec,
                 verdict="unknown",
-                reason=f"dialog executor error: {exc}",
+                reason=f"dialog executor error: {exc_type}: {exc_msg}",
                 elapsed_ms=0.0,
                 reproduction_cmd=self._build_reproduction_cmd(spec),
-                error=str(exc),
+                error=f"{exc_type}: {exc_msg}",
                 timestamp=timestamp,
                 pcap_path=pcap_path_saved,
                 case_wall_ms=self._case_wall_ms(case_started_monotonic),
