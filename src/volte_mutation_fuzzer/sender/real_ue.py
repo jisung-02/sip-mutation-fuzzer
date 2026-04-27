@@ -56,10 +56,15 @@ _CONTACT_HOSTPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
-# MSISDN → UE IP mapping for auto-resolution
+# MSISDN → UE IP fallback mapping. Live resolvers (kamctl, P-CSCF logs,
+# xfrm state) are tried first; this dict is consulted only when those
+# all return nothing. Keep entries here in sync with the testbed —
+# stale values silently mis-route packets to a different UE.
+#
+# Override per session via VMF_MSISDN_TO_IP_<msisdn>=<ip>.
 _DEFAULT_MSISDN_TO_IP: Final[dict[str, str]] = {
-    "111111": "10.20.20.8",  # Samsung A31
-    "222222": "10.20.20.9",  # Test MO softphone
+    "111111": "10.20.20.8",  # legacy slot — Samsung A31 historically; current testbed varies (Pixel 9, Galaxy A17)
+    "222222": "10.20.20.2",  # iPhone 16e (verified 2026-04-27, IMSI 001010000123512)
 }
 
 

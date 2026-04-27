@@ -116,9 +116,23 @@ src/volte_mutation_fuzzer/
 - **bypass**: xfrm policy selector 회피 (호환성)
 
 ### 4. **자동화 기능**
-- MSISDN → UE IP 자동 resolve (111111 → 10.20.20.8)
-- port_pc/port_ps 동적 조회 (재등록 시마다 변경)
+- MSISDN → UE IP 자동 resolve (kamctl/P-CSCF 로그/xfrm state 우선, hardcoded fallback)
+- port_pc/port_ps 동적 조회 (재등록 시마다 변경, dport 기반 매핑 — A31 같은 인접 포트 가정 없음)
 - Via sent-by ↔ bind_port 자동 동기화
+
+### 5. **현재 testbed 디바이스 매핑** (2026-04-27 기준)
+
+서버 `163.180.185.51` 의 IMS testbed 에 등록된 UE 들:
+
+| MSISDN | IMSI | UE IP | 디바이스 | 비고 |
+|--------|------|-------|---------|------|
+| 111111 | 001010000123511 | (가변) | Pixel 9 / Galaxy A17 | 외부 LG U+/KT RF 우세로 셀 attach 까다로움 |
+| 222222 | 001010000123512 | 10.20.20.2 | iPhone 16e (iOS 26.1) | manual PLMN select 로 attach 성공 |
+
+이력 노트:
+- 메모리 `project_a31_real_ue_direct_breakthrough.md` 에 박힌 "111111 = A31, IP=10.20.20.8" 은 2026-04-11 시점 환경. 현재는 A31 슬롯이 다른 디바이스로 회전 중. attach 성공 시 IP 가 다를 수 있어 live resolver 결과를 신뢰하고, hardcoded 매핑은 fallback 으로만 본다.
+- iPhone 16e 의 protected port 페어는 `port_pc=63193 / port_ps=61008` 처럼 비-인접. fuzzer 의 native IPsec 경로는 `Security-Client` 헤더 + xfrm `dport` 매핑으로 정확 추출 (commit `0a03f78`).
+- iPhone 전용 mt-invite-template 부재 — 현재 `a31` template 가 generic 3GPP MT-INVITE 형식이라 일단 호환되지만 iPhone 응답 검증은 미완. SDP fuzzing 캠페인 시 baseline (identity strategy) 으로 정상 attach/응답 확인 후 진행 권장.
 
 ## 🔑 핵심 성과
 
@@ -136,7 +150,7 @@ src/volte_mutation_fuzzer/
 ### 요구사항
 - Python 3.12+, uv package manager
 - Docker (IMS 서버 환경)
-- Samsung A31 (MSISDN 111111, UE IP 10.20.20.8)
+- 실기기 UE 1대 이상 (현재 testbed: Pixel 9 / Galaxy A17 = 111111, iPhone 16e = 222222)
 - 서버: ubuntu@163.180.185.51
 
 ### 설치
@@ -148,8 +162,9 @@ uv sync
 
 ### 환경 변수
 ```bash
-# 커스텀 MSISDN → IP 매핑
-export VMF_MSISDN_TO_IP_111111=10.20.20.8
+# 커스텀 MSISDN → IP 매핑 (live resolver 가 실패할 때 fallback. 현재 testbed 기본값)
+export VMF_MSISDN_TO_IP_111111=10.20.20.8   # Pixel 9 / Galaxy A17 (가변)
+export VMF_MSISDN_TO_IP_222222=10.20.20.2   # iPhone 16e
 export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 ```
 
