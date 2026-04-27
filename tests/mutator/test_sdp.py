@@ -1053,5 +1053,109 @@ class SDPByteEditReproductionCmdTests(unittest.TestCase):
         self.assertIn("--mutations-per-case 3", cmd)
 
 
+class SDPInDefaultPoolTests(unittest.TestCase):
+    """``--strategy default`` for ``delivery_preserving`` and
+    ``ims_specific`` profiles must be able to pick the SDP-aware
+    strategies for INVITE-with-SDP messages, and must transparently
+    fall back to a non-SDP pool entry when the message has no SDP body.
+    """
+
+    def _editable_with_sdp(self) -> EditableSIPMessage:
+        start_line = EditableStartLine(text="INVITE sip:fuzz@host SIP/2.0")
+        headers = (
+            EditableHeader(name="Via", value="SIP/2.0/UDP host:5060;branch=z9hG4bK-x"),
+            EditableHeader(name="From", value='"f" <sip:f@host>;tag=a'),
+            EditableHeader(name="To", value='"t" <sip:t@host>'),
+            EditableHeader(name="Call-ID", value="x@host"),
+            EditableHeader(name="CSeq", value="1 INVITE"),
+            EditableHeader(name="Content-Type", value="application/sdp"),
+            EditableHeader(
+                name="Content-Length",
+                value=str(len(_BASELINE_SDP.encode("utf-8"))),
+            ),
+        )
+        return EditableSIPMessage(
+            start_line=start_line,
+            headers=headers,
+            body=_BASELINE_SDP,
+        )
+
+    def _editable_without_sdp(self) -> EditableSIPMessage:
+        start_line = EditableStartLine(text="OPTIONS sip:fuzz@host SIP/2.0")
+        headers = (
+            EditableHeader(name="Via", value="SIP/2.0/UDP host:5060;branch=z9hG4bK-x"),
+            EditableHeader(name="From", value='"f" <sip:f@host>;tag=a'),
+            EditableHeader(name="To", value='"t" <sip:t@host>'),
+            EditableHeader(name="Call-ID", value="x@host"),
+            EditableHeader(name="CSeq", value="1 OPTIONS"),
+            EditableHeader(name="Content-Length", value="0"),
+        )
+        return EditableSIPMessage(
+            start_line=start_line,
+            headers=headers,
+            body="",
+        )
+
+    def test_delivery_preserving_default_can_pick_sdp_strategies(self) -> None:
+        # With SDP body present, sweeping seeds should exercise at least
+        # one sdp_* strategy across the delivery_preserving default pool.
+        mutator = SIPMutator()
+        seen: set[str] = set()
+        for seed in range(60):
+            editable = self._editable_with_sdp()
+            case = mutator.mutate_editable(
+                editable,
+                MutationConfig(
+                    seed=seed,
+                    layer="wire",
+                    profile="delivery_preserving",
+                    strategy="default",
+                ),
+            )
+            seen.add(case.records[0].operator)
+        sdp_ops = {"sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}
+        self.assertTrue(seen & sdp_ops, f"expected sdp_* in pool picks; got {seen}")
+
+    def test_ims_specific_default_can_pick_sdp_strategies(self) -> None:
+        mutator = SIPMutator()
+        seen: set[str] = set()
+        for seed in range(60):
+            editable = self._editable_with_sdp()
+            case = mutator.mutate_editable(
+                editable,
+                MutationConfig(
+                    seed=seed,
+                    layer="wire",
+                    profile="ims_specific",
+                    strategy="default",
+                ),
+            )
+            seen.add(case.records[0].operator)
+        sdp_ops = {"sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}
+        self.assertTrue(seen & sdp_ops, f"expected sdp_* in pool picks; got {seen}")
+
+    def test_default_skips_sdp_when_message_has_no_sdp_body(self) -> None:
+        # OPTIONS with no body — every default pick must fall back to a
+        # non-sdp_* strategy, regardless of seed.
+        mutator = SIPMutator()
+        for seed in range(40):
+            editable = self._editable_without_sdp()
+            case = mutator.mutate_editable(
+                editable,
+                MutationConfig(
+                    seed=seed,
+                    layer="wire",
+                    profile="delivery_preserving",
+                    strategy="default",
+                ),
+            )
+            op = case.records[0].operator
+            self.assertNotIn(
+                op,
+                {"sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"},
+                f"seed={seed} unexpectedly picked sdp strategy for non-SDP body",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

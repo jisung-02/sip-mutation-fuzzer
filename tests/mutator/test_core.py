@@ -539,7 +539,10 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         )
 
         self.assertEqual(case.profile, "delivery_preserving")
-        self.assertEqual(case.strategy, "safe")
+        # OPTIONS has no SDP body, so SDP-aware pool entries are skipped
+        # and the resolver falls back to one of the body-agnostic
+        # delivery_preserving wire defaults.
+        self.assertIn(case.strategy, {"safe", "header_whitespace_noise"})
         self.assertEqual(case.final_layer, "wire")
         assert case.wire_text is not None
         self.assertIn(

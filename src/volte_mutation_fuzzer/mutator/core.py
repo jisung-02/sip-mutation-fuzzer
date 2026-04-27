@@ -593,7 +593,25 @@ class SIPMutator:
                 editable_message is not None
                 and self._has_contact_alias(editable_message)
             )
+        if (
+            layer == "wire"
+            and strategy in {"sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}
+        ):
+            return (
+                editable_message is not None
+                and self._has_sdp_body(editable_message)
+            )
         return True
+
+    def _has_sdp_body(self, editable_message: EditableSIPMessage) -> bool:
+        if not editable_message.body:
+            return False
+        for header in editable_message.headers:
+            if self._header_name_key(header.name) != "content-type":
+                continue
+            if "application/sdp" in header.value.lower():
+                return True
+        return False
 
     def _has_contact_alias(self, editable_message: EditableSIPMessage) -> bool:
         for header in editable_message.headers:

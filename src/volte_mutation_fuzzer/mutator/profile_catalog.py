@@ -78,11 +78,23 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "delivery_preserving": {
         "model": ("default",),
-        "wire": ("safe", "header_whitespace_noise"),
+        "wire": (
+            "safe",
+            "header_whitespace_noise",
+            "sdp_boundary_only",
+            "sdp_struct_only",
+            "sdp_byte_edit",
+        ),
         "byte": ("safe", "header_targeted"),
     },
     "ims_specific": {
-        "wire": ("safe", "alias_port_desync"),
+        "wire": (
+            "safe",
+            "alias_port_desync",
+            "sdp_boundary_only",
+            "sdp_struct_only",
+            "sdp_byte_edit",
+        ),
         "byte": ("header_targeted",),
     },
     "parser_breaker": {
