@@ -180,11 +180,16 @@ def _render_result(case: MutatedCase) -> str:
     #   2. The human-friendly LF-only form is rendered *above* the JSON as
     #      a separate block so SIP messages display with real line breaks
     #      instead of escaped ``\n`` runs inside a JSON string.
+    # Wire-layer mutations populate ``wire_text``; byte-layer mutations
+    # populate ``packet_bytes`` — handle both under the same banner so the
+    # output shape doesn't surprise on layer change.
     formatted_wire: str | None = None
-    if "wire_text" in payload:
-        raw = payload.pop("wire_text")
-        payload["raw_wire_text"] = raw
-        formatted_wire = raw.replace("\r\n", "\n")
+    for source_key in ("wire_text", "packet_bytes"):
+        if source_key in payload:
+            raw = payload.pop(source_key)
+            payload["raw_wire_text"] = raw
+            formatted_wire = raw.replace("\r\n", "\n")
+            break
 
     # Records hold the structured before/after snapshots, but spotting *what*
     # changed inside a 50-line packet from those alone is tedious. Add a
@@ -206,15 +211,121 @@ def _render_result(case: MutatedCase) -> str:
             diff_lines.append(f"  + {_format_record_side(record.get('after'))}")
         payload["mutation_diff"] = diff_lines
 
+    # Pin-point each record onto a specific line/column of the wire form.
+    # ``mutation_diff`` shows *what* changed; this block shows *where* in
+    # the rendered SIP message — line, column, the affected line itself,
+    # plus a ``^`` pointer when we know the column. Spotting a single
+    # byte flip in a 50-line packet without this is impractical.
+    raw_wire = payload.get("raw_wire_text")
+    change_context: list[str] = []
+    if raw_wire and records:
+        change_context = _format_change_context(records, raw_wire)
+
     json_block = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     if formatted_wire is None:
         return json_block
-    return (
-        "=== wire_text ===\n"
-        f"{formatted_wire}\n"
-        "=== mutation_result (json) ===\n"
-        f"{json_block}"
-    )
+
+    parts = [
+        "=== wire_text ===",
+        formatted_wire.rstrip("\n"),
+        "",
+    ]
+    if change_context:
+        parts.append("=== change context ===")
+        parts.extend(change_context)
+        parts.append("")
+    parts.append("=== mutation_result (json) ===")
+    parts.append(json_block)
+    return "\n".join(parts)
+
+
+def _format_change_context(records: list, raw_wire: str) -> list[str]:
+    """Render each record as ``@ target  line N, col M`` + the affected
+    line + a column ``^`` pointer when applicable.
+
+    ``raw_wire`` is the ``\r\n``-separated wire form. Byte indices into
+    that buffer are translated to (line_index, col_index_in_line) so the
+    pointer lands on the correct character.
+    """
+    out: list[str] = []
+    formatted_lines = raw_wire.replace("\r\n", "\n").split("\n")
+
+    for record in records:
+        target = (record.get("target") or {}).get("path", "")
+        operator = record.get("operator", "?")
+        note = record.get("note")
+
+        line_num = -1
+        col = -1
+        if target.startswith("byte["):
+            try:
+                idx = int(target[len("byte[") : -1])
+            except ValueError:
+                idx = -1
+            if idx >= 0:
+                line_num, col = _byte_index_to_line_col(raw_wire, idx)
+        elif target.startswith("range["):
+            try:
+                start_str = target[len("range[") : -1].split(":")[0]
+                idx = int(start_str)
+            except (ValueError, IndexError):
+                idx = -1
+            if idx >= 0:
+                line_num, col = _byte_index_to_line_col(raw_wire, idx)
+        elif target.startswith("header["):
+            try:
+                hdr_idx = int(target[len("header[") : -1])
+            except ValueError:
+                hdr_idx = -1
+            if hdr_idx >= 0:
+                # header[N] = (N+1)th line — start_line is at index 0.
+                line_num = hdr_idx + 1
+
+        suffix = f"  operator={operator}"
+        if note:
+            suffix += f"  note={note}"
+        if line_num < 0:
+            out.append(f"@ {target or '?'}{suffix}  (location not resolvable)")
+            continue
+
+        coord = f"line {line_num + 1}"
+        if col >= 0:
+            coord += f", col {col}"
+        out.append(f"@ {target}  {coord}{suffix}")
+
+        if 0 <= line_num < len(formatted_lines):
+            line_text = formatted_lines[line_num]
+            out.append(f"  {_escape_visible(line_text)}")
+            if col >= 0 and col <= len(line_text):
+                out.append(f"  {' ' * col}^")
+        else:
+            out.append("  (line out of range)")
+
+    return out
+
+
+def _byte_index_to_line_col(raw_wire: str, byte_idx: int) -> tuple[int, int]:
+    """Locate ``byte_idx`` (offset into the CRLF-encoded wire buffer) as a
+    (line_index, col_index_in_line) pair.
+
+    Uses the byte length of each line to walk the buffer so multi-byte
+    UTF-8 doesn't off-by-one the result; SIP text is normally ASCII but
+    fuzz mutations may inject non-ASCII bytes.
+    """
+    encoded = raw_wire.encode("utf-8")
+    if not 0 <= byte_idx < len(encoded):
+        return -1, -1
+    pos = 0
+    for line_num, line in enumerate(raw_wire.split("\r\n")):
+        line_bytes = len(line.encode("utf-8"))
+        # Each split chunk except the last is followed by a \r\n.
+        terminator_bytes = 2 if line_num < raw_wire.count("\r\n") else 0
+        end = pos + line_bytes + terminator_bytes
+        if byte_idx < end:
+            col = byte_idx - pos
+            return line_num, col
+        pos = end
+    return -1, -1
 
 
 def _format_record_side(value: object) -> str:
@@ -222,10 +333,28 @@ def _format_record_side(value: object) -> str:
 
     Control characters (\t, \r, \n, \x00, ...) and high-bit bytes are made
     visible via ``repr``-style escapes; structured snapshots (header dicts,
-    name/value tuples) are flattened to ``Name<separator>Value``.
+    name/value tuples) are flattened to ``Name<separator>Value``; raw byte
+    values from byte-layer ops (e.g. ``flip_byte`` records ``before=32``,
+    ``after=48``) are decorated with hex + printable-char so the diff is
+    self-explanatory.
     """
     if value is None:
         return "<none>"
+    if isinstance(value, bool):
+        # bool is a subclass of int — handle before the int branch so True/False
+        # don't render as 0x01/0x00.
+        return repr(value)
+    if isinstance(value, int):
+        return _format_byte_value(value)
+    if isinstance(value, (bytes, bytearray)):
+        if len(value) == 0:
+            return "b''"
+        if len(value) == 1:
+            return _format_byte_value(value[0])
+        # Show hex + ASCII-ish rendition for short byte sequences.
+        hex_part = " ".join(f"{b:02x}" for b in value)
+        ascii_part = _escape_visible(value.decode("latin-1"))
+        return f"{hex_part}  ({ascii_part})"
     if isinstance(value, dict):
         # Header snapshot: {"name": ..., "separator": ..., "value": ...}
         if "name" in value and ("value" in value or "separator" in value):
@@ -240,10 +369,23 @@ def _format_record_side(value: object) -> str:
         if len(value) == 2 and all(isinstance(part, str) for part in value):
             name, inner = value
             return _escape_visible(f"{name}: {inner}")
+        # Raw byte sequences (e.g. delete_range records ``(0x42, 0x59)``):
+        # render as space-separated hex.
+        if value and all(isinstance(part, int) and 0 <= part <= 0xFF for part in value):
+            return " ".join(_format_byte_value(part) for part in value)
         return _escape_visible(repr(list(value)))
     if isinstance(value, str):
         return _escape_visible(value)
     return _escape_visible(repr(value))
+
+
+def _format_byte_value(byte: int) -> str:
+    """Render a single byte (0-255) as ``0xNN (' x ')`` when printable else ``0xNN``."""
+    if not 0 <= byte <= 0xFF:
+        return repr(byte)
+    if 0x20 <= byte <= 0x7E:
+        return f"0x{byte:02x} ({chr(byte)!r})"
+    return f"0x{byte:02x}"
 
 
 def _escape_visible(text: str) -> str:
