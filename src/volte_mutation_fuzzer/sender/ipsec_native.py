@@ -70,6 +70,7 @@ _UDP_DRIVER_SCRIPT: Final[str] = r"""
 import socket
 import struct
 import sys
+import time
 import select as select_mod
 
 
@@ -145,19 +146,42 @@ if alt_src_port and alt_dst_port and alt_src_port != src_port:
 sock_primary.send(payload)
 
 socks = [sock_primary] + ([sock_alt] if sock_alt else [])
+# RFC 5626 (and 3GPP TS 33.203 IMS profile) UEs send CRLF / CRLFCRLF
+# keepalives on the protected port. Without filtering, the very first
+# datagram on this socket is often a keepalive that arrives a few ms
+# before the real SIP response — recvfrom() returns it, the parent
+# parses it as an empty SIP message, and the case is mis-classified as
+# timeout. Loop past these until a real SIP-shaped datagram arrives or
+# the budget expires. Confirmed against the 2026-04-27 INVITE Pixel
+# campaign where 12/13 timeouts had substantial UE → fuzzer ESP
+# responses 15 ms after a 78-byte keepalive ESP.
+deadline = time.monotonic() + timeout_seconds
+result_data = None
+result_peer = None
 try:
-    ready, _, _ = select_mod.select(socks, [], [], timeout_seconds)
-    if not ready:
-        sys.stdout.buffer.write((0).to_bytes(4, "big"))
-        sys.stdout.buffer.flush()
-    else:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        ready, _, _ = select_mod.select(socks, [], [], remaining)
+        if not ready:
+            break
         data, peer = ready[0].recvfrom(65535)
-        sys.stdout.buffer.write(len(data).to_bytes(4, "big"))
-        sys.stdout.buffer.write(peer[0].encode("ascii"))
+        # Empty / whitespace-only datagram is a keepalive, skip it.
+        if not data.strip(b"\r\n\t "):
+            continue
+        result_data, result_peer = data, peer
+        break
+
+    if result_data is None:
+        sys.stdout.buffer.write((0).to_bytes(4, "big"))
+    else:
+        sys.stdout.buffer.write(len(result_data).to_bytes(4, "big"))
+        sys.stdout.buffer.write(result_peer[0].encode("ascii"))
         sys.stdout.buffer.write(b"\n")
-        sys.stdout.buffer.write(peer[1].to_bytes(2, "big"))
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        sys.stdout.buffer.write(result_peer[1].to_bytes(2, "big"))
+        sys.stdout.buffer.write(result_data)
+    sys.stdout.buffer.flush()
 finally:
     sock_primary.close()
     if sock_alt is not None:

@@ -555,6 +555,42 @@ class NativeIPsecSendTests(unittest.TestCase):
         )
 
 
+class NativeIPsecUdpDriverKeepaliveFilterTests(unittest.TestCase):
+    """Driver script must skip CRLF / CRLFCRLF SIP keepalive datagrams.
+
+    Regression: 2026-04-27 INVITE Pixel campaign had 12/13 timeouts where
+    pcap showed substantial UE → fuzzer ESP responses (1278B + 738B) ~15ms
+    after a 78-byte ESP keepalive. The driver did one ``recvfrom``,
+    caught the 4-byte CRLF keepalive, and exited — fuzzer parsed the
+    empty datagram as an invalid SIP message → no observation → timeout.
+    """
+
+    def _driver_script(self) -> str:
+        from volte_mutation_fuzzer.sender.ipsec_native import _UDP_DRIVER_SCRIPT
+        return _UDP_DRIVER_SCRIPT
+
+    def test_driver_imports_time_for_deadline_loop(self) -> None:
+        # Without ``time``, ``time.monotonic()`` in the deadline loop
+        # raises NameError inside the docker exec'd driver.
+        self.assertIn("import time", self._driver_script())
+
+    def test_driver_uses_deadline_loop_not_single_recvfrom(self) -> None:
+        script = self._driver_script()
+        self.assertIn("deadline = time.monotonic() + timeout_seconds", script)
+        # The keepalive filter must continue rather than emit on empty.
+        self.assertIn('data.strip(b"\\r\\n\\t "):', script)
+        self.assertIn("continue", script)
+
+    def test_driver_emits_zero_length_marker_on_no_real_response(self) -> None:
+        # When the deadline expires with only keepalives received,
+        # ``result_data`` stays None and the driver must still emit the
+        # 4-byte zero length marker so the parent's frame parser sees an
+        # explicit empty result rather than a stalled stdin.
+        script = self._driver_script()
+        self.assertIn("if result_data is None:", script)
+        self.assertIn('(0).to_bytes(4, "big")', script)
+
+
 class NativeIPsecSocketObservationTests(unittest.TestCase):
     def test_pcscf_log_source_is_allowed(self) -> None:
         observation = SocketObservation(
