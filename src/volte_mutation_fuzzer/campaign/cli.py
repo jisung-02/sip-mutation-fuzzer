@@ -113,6 +113,17 @@ def run_command(
             ),
         ),
     ] = None,
+    wait_idle_timeout: Annotated[
+        float,
+        typer.Option(
+            "--wait-idle-timeout",
+            help=(
+                "Max seconds to wait for UE call state to return to IDLE between "
+                "INVITE cases (default 10 s). Set to 0 to skip idle waiting "
+                "entirely — useful for high-rate campaigns or listener-leak testing."
+            ),
+        ),
+    ] = 10.0,
     seed_start: Annotated[
         int, typer.Option("--seed-start", help="Starting seed value.")
     ] = 0,
@@ -336,6 +347,7 @@ def run_command(
                 if oracle_log_grace is not None and oracle_log_grace < 8.0
                 else 0.0
             ),
+            wait_idle_timeout_seconds=wait_idle_timeout,
         )
         if strategy is None:
             default_strategies = (

@@ -82,6 +82,10 @@ class CampaignConfig(BaseModel):
     # would have been caught by per-case polling are still visible in the full
     # logcat.  Explicitly set to 0 to disable.
     post_campaign_log_grace_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
+    # Max seconds to wait for UE call state to return to IDLE between INVITE
+    # cases.  Set to 0 to skip idle waiting entirely (useful for high-rate
+    # campaigns where back-pressure from the previous call is intentional).
+    wait_idle_timeout_seconds: float = Field(default=10.0, ge=0.0, le=60.0)
 
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None

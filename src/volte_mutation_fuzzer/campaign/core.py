@@ -489,11 +489,12 @@ class CampaignExecutor:
 
         # Call state checker for INVITE teardown verification
         self._call_state_checker: "CallStateChecker | None" = None
-        if config.adb_enabled and config.mt_invite_template is not None:
+        if config.adb_enabled and config.mt_invite_template is not None and config.wait_idle_timeout_seconds > 0:
             from volte_mutation_fuzzer.adb.call_state import CallStateChecker
 
             self._call_state_checker = CallStateChecker(
                 serial=config.adb_serial,
+                wait_timeout=config.wait_idle_timeout_seconds,
             )
 
     @staticmethod
