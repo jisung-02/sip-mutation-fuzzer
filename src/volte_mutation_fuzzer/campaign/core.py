@@ -694,6 +694,15 @@ class CampaignExecutor:
                 pass
             return campaign
         finally:
+            post_grace = config.post_campaign_log_grace_seconds
+            if post_grace > 0 and (
+                self._adb_collector is not None or self._ios_collector is not None
+            ):
+                import time as _time
+                logger.info(
+                    "post-campaign log grace: collecting for %.0f s", post_grace
+                )
+                _time.sleep(post_grace)
             if self._adb_collector is not None:
                 self._adb_collector.stop()
             if self._ios_collector is not None:

@@ -101,6 +101,18 @@ def run_command(
     cooldown: Annotated[
         float, typer.Option("--cooldown", help="Cooldown seconds between cases.")
     ] = 0.2,
+    oracle_log_grace: Annotated[
+        float | None,
+        typer.Option(
+            "--oracle-log-grace",
+            help=(
+                "ADB/iOS log grace window per case (seconds). "
+                "Default: 8 s for INVITE, 1 s for others. "
+                "If set below 8, the campaign automatically collects logs for "
+                "10 s after the last case to catch delayed async crashes."
+            ),
+        ),
+    ] = None,
     seed_start: Annotated[
         int, typer.Option("--seed-start", help="Starting seed value.")
     ] = 0,
@@ -318,6 +330,12 @@ def run_command(
             circuit_breaker_threshold=circuit_breaker,
             adb_buffers=adb_buffers_value,
             ios_filter_processes=ios_filter_processes_value,
+            oracle_log_grace_seconds=oracle_log_grace,
+            post_campaign_log_grace_seconds=(
+                10.0
+                if oracle_log_grace is not None and oracle_log_grace < 8.0
+                else 0.0
+            ),
         )
         if strategy is None:
             default_strategies = (

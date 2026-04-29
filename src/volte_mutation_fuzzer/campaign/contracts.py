@@ -76,6 +76,12 @@ class CampaignConfig(BaseModel):
     # legacy mode default for compatibility; the helper applies the
     # method-aware policy. ``None`` means "pick the default".
     oracle_log_grace_seconds: float | None = Field(default=None, ge=0.0, le=30.0)
+    # Extra seconds to keep ADB/iOS log collectors running after the last
+    # case finishes.  Activated automatically when ``oracle_log_grace_seconds``
+    # is set below the default INVITE grace (8 s) so that async crashes that
+    # would have been caught by per-case polling are still visible in the full
+    # logcat.  Explicitly set to 0 to disable.
+    post_campaign_log_grace_seconds: float = Field(default=0.0, ge=0.0, le=60.0)
 
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None
