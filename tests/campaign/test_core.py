@@ -3358,3 +3358,155 @@ class CampaignConfigMutationsPerCaseTests(unittest.TestCase):
                     target_host="127.0.0.1", mutations_per_case=n
                 )
                 self.assertEqual(cfg.mutations_per_case, n)
+
+
+class PacketFileExecutionTests(unittest.TestCase):
+    """End-to-end behaviour of ``--packet-file`` through the campaign executor.
+
+    Critical contract: the file is read as raw bytes and dispatched verbatim,
+    even when the buffer contains NUL or other non-UTF-8 sequences. Wire/Via
+    rewriting must be skipped.
+    """
+
+    def _write_packet(self, data: bytes) -> str:
+        tmp = tempfile.NamedTemporaryFile(suffix=".sip", delete=False)
+        tmp.write(data)
+        tmp.close()
+        self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
+        return tmp.name
+
+    def _build_executor(self, packet_bytes: bytes) -> tuple[CampaignExecutor, str]:
+        path = self._write_packet(packet_bytes)
+        cfg = CampaignConfig(
+            mode="real-ue-direct",
+            target_host="10.20.20.8",
+            target_msisdn="111111",
+            packet_file=path,
+            methods=("OPTIONS",),
+            layers=("byte",),
+            strategies=("identity",),
+            max_cases=1,
+        )
+        return CampaignExecutor(cfg), path
+
+    def _send_result(self) -> SendReceiveResult:
+        return SendReceiveResult(
+            target=TargetEndpoint(
+                host="10.20.20.8",
+                port=8100,
+                mode="real-ue-direct",
+                msisdn="111111",
+                ipsec_mode="null",
+                bind_container="pcscf",
+            ),
+            artifact_kind="bytes",
+            bytes_sent=42,
+            outcome="success",
+            responses=(
+                SocketObservation(
+                    status_code=200,
+                    reason_phrase="OK",
+                    raw_text="SIP/2.0 200 OK\r\n\r\n",
+                    classification="success",
+                ),
+            ),
+            send_started_at=1.0,
+            send_completed_at=1.1,
+        )
+
+    def test_null_byte_bytes_pass_through_to_sender_unchanged(self) -> None:
+        """File bytes (including NULs and high bits) must hit the sender verbatim."""
+        raw = b"OPTIONS sip:user@host SIP/2.0\r\nX-Bin: \x00\xff\x7f\r\n\r\n"
+        executor, _ = self._build_executor(raw)
+
+        captured: dict[str, object] = {}
+
+        def _capture_send_artifact(artifact, target, **kwargs):
+            captured["packet_bytes"] = artifact.packet_bytes
+            captured["wire_text"] = artifact.wire_text
+            captured["preserve_via"] = artifact.preserve_via
+            captured["preserve_contact"] = artifact.preserve_contact
+            return self._send_result()
+
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="byte",
+            strategy="identity",
+        )
+
+        with unittest.mock.patch.object(
+            executor,
+            "_resolve_ports_live",
+            return_value=(8100, 8101),
+        ), unittest.mock.patch.object(
+            executor._sender,
+            "send_artifact",
+            side_effect=_capture_send_artifact,
+        ), unittest.mock.patch.object(
+            executor._oracle,
+            "evaluate",
+            return_value=SimpleNamespace(
+                verdict="normal",
+                reason="ok",
+                response_code=200,
+                elapsed_ms=10.0,
+                process_alive=True,
+                details={},
+            ),
+        ), unittest.mock.patch.object(
+            executor,
+            "_persist_case_artifacts",
+            side_effect=lambda _spec, case_result, **kwargs: case_result,
+        ):
+            result = executor._execute_case(spec)
+
+        self.assertEqual(captured["packet_bytes"], raw)
+        self.assertIsNone(captured["wire_text"])
+        self.assertTrue(captured["preserve_via"])
+        self.assertTrue(captured["preserve_contact"])
+        self.assertEqual(result.verdict, "normal")
+        self.assertIn("--packet-file", result.reproduction_cmd)
+
+    def test_packet_file_routes_through_dedicated_executor_branch(self) -> None:
+        """``_execute_case`` must dispatch to ``_execute_packet_file_case``."""
+        raw = b"OPTIONS sip:user@host SIP/2.0\r\n\r\n"
+        executor, _ = self._build_executor(raw)
+        spec = CaseSpec(
+            case_id=0, seed=0, method="OPTIONS", layer="byte", strategy="identity",
+        )
+        sentinel = SimpleNamespace(verdict="normal")
+
+        with unittest.mock.patch.object(
+            executor,
+            "_execute_packet_file_case",
+            return_value=sentinel,
+        ) as branch, unittest.mock.patch.object(
+            executor,
+            "_execute_mt_template_case",
+        ) as template_branch:
+            result = executor._execute_case(spec)
+
+        branch.assert_called_once()
+        template_branch.assert_not_called()
+        self.assertIs(result, sentinel)
+
+    def test_case_generator_collapses_layers_to_byte_when_packet_file_set(self) -> None:
+        path = self._write_packet(b"OPTIONS sip:u@h SIP/2.0\r\n\r\n")
+        cfg = CampaignConfig(
+            mode="real-ue-direct",
+            target_host="10.20.20.8",
+            target_msisdn="111111",
+            packet_file=path,
+            methods=("OPTIONS",),
+            # User passes mixed layers; validator rejects model/wire so they
+            # never reach CaseGenerator. Pass byte+auto and verify collapse.
+            layers=("byte", "auto"),
+            strategies=("identity",),
+            max_cases=4,
+        )
+        cases = list(CaseGenerator(cfg).generate())
+        self.assertGreaterEqual(len(cases), 1)
+        for case in cases:
+            self.assertEqual(case.layer, "byte")

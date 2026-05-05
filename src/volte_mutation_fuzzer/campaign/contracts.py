@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -61,6 +62,10 @@ class CampaignConfig(BaseModel):
     impi: str | None = None
     mt: bool = False
     mt_invite_template: str | None = None
+    # Path to a file containing a complete SIP packet to send verbatim. Read as
+    # raw bytes (null-byte safe). Mutually exclusive with mt_invite_template/mt.
+    # Bypasses generator + slot substitution; bytes flow straight to the sender.
+    packet_file: str | None = None
     ipsec_mode: Literal["null", "bypass", "native", "ipsec"] | None = None
     preserve_via: bool = False
     preserve_contact: bool = False
@@ -221,6 +226,31 @@ class CampaignConfig(BaseModel):
                 raise ValueError("mt_invite_template requires mode='real-ue-direct'")
             if self.target_msisdn is None:
                 raise ValueError("mt_invite_template requires target_msisdn")
+            if self.ipsec_mode is None:
+                object.__setattr__(self, "ipsec_mode", "null")
+
+        if self.packet_file is not None:
+            if self.mt_invite_template is not None or self.mt:
+                raise ValueError(
+                    "packet_file is mutually exclusive with mt_invite_template/--mt"
+                )
+            if self.mode != "real-ue-direct":
+                raise ValueError("packet_file requires mode='real-ue-direct'")
+            if self.target_msisdn is None:
+                raise ValueError("packet_file requires target_msisdn")
+            packet_path = Path(self.packet_file)
+            if not packet_path.is_file():
+                raise ValueError(f"packet_file not found or not a regular file: {self.packet_file}")
+            # Strategy/layer guardrails: file is sent verbatim (identity) or as
+            # a byte-layer baseline. Wire/model layers parse via UTF-8 and would
+            # corrupt null bytes, so we restrict the axes here.
+            allowed_layers = {"byte", "auto"}
+            bad_layers = [lyr for lyr in self.layers if lyr not in allowed_layers]
+            if bad_layers:
+                raise ValueError(
+                    f"packet_file supports layers {sorted(allowed_layers)} only "
+                    f"(got {bad_layers}); wire/model layers would corrupt null bytes"
+                )
             if self.ipsec_mode is None:
                 object.__setattr__(self, "ipsec_mode", "null")
 

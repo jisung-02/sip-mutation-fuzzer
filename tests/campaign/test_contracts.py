@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -184,6 +186,95 @@ class CampaignConfigTests(unittest.TestCase):
             )
 
         self.assertIn("target_msisdn", str(ctx.exception))
+
+
+class PacketFileConfigTests(unittest.TestCase):
+    """``--packet-file`` option validators on CampaignConfig."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.NamedTemporaryFile(
+            suffix=".sip", delete=False
+        )
+        # Include a NUL byte so we cover the binary-safe path.
+        self._tmp.write(b"OPTIONS sip:user@host SIP/2.0\r\n\x00\r\n")
+        self._tmp.close()
+        self._path = self._tmp.name
+        self.addCleanup(lambda: Path(self._path).unlink(missing_ok=True))
+
+    def test_packet_file_accepted_with_real_ue_direct_and_msisdn(self) -> None:
+        cfg = CampaignConfig(
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            packet_file=self._path,
+            methods=("OPTIONS",),
+            layers=("byte",),
+        )
+
+        self.assertEqual(cfg.packet_file, self._path)
+        self.assertEqual(cfg.ipsec_mode, "null")  # default for packet_file mode
+
+    def test_packet_file_rejects_softphone_mode(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                target_host="127.0.0.1",
+                packet_file=self._path,
+                layers=("byte",),
+            )
+        self.assertIn("packet_file requires mode='real-ue-direct'", str(ctx.exception))
+
+    def test_packet_file_requires_target_msisdn(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                target_host="10.20.20.8",
+                mode="real-ue-direct",
+                packet_file=self._path,
+                layers=("byte",),
+            )
+        self.assertIn("target_msisdn", str(ctx.exception))
+
+    def test_packet_file_mutually_exclusive_with_mt_invite_template(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                impi="001010000123511",
+                mt_invite_template="a31",
+                packet_file=self._path,
+                layers=("byte",),
+            )
+        self.assertIn("mutually exclusive", str(ctx.exception))
+
+    def test_packet_file_mutually_exclusive_with_mt_flag(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                impi="001010000123511",
+                mt=True,
+                packet_file=self._path,
+                layers=("byte",),
+            )
+        self.assertIn("mutually exclusive", str(ctx.exception))
+
+    def test_packet_file_rejects_wire_layer(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file=self._path,
+                layers=("wire",),
+            )
+        self.assertIn("packet_file supports layers", str(ctx.exception))
+
+    def test_packet_file_rejects_missing_path(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file="/nonexistent/path/that/does/not/exist.sip",
+                layers=("byte",),
+            )
+        self.assertIn("packet_file not found", str(ctx.exception))
 
 
 class CaseSpecTests(unittest.TestCase):

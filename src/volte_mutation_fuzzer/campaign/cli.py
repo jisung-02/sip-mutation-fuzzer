@@ -215,6 +215,17 @@ def run_command(
         str | None,
         typer.Option("--mt-invite-template", help="MT INVITE template name (e.g. '3gpp') or file path. --mt uses default template."),
     ] = None,
+    packet_file: Annotated[
+        str | None,
+        typer.Option(
+            "--packet-file",
+            help=(
+                "Path to a file containing a complete SIP packet. Read as raw "
+                "bytes (null-byte safe) and sent verbatim. Mutually exclusive "
+                "with --mt-invite-template/--mt. Real-ue-direct mode only."
+            ),
+        ),
+    ] = None,
     ipsec_mode: Annotated[
         str | None,
         typer.Option(
@@ -329,6 +340,7 @@ def run_command(
             impi=impi,
             mt=mt,
             mt_invite_template=mt_invite_template,
+            packet_file=packet_file,
             ipsec_mode=ipsec_mode_value,
             preserve_via=preserve_via,
             preserve_contact=preserve_contact,

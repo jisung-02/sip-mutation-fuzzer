@@ -119,12 +119,19 @@ class CaseGenerator:
 
         # Template mode: drop model layer (3GPP wire text used directly)
         template_active = config.mt_invite_template is not None
+        # Packet-file mode: only byte layer makes sense (file is raw bytes; no
+        # SIP parsing). model/wire layers are filtered out so we don't emit
+        # combos that would be skipped at execute time.
+        packet_file_active = config.packet_file is not None
 
-        effective_layers = (
-            tuple(lyr for lyr in config.layers if lyr != "model")
-            if template_active
-            else config.layers
-        )
+        if packet_file_active:
+            # Validator restricts layers to {byte, auto}; collapse to byte so
+            # CaseSpec.layer is concrete and downstream code routes consistently.
+            effective_layers = ("byte",)
+        elif template_active:
+            effective_layers = tuple(lyr for lyr in config.layers if lyr != "model")
+        else:
+            effective_layers = config.layers
 
         for method in config.methods:
             for profile in config.profiles:
@@ -473,6 +480,16 @@ class CampaignExecutor:
             if config.mt_invite_template is not None
             else None
         )
+        # Pre-load packet_file once. Read as raw bytes — null bytes are
+        # preserved end-to-end. Empty file is rejected here (sending zero
+        # bytes is meaningless for a UDP/TCP probe).
+        self._packet_file_bytes: bytes | None = None
+        if config.packet_file is not None:
+            packet_path = Path(config.packet_file)
+            data = packet_path.read_bytes()
+            if not data:
+                raise ValueError(f"packet_file is empty: {config.packet_file}")
+            self._packet_file_bytes = data
         self._ue_resolver = RealUEDirectResolver()
 
         # Initialize crash analyzer
@@ -768,6 +785,18 @@ class CampaignExecutor:
                     return self._execute_dialog_case(
                         spec, scenario, timestamp, case_started_monotonic
                     )
+
+            # Packet-file path (real-ue-direct, file bytes sent verbatim).
+            # Checked before mt_invite_template because the two are mutually
+            # exclusive (validated in CampaignConfig); this ordering is a
+            # safety belt in case both ever leak through.
+            if (
+                self._packet_file_bytes is not None
+                and spec.response_code is None
+            ):
+                return self._execute_packet_file_case(
+                    spec, timestamp, case_started_monotonic
+                )
 
             # MT template path (real-ue-direct with 3GPP format)
             if (
@@ -1276,6 +1305,248 @@ class CampaignExecutor:
                 pcap_path=pcap_path_saved,
                 case_wall_ms=self._case_wall_ms(case_started_monotonic),
             )
+
+    def _execute_packet_file_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        """Send a campaign case using bytes from --packet-file verbatim.
+
+        Mirrors the routing portion of ``_execute_mt_template_case`` (UE IP /
+        port_pc / port_ps live resolution, pcap, oracle, teardown) but skips
+        generator + mutator entirely: ``self._packet_file_bytes`` is wrapped
+        in ``SendArtifact.from_packet_bytes`` so the wire path returns the
+        bytes unmodified (see ``prepare_real_ue_direct_payload`` →
+        ``direct-normalization:bytes-unmodified``). Null bytes pass through.
+        """
+        config = self._config
+        assert self._packet_file_bytes is not None
+        assert config.target_msisdn is not None
+        assert config.packet_file is not None
+
+        error: str | None = None
+        capture: PcapCapture | None = None
+        pcap_path_saved: str | None = None
+
+        try:
+            # 1. Resolve UE IP and IMPI (IMPI is informational here — the file
+            #    already encodes whatever Request-URI / P-Preferred-Identity
+            #    the user authored — but the resolver still needs UE IP).
+            ue_ip = config.target_host
+            impi = config.impi
+            if ue_ip is None:
+                resolved = self._ue_resolver.resolve(self._target, impi=impi)
+                ue_ip = resolved.host
+                if impi is None and resolved.impi is not None:
+                    impi = resolved.impi
+
+            # 2. Live port_pc / port_ps lookup — same rationale as the MT
+            #    template path: stale ports masquerade as timeouts.
+            port_pc, _port_ps = self._resolve_ports_live(
+                config.target_msisdn, ue_ip=ue_ip,
+            )
+
+            # 3. Fragmentation guard for null-mode plaintext UDP. Same threshold
+            #    as the MT template path; bypass mode (Docker bridge) tolerates
+            #    fragmentation and is exempt.
+            payload_bytes = self._packet_file_bytes
+            if (
+                self._target.transport.upper() == "UDP"
+                and config.ipsec_mode == "null"
+                and len(payload_bytes) > _MT_TEMPLATE_FRAG_LIMIT
+            ):
+                return self._build_case_result(
+                    spec,
+                    verdict="unknown",
+                    reason=(
+                        f"packet_file payload exceeds one-fragment UDP safety threshold "
+                        f"({_MT_TEMPLATE_FRAG_LIMIT} bytes)"
+                    ),
+                    elapsed_ms=0.0,
+                    reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                        spec,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                    ),
+                    error="fragmentation-guard",
+                    timestamp=timestamp,
+                    case_wall_ms=self._case_wall_ms(case_started_monotonic),
+                )
+
+            # 4. Build artifact directly from raw bytes. preserve_via /
+            #    preserve_contact are forced on so the sender's wire-text
+            #    rewriter never touches the buffer; ``from_packet_bytes``
+            #    already short-circuits the rewriter, but setting the flags
+            #    is defensive and matches user intent ("send the file as-is").
+            artifact = SendArtifact(
+                packet_bytes=payload_bytes,
+                preserve_via=True,
+                preserve_contact=True,
+            )
+            sent_payload: str | bytes | None = artifact.packet_bytes
+
+            # 5. Target update — identical to MT template path.
+            target_update = {
+                "host": ue_ip,
+                "port": port_pc,
+                "ipsec_mode": config.ipsec_mode,
+                "source_ip": None,
+                "bind_container": "pcscf",
+                "bind_port": None
+                if config.ipsec_mode == "native"
+                else config.mt_local_port,
+            }
+            mt_target = self._target.model_copy(update=target_update)
+
+            if config.pcap_enabled:
+                pcap_dir = self._pcap_dir
+                pcap_dir.mkdir(parents=True, exist_ok=True)
+                pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
+                pcap_filter = f"host {ue_ip}"
+                capture = PcapCapture(
+                    pcap_path,
+                    interface=config.pcap_interface,
+                    filter_expr=pcap_filter,
+                )
+                capture.start()
+
+            is_invite = spec.method == "INVITE"
+            try:
+                send_result = self._sender.send_artifact(
+                    artifact, mt_target, collect_all_responses=is_invite
+                )
+            finally:
+                if capture is not None:
+                    pcap_path_saved = capture.stop()
+
+            # 6. INVITE teardown reuses MT-template helper. _teardown_invite
+            #    needs a wire-text view of the request; decode best-effort with
+            #    errors='replace' since teardown only has to extract method +
+            #    Call-ID / CSeq (ASCII). Null bytes are tolerated by replace.
+            sent_wire_text = payload_bytes.decode("utf-8", errors="replace")
+            if is_invite:
+                teardown_events = self._teardown_invite(
+                    sent_wire_text, mt_target, send_result, config
+                )
+                for te in teardown_events:
+                    logger.info("case %s: %s", spec.case_id, te)
+
+            if is_invite and self._call_state_checker is not None:
+                idle_events = self._call_state_checker.wait_for_idle()
+                for ie in idle_events:
+                    logger.info("case %s: %s", spec.case_id, ie)
+
+            # 7. Oracle
+            context = OracleContext(
+                method=spec.method,
+                timeout_threshold_ms=config.timeout_seconds * 1000,
+                log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                    spec.method
+                ),
+            )
+            process_name = config.process_name if config.check_process else None
+            verdict = self._oracle.evaluate(
+                send_result,
+                context,
+                process_name=process_name,
+                log_path=config.log_path,
+                process_check_interval=10,
+            )
+
+            raw_response = self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            )
+            case_result = self._build_case_result(
+                spec,
+                verdict=verdict.verdict,
+                reason=verdict.reason,
+                response_code=verdict.response_code,
+                elapsed_ms=verdict.elapsed_ms,
+                process_alive=verdict.process_alive,
+                raw_request=_payload_to_text(sent_payload),
+                raw_response=raw_response,
+                reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                    spec,
+                    profile=spec.profile,
+                    strategy=spec.strategy,
+                ),
+                profile=spec.profile,
+                strategy=spec.strategy,
+                # No mutator runs in this path — operator list is always empty.
+                mutation_ops=(),
+                error=error,
+                details=getattr(verdict, "details", {}) or {},
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=0.0,
+            )
+
+            return self._persist_case_artifacts(
+                spec,
+                case_result,
+                sent_payload=sent_payload,
+                timestamp=timestamp,
+                case_started_monotonic=case_started_monotonic,
+            )
+
+        except Exception as exc:
+            error = str(exc)
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"packet-file executor error: {error}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                    spec,
+                    profile=spec.profile,
+                    strategy=spec.strategy,
+                ),
+                profile=spec.profile,
+                strategy=spec.strategy,
+                error=error,
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+    def _build_packet_file_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> str:
+        cfg = self._config
+        target_args = ""
+        if cfg.target_host is not None:
+            target_args = f" --target-host {cfg.target_host}"
+        elif cfg.target_msisdn is not None:
+            target_args = f" --target-msisdn {cfg.target_msisdn}"
+        profile_value = spec.profile if profile is None else profile
+        strategy_value = spec.strategy if strategy is None else strategy
+
+        reproduction_cmd = (
+            f"uv run fuzzer campaign run"
+            f" --mode real-ue-direct"
+            f"{target_args}"
+            f" --packet-file {cfg.packet_file}"
+            f" --ipsec-mode {cfg.ipsec_mode}"
+            f" --methods {spec.method}"
+            f" --profile {profile_value}"
+            f" --layer {spec.layer}"
+            f" --strategy {strategy_value}"
+            f" --seed-start {spec.seed}"
+            f" --max-cases 1"
+        )
+        if cfg.ipsec_mode != "native":
+            reproduction_cmd += f" --mt-local-port {cfg.mt_local_port}"
+        return reproduction_cmd
 
     def _build_mt_template_reproduction_cmd(
         self,
