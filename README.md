@@ -199,6 +199,28 @@ resolver 기본값은 capstone 실험망을 따른다.
 
 CLI 결과의 `observer_events`에는 resolver, route check, direct normalization 정보가 함께 기록된다.
 
+## 캠페인에서 파일 패킷 그대로 송신 (`--packet-file`)
+`fuzzer campaign run --packet-file <path>` 는 파일에 들어있는 SIP 패킷을 **변이 없이 바이트 1:1로** UE 에 송신한다.
+파일은 raw bytes 로 읽히므로 `\x00` 등 non-UTF-8 시퀀스가 포함돼도 손실 없이 전달된다.
+sender 의 `prepare_real_ue_direct_payload` 가 `packet_bytes` 입력에 대해 Via/Contact 재작성을 건너뛴다.
+
+```bash
+uv run fuzzer campaign run \
+  --mode real-ue-direct --target-msisdn 222222 \
+  --packet-file my_invite.sip --ipsec-mode null \
+  --methods INVITE --layer byte --strategy identity \
+  --max-cases 1
+```
+
+제약:
+- `--mt-invite-template` / `--mt` 와 상호배타
+- `mode='real-ue-direct'` + `target_msisdn` 필수
+- `--layer` 는 `byte` 또는 `auto` 만 허용 (wire/model 은 UTF-8 파싱 단계에서 null byte 가 깨진다)
+- 파일이 없거나 빈 파일이면 거부
+
+캠페인은 그 외에는 평소와 같이 oracle/pcap/adb·iOS 로그 수집을 그대로 수행한다.
+재현 명령에는 `--packet-file <path>` 가 그대로 박힌다.
+
 ## Softphone 실행 quick start
 현재 브랜치에는 **Baresip 실행용 poe task** 가 포함된다.
 이번 task는 softphone **설치나 SIP 계정 provisioning을 자동화하지 않고**, 이미 준비된 로컬 Baresip 실행만 담당한다.
