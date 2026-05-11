@@ -385,7 +385,13 @@ class CampaignExecutor:
                 )
 
         self._config = config
-        self._generator = generator or SIPGenerator(GeneratorSettings())
+        _gen_settings = GeneratorSettings()
+        if config.target_msisdn is not None and config.mode == "real-ue-direct":
+            _gen_settings = _gen_settings.model_copy(update={
+                "to_user": config.target_msisdn,
+                "request_uri_user": config.target_msisdn,
+            })
+        self._generator = generator or SIPGenerator(_gen_settings)
         self._mutator = mutator or SIPMutator()
         self._sender = sender or SIPSenderReactor()
         self._adb_collector: Any | None = None
