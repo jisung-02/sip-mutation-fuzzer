@@ -75,6 +75,18 @@ docker compose build
 echo 'Done'
 """
 
+[tool.poe.tasks.deprovision]
+help = "Wipe all subscriber data from Open5GS (MongoDB) and PyHSS (MySQL) — run before re-provisioning"
+shell = """
+echo '[1/2] Clearing PyHSS MySQL (ims_subscriber, subscriber, auc)...'
+docker exec mysql mysql -u root -proot ims_hss_db -e \
+  "DELETE FROM ims_subscriber; DELETE FROM subscriber; DELETE FROM auc;"
+echo '[2/2] Clearing Open5GS MongoDB (subscribers)...'
+docker exec mongo mongosh open5gs --quiet --eval \
+  "db.subscribers.deleteMany({}); print('MongoDB cleared');"
+echo 'Done. Run: poe provision'
+"""
+
 [tool.poe.tasks.provision]
 help = "Provision test subscribers to Open5GS HSS (MongoDB) and PyHSS (MySQL)"
 cmd = "python scripts/provision_subscribers.py"
