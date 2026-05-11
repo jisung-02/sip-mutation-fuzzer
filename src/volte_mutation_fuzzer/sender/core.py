@@ -344,6 +344,7 @@ class SIPSenderReactor:
                 resolved_port=resolved.port,
                 observer_events=observer_events,
                 collect_all_responses=collect_all_responses,
+                pixel_request_uri=pixel_request_uri,
             )
 
         route_result = check_route_to_target(resolved.host)
@@ -682,6 +683,7 @@ class SIPSenderReactor:
         resolved_port: int,
         observer_events: list[str],
         collect_all_responses: bool,
+        pixel_request_uri: str | None = None,
     ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
         """Send artifact from inside a Docker container network namespace."""
         assert target.bind_container is not None
@@ -700,6 +702,7 @@ class SIPSenderReactor:
             local_port=bind_port,
             rewrite_via=not artifact.preserve_via,
             rewrite_contact=not artifact.preserve_contact,
+            rewrite_request_uri=pixel_request_uri,
         )
         observer_events.extend(normalization_events)
 
