@@ -125,8 +125,7 @@ class CaseGenerator:
         packet_file_active = config.packet_file is not None
 
         if packet_file_active:
-            # Validator restricts layers to {byte, auto}; collapse to byte so
-            # CaseSpec.layer is concrete and downstream code routes consistently.
+            # File is sent verbatim — layer config is ignored, always byte.
             effective_layers = ("byte",)
         elif template_active:
             effective_layers = tuple(lyr for lyr in config.layers if lyr != "model")

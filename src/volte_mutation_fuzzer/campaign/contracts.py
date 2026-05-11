@@ -241,16 +241,6 @@ class CampaignConfig(BaseModel):
             packet_path = Path(self.packet_file)
             if not packet_path.is_file():
                 raise ValueError(f"packet_file not found or not a regular file: {self.packet_file}")
-            # Strategy/layer guardrails: file is sent verbatim (identity) or as
-            # a byte-layer baseline. Wire/model layers parse via UTF-8 and would
-            # corrupt null bytes, so we restrict the axes here.
-            allowed_layers = {"byte", "auto"}
-            bad_layers = [lyr for lyr in self.layers if lyr not in allowed_layers]
-            if bad_layers:
-                raise ValueError(
-                    f"packet_file supports layers {sorted(allowed_layers)} only "
-                    f"(got {bad_layers}); wire/model layers would corrupt null bytes"
-                )
             if self.ipsec_mode is None:
                 object.__setattr__(self, "ipsec_mode", "null")
 
