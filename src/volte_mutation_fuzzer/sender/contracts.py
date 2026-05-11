@@ -230,6 +230,7 @@ class SendReceiveResult(BaseModel):
     artifact_kind: ArtifactKind
     correlation_key: CorrelationKey = Field(default_factory=CorrelationKey)
     bytes_sent: int = Field(ge=0)
+    sent_bytes: bytes | None = None
     outcome: DeliveryOutcome
     responses: tuple[SocketObservation, ...] = Field(default_factory=tuple)
     send_started_at: float

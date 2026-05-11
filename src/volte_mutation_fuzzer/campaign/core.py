@@ -818,7 +818,6 @@ class CampaignExecutor:
                 ),
             )
             artifact = self._artifact_from_mutated(mutated)
-            sent_payload: str | bytes | None = artifact.wire_text or artifact.packet_bytes
             if config.pcap_enabled:
                 pcap_dir = self._pcap_dir
                 pcap_dir.mkdir(parents=True, exist_ok=True)
@@ -832,6 +831,12 @@ class CampaignExecutor:
             finally:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
+
+            sent_payload: str | bytes | None = (
+                send_result.sent_bytes.decode("utf-8", errors="replace")
+                if send_result.sent_bytes is not None
+                else artifact.wire_text or artifact.packet_bytes
+            )
 
             context = OracleContext(
                 method=spec.related_method or spec.method,
@@ -1164,7 +1169,6 @@ class CampaignExecutor:
                     preserve_via=config.preserve_via,
                     preserve_contact=config.preserve_contact,
                 )
-            sent_payload: str | bytes | None = artifact.wire_text or artifact.packet_bytes
 
             # 9. pcap + send
             # 실제 송신은 port_pc로 간다. Plaintext UDP 경로라 ESP 정책 매칭이
@@ -1205,6 +1209,11 @@ class CampaignExecutor:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
 
+            sent_payload: str | bytes | None = (
+                send_result.sent_bytes.decode("utf-8", errors="replace")
+                if send_result.sent_bytes is not None
+                else artifact.wire_text or artifact.packet_bytes
+            )
             sent_wire_text = self._artifact_wire_text(artifact) or wire_text
 
             # 9b. Reliable CANCEL teardown (INVITE only)
@@ -1384,7 +1393,6 @@ class CampaignExecutor:
                 preserve_via=True,
                 preserve_contact=True,
             )
-            sent_payload: str | bytes | None = artifact.packet_bytes
 
             # 5. Target update — identical to MT template path.
             target_update = {
@@ -1419,6 +1427,12 @@ class CampaignExecutor:
             finally:
                 if capture is not None:
                     pcap_path_saved = capture.stop()
+
+            sent_payload: str | bytes | None = (
+                send_result.sent_bytes.decode("utf-8", errors="replace")
+                if send_result.sent_bytes is not None
+                else artifact.packet_bytes
+            )
 
             # 6. INVITE teardown reuses MT-template helper. _teardown_invite
             #    needs a wire-text view of the request; decode best-effort with
