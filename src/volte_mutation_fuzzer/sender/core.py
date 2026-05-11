@@ -287,6 +287,7 @@ class SIPSenderReactor:
         resolved = resolver.resolve(target)
         resolved_port = resolved.port
         port_pc_for_alt: int | None = None
+        pixel_request_uri: str | None = None
         if target.ipsec_mode == "native" and target.msisdn is not None:
             _port_pc, port_ps = resolver.resolve_protected_ports(
                 target.msisdn, ue_ip=resolved.host,
@@ -315,6 +316,10 @@ class SIPSenderReactor:
         )
         observer_events = [*resolved.observer_events]
 
+        if target.pixel_mode and resolved.impi is not None:
+            pixel_request_uri = f"sip:{resolved.impi}@{resolved.host}:{resolved_port}"
+            observer_events.append(f"pixel-mode:rewrite-request-uri:{pixel_request_uri}")
+
         if target.ipsec_mode == "native":
             return self._send_via_native_ipsec(
                 artifact=artifact,
@@ -325,6 +330,7 @@ class SIPSenderReactor:
                 observer_events=observer_events,
                 collect_all_responses=collect_all_responses,
                 ue_client_port=port_pc_for_alt,
+                pixel_request_uri=pixel_request_uri,
             )
 
         # Deprecated compatibility path: delegate send to container netns only when
@@ -380,6 +386,7 @@ class SIPSenderReactor:
                 resolved_port=resolved.port,
                 observer_events=observer_events,
                 collect_all_responses=collect_all_responses,
+                pixel_request_uri=pixel_request_uri,
             )
 
         observations: list[SocketObservation] = []
@@ -395,6 +402,7 @@ class SIPSenderReactor:
                     artifact,
                     local_host=local_host,
                     local_port=int(local_port),
+                    rewrite_request_uri=pixel_request_uri,
                 )
                 observer_events.extend(normalization_events)
                 sock.sendall(payload)
@@ -429,6 +437,7 @@ class SIPSenderReactor:
                     artifact,
                     local_host=local_host,
                     local_port=int(local_port),
+                    rewrite_request_uri=pixel_request_uri,
                 )
                 observer_events.extend(normalization_events)
                 sock.sendto(payload, (resolved.host, resolved.port))
@@ -450,6 +459,7 @@ class SIPSenderReactor:
         observer_events: list[str],
         collect_all_responses: bool,
         ue_client_port: int | None = None,
+        pixel_request_uri: str | None = None,
     ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
         """Send from the P-CSCF namespace using native IPsec helpers."""
         container = target.bind_container or self._env.get(
@@ -480,6 +490,7 @@ class SIPSenderReactor:
                 local_port=preflight.pcscf_port,
                 rewrite_via=not artifact.preserve_via,
                 rewrite_contact=not artifact.preserve_contact,
+                rewrite_request_uri=pixel_request_uri,
             )
             observer_events.extend(normalization_events)
 
@@ -590,6 +601,7 @@ class SIPSenderReactor:
         resolved_port: int,
         observer_events: list[str],
         collect_all_responses: bool,
+        pixel_request_uri: str | None = None,
     ) -> tuple[TargetEndpoint, bytes, list[SocketObservation], tuple[str, ...]]:
         """Send from the host using an explicit source IP bind."""
         assert target.source_ip is not None
@@ -616,6 +628,7 @@ class SIPSenderReactor:
                 local_port=int(local_port),
                 rewrite_via=not artifact.preserve_via,
                 rewrite_contact=not artifact.preserve_contact,
+                rewrite_request_uri=pixel_request_uri,
             )
             observer_events.extend(normalization_events)
 

@@ -69,6 +69,7 @@ class CampaignConfig(BaseModel):
     ipsec_mode: Literal["null", "bypass", "native", "ipsec"] | None = None
     preserve_via: bool = False
     preserve_contact: bool = False
+    pixel_mode: bool = False
     mo_contact_host: str = "10.20.20.9"
     mo_contact_port_pc: int = Field(default=31800, ge=1, le=65535)
     mo_contact_port_ps: int = Field(default=31100, ge=1, le=65535)

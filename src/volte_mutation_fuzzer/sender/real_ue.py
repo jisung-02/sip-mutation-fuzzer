@@ -1047,6 +1047,7 @@ def normalize_direct_wire_text(
     local_port: int,
     rewrite_via: bool = True,
     rewrite_contact: bool = True,
+    rewrite_request_uri: str | None = None,
 ) -> tuple[bytes, tuple[str, ...]]:
     if not wire_text:
         return b"", ("direct-normalization:wire-skipped:empty",)
@@ -1056,7 +1057,12 @@ def normalize_direct_wire_text(
     if not lines:
         return wire_text.encode("utf-8"), ("direct-normalization:wire-skipped:empty",)
 
-    updated_lines = [lines[0]]
+    first_line = lines[0]
+    if rewrite_request_uri is not None:
+        _rl_match = re.match(r'^(\S+)\s+\S+\s+(SIP/\S+)\s*$', first_line)
+        if _rl_match:
+            first_line = f"{_rl_match.group(1)} {rewrite_request_uri} {_rl_match.group(2)}"
+    updated_lines = [first_line]
     via_rewritten = False
     contact_rewritten = False
     for line in lines[1:]:
@@ -1087,6 +1093,11 @@ def normalize_direct_wire_text(
         updated_lines.append(line)
 
     events: list[str] = []
+    if rewrite_request_uri is not None:
+        if first_line != lines[0]:
+            events.append("direct-normalization:wire:request-uri")
+        else:
+            events.append("direct-normalization:wire-skipped:request-uri:parse-fail")
     if not rewrite_via:
         events.append("direct-normalization:wire-skipped:via:preserve")
     elif via_rewritten:
@@ -1111,6 +1122,7 @@ def prepare_real_ue_direct_payload(
     local_port: int,
     rewrite_via: bool = True,
     rewrite_contact: bool = True,
+    rewrite_request_uri: str | None = None,
 ) -> tuple[bytes, tuple[str, ...]]:
     if artifact.packet is not None:
         return normalize_direct_packet(
@@ -1125,6 +1137,7 @@ def prepare_real_ue_direct_payload(
             local_port=local_port,
             rewrite_via=rewrite_via,
             rewrite_contact=rewrite_contact,
+            rewrite_request_uri=rewrite_request_uri,
         )
     assert artifact.packet_bytes is not None
     return artifact.packet_bytes, ("direct-normalization:bytes-unmodified",)

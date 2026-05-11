@@ -59,6 +59,7 @@ class TargetEndpoint(BaseModel):
     # Deprecated compatibility path for Docker netns sending.
     bind_container: str | None = Field(default=None, min_length=1)
     bind_port: int | None = Field(default=None, ge=1, le=65535)
+    pixel_mode: bool = False
 
     @field_validator(
         "host",

@@ -241,6 +241,10 @@ def run_command(
         bool,
         typer.Option("--preserve-contact/--no-preserve-contact", help="Do not rewrite Contact host/port."),
     ] = False,
+    pixel_mode: Annotated[
+        bool,
+        typer.Option("--pixel/--no-pixel", help="Pixel mode: rewrite Request-URI to use resolved UE Contact URI (UUID@IP:port) so Shannon IMS accepts the packet."),
+    ] = False,
     mo_contact_host: Annotated[
         str,
         typer.Option("--mo-contact-host", help="MO UE IP for MT INVITE Contact header."),
@@ -344,6 +348,7 @@ def run_command(
             ipsec_mode=ipsec_mode_value,
             preserve_via=preserve_via,
             preserve_contact=preserve_contact,
+            pixel_mode=pixel_mode,
             mo_contact_host=mo_contact_host,
             mo_contact_port_pc=mo_contact_port_pc,
             mo_contact_port_ps=mo_contact_port_ps,

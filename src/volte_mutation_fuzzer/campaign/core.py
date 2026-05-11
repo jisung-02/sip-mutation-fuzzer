@@ -468,6 +468,7 @@ class CampaignExecutor:
             ipsec_mode=config.ipsec_mode,
             source_ip=config.source_ip,
             bind_container=config.bind_container,
+            pixel_mode=config.pixel_mode,
             # Mirror sender/cli.py single-shot dispatch: null/bypass needs a
             # fixed local UDP port so the rewritten Via sent-by matches the
             # bound socket and the UE's reply lands on it instead of an
