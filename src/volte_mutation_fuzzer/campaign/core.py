@@ -1894,26 +1894,62 @@ class CampaignExecutor:
     ) -> str:
         cfg = self._config
         target_args = self._build_replay_target_args()
-        transport_arg = (
-            f" --transport {cfg.transport}" if cfg.transport.upper() != "UDP" else ""
-        )
-        ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
-        # Carry the multi-mutation count into the replay command so the
-        # reproduced ``mutate`` step applies the same N rounds of mutation
-        # the campaign used. Default 1 stays bare for backward-compat.
-        max_ops_arg = (
-            f" --mutations-per-case {cfg.mutations_per_case}"
-            if cfg.mutations_per_case > 1
-            else ""
-        )
         profile_value = spec.profile if profile is None else profile
         strategy_value = spec.strategy if strategy is None else strategy
+
+        parts = [
+            "uv run fuzzer campaign run",
+            f"--mode {cfg.mode}",
+        ]
+        parts.append(target_args.strip())
+        if cfg.target_port != 5060:
+            parts.append(f"--target-port {cfg.target_port}")
+        if cfg.transport.upper() != "UDP":
+            parts.append(f"--transport {cfg.transport}")
+        if cfg.ipsec_mode:
+            parts.append(f"--ipsec-mode {cfg.ipsec_mode}")
+        parts.append(f"--methods {spec.method}")
+        parts.append(f"--profile {profile_value}")
+        parts.append(f"--layer {spec.layer}")
+        parts.append(f"--strategy {strategy_value}")
+        if cfg.mutations_per_case > 1:
+            parts.append(f"--mutations-per-case {cfg.mutations_per_case}")
+        parts.append(f"--seed-start {spec.seed}")
+        parts.append("--max-cases 1")
+        if cfg.timeout_seconds != 5.0:
+            parts.append(f"--timeout {cfg.timeout_seconds}")
+        if cfg.cooldown_seconds != 0.2:
+            parts.append(f"--cooldown {cfg.cooldown_seconds}")
+        if cfg.oracle_log_grace_seconds is not None:
+            parts.append(f"--oracle-log-grace {cfg.oracle_log_grace_seconds}")
+        if cfg.wait_idle_timeout_seconds != 10.0:
+            parts.append(f"--wait-idle-timeout {cfg.wait_idle_timeout_seconds}")
+        if cfg.circuit_breaker_threshold != 10:
+            parts.append(f"--circuit-breaker {cfg.circuit_breaker_threshold}")
+        if not cfg.pcap_enabled:
+            parts.append("--no-pcap")
+        if cfg.impi is not None:
+            parts.append(f"--impi {cfg.impi}")
+        if cfg.mt_local_port != 15100:
+            parts.append(f"--mt-local-port {cfg.mt_local_port}")
+
+        # response_code cases (dialog fuzzing) keep the pipe form — campaign run
+        # cannot replay a mid-dialog response without dialog context.
         if spec.response_code is not None:
             context = json.dumps(
                 self._synthetic_dialog_context().model_dump(mode="json"),
                 ensure_ascii=False,
             )
             related_method = spec.related_method or spec.method
+            transport_arg = (
+                f" --transport {cfg.transport}" if cfg.transport.upper() != "UDP" else ""
+            )
+            ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
+            max_ops_arg = (
+                f" --mutations-per-case {cfg.mutations_per_case}"
+                if cfg.mutations_per_case > 1
+                else ""
+            )
             return (
                 f"uv run fuzzer mutate response {spec.response_code} {related_method}"
                 f" --context '{context}'"
@@ -1929,20 +1965,8 @@ class CampaignExecutor:
                 f"{transport_arg}"
                 f"{ipsec_arg}"
             )
-        return (
-            f"uv run fuzzer mutate request {spec.method}"
-            f" --profile {profile_value}"
-            f" --strategy {strategy_value}"
-            f" --layer {spec.layer}"
-            f" --seed {spec.seed}"
-            f"{max_ops_arg}"
-            f" | uv run fuzzer send packet"
-            f" --mode {cfg.mode}"
-            f"{target_args}"
-            f" --target-port {cfg.target_port}"
-            f"{transport_arg}"
-            f"{ipsec_arg}"
-        )
+
+        return " ".join(p for p in parts if p)
 
     @staticmethod
     def _update_summary(summary: CampaignSummary, verdict: str) -> None:
