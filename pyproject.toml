@@ -128,3 +128,18 @@ ip route | grep -E '10\\.(10|20)\\.20\\.'
 echo ''
 echo 'Done.'
 """
+
+[tool.poe.tasks.docker-clean]
+help = "Stop and remove all Docker containers"
+shell = """
+containers=$(docker ps -aq)
+if [ -z "$containers" ]; then
+  echo 'No containers to remove.'
+else
+  echo 'Stopping all containers...'
+  docker stop $containers
+  echo 'Removing all containers...'
+  docker rm $containers
+  echo 'Done.'
+fi
+"""
