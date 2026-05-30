@@ -1,4 +1,3 @@
-from collections.abc import Iterable
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -77,12 +76,6 @@ class EditableSIPMessage(BaseModel):
     def append_header(self, name: str, value: str) -> Self:
         updated_headers = (*self.headers, EditableHeader(name=name, value=value))
         return self.model_copy(update={"headers": updated_headers})
-
-    def replace_headers(
-        self,
-        headers: Iterable[EditableHeader],
-    ) -> Self:
-        return self.model_copy(update={"headers": tuple(headers)})
 
     def render(self) -> str:
         rendered_headers = [header.render() for header in self.headers]
