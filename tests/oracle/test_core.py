@@ -344,7 +344,7 @@ class LogOracleTests(unittest.TestCase):
             self.assertTrue(result1.matched)
 
             # Second read from pos1 — no new content
-            result2, pos2 = self.oracle.check(path, after_position=pos1)
+            result2, _ = self.oracle.check(path, after_position=pos1)
             self.assertFalse(result2.matched)
 
             # Append new content with a pattern

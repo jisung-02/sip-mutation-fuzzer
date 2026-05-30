@@ -18,13 +18,9 @@ from volte_mutation_fuzzer.mutator.editable import (
     EditableHeader,
     EditableSIPMessage,
     EditableStartLine,
-    parse_editable_from_wire,
 )
 from volte_mutation_fuzzer.mutator.sdp import (
     BYTE_EDIT_VARIANTS,
-    SDPMutationResult,
-    STRUCT_VARIANTS,
-    VARIANTS,
     apply_sdp_boundary,
     apply_sdp_byte_edit,
     apply_sdp_struct,
@@ -95,7 +91,9 @@ class SDPVariantTests(unittest.TestCase):
         for i, (k, v) in enumerate(self.lines):
             if k == "m":
                 continue  # only the m-line was changed
-            self.assertEqual((k, v), original_lines[i], f"line {i} unexpectedly mutated")
+            self.assertEqual(
+                (k, v), original_lines[i], f"line {i} unexpectedly mutated"
+            )
 
     def test_media_transport_changes_only_transport(self) -> None:
         result = apply_sdp_boundary(self.lines, self.rng, variant="media_transport")
@@ -153,9 +151,7 @@ class SDPVariantTests(unittest.TestCase):
 
     def test_explicit_variant_raises_when_line_missing(self) -> None:
         # Dropping the b= line and asking for bandwidth must raise.
-        lines = [
-            (k, v) for (k, v) in parse_sdp_body(_BASELINE_SDP) if k != "b"
-        ]
+        lines = [(k, v) for (k, v) in parse_sdp_body(_BASELINE_SDP) if k != "b"]
         rng = random.Random(0)
         with self.assertRaisesRegex(ValueError, "no b="):
             apply_sdp_boundary(lines, rng, variant="bandwidth")
@@ -192,7 +188,9 @@ class SDPBoundaryStrategyIntegrationTests(unittest.TestCase):
             EditableHeader(name="Call-ID", value="x@host"),
             EditableHeader(name="CSeq", value="1 INVITE"),
             EditableHeader(name="Content-Type", value="application/sdp"),
-            EditableHeader(name="Content-Length", value=str(len(_BASELINE_SDP.encode("utf-8")))),
+            EditableHeader(
+                name="Content-Length", value=str(len(_BASELINE_SDP.encode("utf-8")))
+            ),
         )
         return EditableSIPMessage(
             start_line=start_line,
@@ -223,9 +221,6 @@ class SDPBoundaryStrategyIntegrationTests(unittest.TestCase):
     def test_strategy_updates_content_length(self) -> None:
         mutator = SIPMutator()
         editable = self._editable_with_sdp()
-        original_cl = next(
-            int(h.value) for h in editable.headers if h.name.casefold() == "content-length"
-        )
         case = mutator.mutate_editable(
             editable,
             MutationConfig(
@@ -238,7 +233,9 @@ class SDPBoundaryStrategyIntegrationTests(unittest.TestCase):
         wire = case.wire_text or ""
         # Pull the Content-Length header from the rendered wire text.
         cl_line = next(
-            line for line in wire.split("\r\n") if line.lower().startswith("content-length:")
+            line
+            for line in wire.split("\r\n")
+            if line.lower().startswith("content-length:")
         )
         new_cl = int(cl_line.split(":", 1)[1].strip())
         # New body length should match the post-mutation byte count.
@@ -338,32 +335,24 @@ class SDPStructVariantTests(unittest.TestCase):
 
     def test_extra_attribute_appends_a_line(self) -> None:
         original_a_count = sum(1 for (k, _v) in self.lines if k == "a")
-        result = apply_sdp_struct(
-            self.lines, self.rng, variant="extra_attribute"
-        )
+        result = apply_sdp_struct(self.lines, self.rng, variant="extra_attribute")
         self.assertEqual(result.note, "variant=extra_attribute")
         new_a_count = sum(1 for (k, _v) in self.lines if k == "a")
         self.assertEqual(new_a_count, original_a_count + 1)
 
     def test_missing_session_name_removes_s_line(self) -> None:
-        result = apply_sdp_struct(
-            self.lines, self.rng, variant="missing_session_name"
-        )
+        result = apply_sdp_struct(self.lines, self.rng, variant="missing_session_name")
         self.assertEqual(result.note, "variant=missing_session_name")
         # No s= line should remain.
         self.assertEqual([k for (k, _v) in self.lines if k == "s"], [])
 
     def test_missing_origin_removes_o_line(self) -> None:
-        result = apply_sdp_struct(
-            self.lines, self.rng, variant="missing_origin"
-        )
+        result = apply_sdp_struct(self.lines, self.rng, variant="missing_origin")
         self.assertEqual(result.note, "variant=missing_origin")
         self.assertEqual([k for (k, _v) in self.lines if k == "o"], [])
 
     def test_version_corrupt_changes_v_value(self) -> None:
-        result = apply_sdp_struct(
-            self.lines, self.rng, variant="version_corrupt"
-        )
+        result = apply_sdp_struct(self.lines, self.rng, variant="version_corrupt")
         self.assertTrue(result.note.startswith("variant=version_corrupt"))
         v_values = [v for (k, v) in self.lines if k == "v"]
         self.assertEqual(len(v_values), 1)
@@ -373,9 +362,7 @@ class SDPStructVariantTests(unittest.TestCase):
 
     def test_direction_conflict_adds_second_direction(self) -> None:
         # Baseline has a=sendrecv. After conflict, two direction attrs.
-        result = apply_sdp_struct(
-            self.lines, self.rng, variant="direction_conflict"
-        )
+        result = apply_sdp_struct(self.lines, self.rng, variant="direction_conflict")
         self.assertTrue(result.note.startswith("variant=direction_conflict"))
         directions = [
             v
@@ -396,9 +383,7 @@ class SDPStructVariantTests(unittest.TestCase):
             "a=rtpmap:96 AMR-WB/16000\r\n"
         )
         lines = parse_sdp_body(sdp_no_dir)
-        result = apply_sdp_struct(
-            lines, random.Random(0), variant="direction_conflict"
-        )
+        result = apply_sdp_struct(lines, random.Random(0), variant="direction_conflict")
         directions = [
             v
             for (k, v) in lines
@@ -633,9 +618,7 @@ class SDPStructReproductionCmdTests(unittest.TestCase):
     apply the same N rounds against the same baseline.
     """
 
-    def _executor_with(
-        self, *, mutations_per_case: int, mt: bool = False
-    ) -> "object":
+    def _executor_with(self, *, mutations_per_case: int, mt: bool = False) -> "object":
         # Imported lazily so this test module doesn't pull campaign
         # contracts at module-import time.
         import tempfile
@@ -729,9 +712,7 @@ class SDPByteEditVariantTests(unittest.TestCase):
         )
         # Same length; exactly one byte differs.
         self.assertEqual(len(new_body), len(body))
-        diff_positions = [
-            i for i in range(len(body)) if body[i] != new_body[i]
-        ]
+        diff_positions = [i for i in range(len(body)) if body[i] != new_body[i]]
         self.assertEqual(len(diff_positions), 1)
         self.assertTrue(result.note.startswith("variant=flip_random"))
 
@@ -773,9 +754,7 @@ class SDPByteEditVariantTests(unittest.TestCase):
 
     def test_unknown_variant_raises(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown sdp byte_edit variant"):
-            apply_sdp_byte_edit(
-                self._body(), random.Random(0), variant="not_a_variant"
-            )
+            apply_sdp_byte_edit(self._body(), random.Random(0), variant="not_a_variant")
 
     def test_empty_body_raises(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-empty SDP body"):
@@ -858,9 +837,7 @@ class SDPByteEditStrategyIntegrationTests(unittest.TestCase):
 
         self.assertEqual(len(case.records), 1)
         self.assertEqual(case.records[0].operator, "sdp_byte_edit")
-        self.assertTrue(
-            case.records[0].target.path.startswith("body:sdp:byte_edit.")
-        )
+        self.assertTrue(case.records[0].target.path.startswith("body:sdp:byte_edit."))
         self.assertIsNotNone(case.wire_text)
 
     def test_strategy_leaves_sip_framing_byte_exact(self) -> None:
@@ -882,7 +859,8 @@ class SDPByteEditStrategyIntegrationTests(unittest.TestCase):
         head_lines = head.split("\r\n")
         self.assertEqual(head_lines[0], "INVITE sip:fuzz@host SIP/2.0")
         non_cl = [
-            line for line in head_lines[1:]
+            line
+            for line in head_lines[1:]
             if not line.lower().startswith("content-length:")
         ]
         original = self._editable_with_sdp()
@@ -972,9 +950,7 @@ class SDPByteEditStrategyIntegrationTests(unittest.TestCase):
         self.assertEqual(len(case.records), 4)
         for record in case.records:
             self.assertEqual(record.operator, "sdp_byte_edit")
-            self.assertTrue(
-                record.target.path.startswith("body:sdp:byte_edit.")
-            )
+            self.assertTrue(record.target.path.startswith("body:sdp:byte_edit."))
 
     def test_ims_specific_profile_supports_sdp_byte_edit(self) -> None:
         mutator = SIPMutator()
@@ -998,9 +974,7 @@ class SDPByteEditReproductionCmdTests(unittest.TestCase):
     strategies move in lockstep.
     """
 
-    def _executor_with(
-        self, *, mutations_per_case: int, mt: bool = False
-    ) -> "object":
+    def _executor_with(self, *, mutations_per_case: int, mt: bool = False) -> "object":
         import tempfile
         from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
         from volte_mutation_fuzzer.campaign.core import CampaignExecutor

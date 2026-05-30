@@ -215,9 +215,7 @@ class CampaignCrashAnalyzer:
         with report_file.open("w", encoding="utf-8") as handle:
             handle.write("VOLTE FUZZER CRASH ANALYSIS REPORT\n")
             handle.write("=" * 60 + "\n")
-            handle.write(
-                f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
+            handle.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             handle.write(f"Source: {self.source_name}\n")
             handle.write(
                 f"Analysis duration: {time.time() - self.analysis_start_time:.1f}s\n\n"
@@ -242,9 +240,7 @@ class CampaignCrashAnalyzer:
                     percentage = (
                         (count / len(self.crash_cases)) * 100 if self.crash_cases else 0
                     )
-                    handle.write(
-                        f"  {category}: {count} cases ({percentage:.1f}%)\n"
-                    )
+                    handle.write(f"  {category}: {count} cases ({percentage:.1f}%)\n")
                 handle.write("\n")
 
             if self.crash_cases:
@@ -281,7 +277,9 @@ class CampaignCrashAnalyzer:
                     reverse=True,
                 )
                 for index, crash in enumerate(sorted_crashes[:10], 1):
-                    handle.write(f"\n  #{index} Case {crash.case_id} ({crash.verdict}):\n")
+                    handle.write(
+                        f"\n  #{index} Case {crash.case_id} ({crash.verdict}):\n"
+                    )
                     handle.write(f"    Category: {crash.crash_category}\n")
                     handle.write(
                         f"    Config: {crash.method} | {crash.layer} | {crash.strategy}\n"
@@ -345,17 +343,6 @@ class CampaignCrashAnalyzer:
         print(f"[crash-analysis] reports saved: {report_file} {json_file}")
         return report_file, json_file
 
-    def print_live_stats(self, force: bool = False) -> None:
-        if not self.enabled:
-            return
-
-        total_critical = self.stats["crashes"] + self.stats["stack_failures"]
-        if force or (self.crash_cases and len(self.crash_cases) % 10 == 0):
-            print(
-                f"[crash-analysis] live: {self.stats['total_cases']} cases | "
-                f"{total_critical} critical"
-            )
-
     def _convert_case_result(self, case_result: CaseResult) -> CrashCase:
         packet_summary = None
         if case_result.pcap_path:
@@ -394,9 +381,7 @@ class CampaignCrashAnalyzer:
             f"[crash-analysis] detected: case={crash_case.case_id} "
             f"verdict={crash_case.verdict} category={crash_case.crash_category}"
         )
-        print(
-            f"  config={crash_case.method} {crash_case.layer}/{crash_case.strategy}"
-        )
+        print(f"  config={crash_case.method} {crash_case.layer}/{crash_case.strategy}")
         print(
             "  reason="
             f"{crash_case.reason[:100]}{'...' if len(crash_case.reason) > 100 else ''}"
@@ -416,13 +401,9 @@ class CampaignCrashAnalyzer:
 
         with live_report.open("w", encoding="utf-8") as handle:
             handle.write("LIVE CRASH ANALYSIS SUMMARY\n")
-            handle.write(
-                f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
+            handle.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             handle.write(f"Source: {self.source_name}\n")
-            handle.write(
-                f"Duration: {time.time() - self.analysis_start_time:.1f}s\n"
-            )
+            handle.write(f"Duration: {time.time() - self.analysis_start_time:.1f}s\n")
             handle.write("=" * 50 + "\n\n")
             handle.write("STATISTICS:\n")
             handle.write(f"  Total cases: {self.stats['total_cases']}\n")

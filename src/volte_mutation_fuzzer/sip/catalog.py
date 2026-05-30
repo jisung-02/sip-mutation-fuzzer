@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field
 
-from volte_mutation_fuzzer.sip.common import SIPMethod, StatusClass
+from volte_mutation_fuzzer.sip.common import SIPMethod
 from volte_mutation_fuzzer.sip.requests import (
     REQUEST_DEFINITIONS,
     REQUEST_MODELS_BY_METHOD,
@@ -46,12 +46,6 @@ class SIPCatalog(BaseModel):
             for defn in self.response_definitions
             if defn.status_code == status_code
         )
-
-    def grouped_response_counts(self) -> dict[StatusClass, int]:
-        counts = {status_class: 0 for status_class in StatusClass}
-        for definition in self.response_definitions:
-            counts[definition.status_class] += 1
-        return counts
 
     def request_json_schemas(self) -> dict[SIPMethod, dict[str, object]]:
         return {
