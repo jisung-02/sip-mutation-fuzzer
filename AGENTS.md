@@ -43,7 +43,6 @@ uv run fuzzer campaign run \
   --mode real-ue-direct \
   --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --layer wire --strategy identity \
-  --mt-invite-template a31 \
   --ipsec-mode null \
   --preserve-contact --preserve-via \
   --max-cases 10
@@ -132,7 +131,7 @@ src/volte_mutation_fuzzer/
 이력 노트:
 - 메모리 `project_a31_real_ue_direct_breakthrough.md` 에 박힌 "111111 = A31, IP=10.20.20.8" 은 2026-04-11 시점 환경. 현재는 A31 슬롯이 다른 디바이스로 회전 중. attach 성공 시 IP 가 다를 수 있어 live resolver 결과를 신뢰한다. hardcoded fallback 은 제거되었고, resolver 실패 시에만 `VMF_MSISDN_TO_IP_<msisdn>` 를 명시한다.
 - iPhone 16e 의 protected port 페어는 `port_pc=63193 / port_ps=61008` 처럼 비-인접. fuzzer 의 native IPsec 경로는 `Security-Client` 헤더 + xfrm `dport` 매핑으로 정확 추출 (commit `0a03f78`).
-- iPhone 전용 mt-invite-template 부재 — 현재 `a31` template 가 generic 3GPP MT-INVITE 형식이라 일단 호환되지만 iPhone 응답 검증은 미완. SDP fuzzing 캠페인 시 baseline (identity strategy) 으로 정상 attach/응답 확인 후 진행 권장.
+- iPhone 전용 MT-INVITE 응답 검증은 미완. SDP fuzzing 캠페인 시 baseline (identity strategy) 으로 정상 attach/응답 확인 후 진행 권장.
 
 ## 🔑 핵심 성과
 
