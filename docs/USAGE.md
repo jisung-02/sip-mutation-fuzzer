@@ -13,14 +13,14 @@ uv sync
 ### 빠른 시작
 ```bash
 # 소프트폰 대상 퍼징
-uv run fuzzer campaign run --target-host 127.0.0.1 --max-cases 10
+uv run fuzzer campaign run --mode softphone --target-host 127.0.0.1 --max-cases 10
 
 # 실기기 대상 퍼징
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
+uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --mt-invite-template a31 --ipsec-mode null --max-cases 5
 
 # 실기기 대상 실제 IPsec 경로 검증
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
+uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --mt-invite-template a31 --ipsec-mode native --max-cases 1
 ```
 
@@ -61,7 +61,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN>
 --target-port <PORT>        # 목적지 포트 (기본: 5060)  
 --target-msisdn <MSISDN>    # UE MSISDN. 현재 매핑은 live resolver 기준
 --transport UDP|TCP         # 전송 프로토콜 (기본: UDP)
---mode softphone|real-ue-direct  # 동작 모드
+--mode softphone|real-ue-direct  # 동작 모드 (기본: real-ue-direct)
 
 # 퍼징 설정
 --methods <LIST>            # SIP 메서드 (OPTIONS,INVITE,MESSAGE,...)

@@ -87,6 +87,8 @@ class CampaignRunCLITests(unittest.TestCase):
                 [
                     "campaign",
                     "run",
+                    "--mode",
+                    "softphone",
                     "--target-host",
                     responder.host,
                     "--target-port",
@@ -167,6 +169,50 @@ class CampaignRunCLITests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertTrue(captured["config"].crash_analysis)
+
+    def test_run_command_defaults_to_real_ue_direct_mode(self) -> None:
+        captured: dict[str, CampaignConfig] = {}
+
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-default-real-ue",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--target-msisdn",
+                    "222222",
+                    "--methods",
+                    "MESSAGE",
+                    "--mt",
+                    "--ipsec-mode",
+                    "native",
+                    "--layer",
+                    "byte",
+                    "--strategy",
+                    "identity",
+                    "--max-cases",
+                    "1",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].mode, "real-ue-direct")
 
     def test_run_command_packet_file_defaults_to_verbatim_contract(self) -> None:
         captured: dict[str, CampaignConfig] = {}

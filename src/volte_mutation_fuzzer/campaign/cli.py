@@ -157,7 +157,7 @@ def run_command(
     mode: Annotated[
         str,
         typer.Option("--mode", help="Target mode (softphone/real-ue-direct)."),
-    ] = "softphone",
+    ] = "real-ue-direct",
     log_path: Annotated[
         str | None,
         typer.Option(
