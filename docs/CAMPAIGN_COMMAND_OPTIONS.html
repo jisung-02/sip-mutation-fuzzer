@@ -181,6 +181,65 @@
         <pre><code>uv run fuzzer campaign run --methods MESSAGE --mt --layer byte --strategy identity --max-cases 30 --cooldown 0 --timeout 1 --output message-native-burst</code></pre>
       </section>
 
+      <section class="panel">
+        <h2>장시간 고속 실행</h2>
+        <p>
+          timeout/unknown이 10회 연속 나오면 기본 circuit breaker가 캠페인을
+          중단한다. 응답 verdict와 pcap/ADB 근거를 유지하면서 오래 돌릴 때는
+          breaker만 끈다.
+        </p>
+        <pre><code>sudo uv run fuzzer campaign run --methods MESSAGE --mt --layer byte --strategy default --max-cases 10000 --cooldown 0 --timeout 0.01 --circuit-breaker 0</code></pre>
+        <p>
+          송신량 우선으로 pcap과 ADB 오버헤드까지 줄일 때는 아래처럼 실행한다.
+          이 모드는 crash/packet 증거 수집력이 떨어지므로 장시간 부하용으로만
+          쓴다.
+        </p>
+        <pre><code>sudo uv run fuzzer campaign run --methods MESSAGE --mt --layer byte --strategy default --max-cases 10000 --cooldown 0 --timeout 0.01 --circuit-breaker 0 --no-pcap --no-adb --oracle-log-grace 0</code></pre>
+        <p>
+          timeout budget를 더 공격적으로 줄여도 된다. 단, native 경로에는
+          socket timeout 밖의 고정 비용이 있으므로 <code>--timeout 0.001</code>로
+          낮춰도 case wall time이 1ms가 되지는 않는다.
+        </p>
+        <pre><code>sudo uv run fuzzer campaign run --methods MESSAGE --mt --layer byte --strategy default --max-cases 10000 --cooldown 0 --timeout 0.001 --circuit-breaker 0 --no-pcap --no-adb --oracle-log-grace 0</code></pre>
+      </section>
+
+      <section class="panel warn">
+        <h2>속도 병목과 한계</h2>
+        <ol>
+          <li>
+            <strong><code>--mt</code>를 생략하면 다른 경로를 탄다.</strong>
+            <code>--methods MESSAGE --layer wire --strategy default</code>만 쓰면
+            출력이 <code>MESSAGE legacy:wire/default</code>로 나오며, 이 문서의
+            MT MESSAGE byte burst 경로가 아니다. native MESSAGE burst 기준 명령은
+            <code>--mt --layer byte</code>를 포함한다.
+          </li>
+          <li>
+            <strong>pcap은 case마다 최소 100ms 오버헤드가 있다.</strong>
+            <code>PcapCapture.start()</code>는 case별 <code>tcpdump</code>를 띄운 뒤
+            캡처 준비를 위해 <code>time.sleep(0.1)</code>을 수행한다. 고속 부하에서는
+            <code>--no-pcap</code>을 써야 이 비용을 없앨 수 있다.
+          </li>
+          <li>
+            <strong>ADB/log oracle도 case 처리 비용을 만든다.</strong>
+            real-UE에서는 ADB가 자동 활성화된다. 송신량만 우선할 때는
+            <code>--no-adb --oracle-log-grace 0</code>으로 logcat 수집과 grace
+            polling을 줄인다.
+          </li>
+          <li>
+            <strong>native IPsec은 timeout보다 느릴 수 있다.</strong>
+            native sender는 case마다 <code>docker exec pcscf python3 -c ...</code>
+            injector를 실행하고, 필요 시 P-CSCF log observer를 확인한다. 따라서
+            <code>--timeout 0.01</code>이나 <code>--timeout 0.001</code>을 줘도
+            docker exec, xfrm/session resolve, packet normalization 비용은 남는다.
+          </li>
+          <li>
+            <strong>현재 옵션만으로는 fire-and-forget/send-only 모드가 없다.</strong>
+            응답 대기와 oracle 판정을 완전히 건너뛰고 "그냥 쏘기만" 하는 진짜
+            초고속 경로는 별도 <code>send-only</code>류 옵션을 구현해야 한다.
+          </li>
+        </ol>
+      </section>
+
       <section>
         <h2>확인 기준</h2>
         <p>
@@ -400,6 +459,350 @@
               <td><code>--circuit-breaker</code></td>
               <td><code>10</code></td>
               <td>timeout/unknown verdict가 연속 N회 나오면 중단한다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>전체 옵션 체크리스트</h2>
+        <p>
+          아래 표는 <code>campaign run</code>의 CLI 옵션 전체를 기준으로 한다.
+          "최종 기본값"은 CLI 입력 기본값과 validator/runtime 보정이 다른 경우를
+          함께 적었다.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>옵션</th>
+              <th>입력 기본값</th>
+              <th>최종 기본값 / 보정</th>
+              <th>사용 위치</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>--target-host</code></td>
+              <td><code>None</code></td>
+              <td>생략 시 <code>--target-msisdn</code>으로 live resolve</td>
+              <td>직접 UE IP 또는 softphone host를 지정할 때 사용한다.</td>
+            </tr>
+            <tr>
+              <td><code>--target-port</code></td>
+              <td><code>5060</code></td>
+              <td>real-UE MSISDN/native 경로에서는 protected port가 별도 resolve될 수 있음</td>
+              <td>일반 SIP socket 대상 포트다.</td>
+            </tr>
+            <tr>
+              <td><code>--methods</code></td>
+              <td><code>None</code></td>
+              <td>method와 response code가 모두 없으면 전체 SIP method set</td>
+              <td><code>MESSAGE</code>처럼 fuzz 대상 메서드를 좁힌다.</td>
+            </tr>
+            <tr>
+              <td><code>--response-codes</code></td>
+              <td><code>None</code></td>
+              <td>생략 시 request method campaign</td>
+              <td>SIP response fuzzing 대상 status code 목록이다.</td>
+            </tr>
+            <tr>
+              <td><code>--with-dialog</code> / <code>--no-with-dialog</code></td>
+              <td><code>None</code></td>
+              <td><code>False</code></td>
+              <td>필요한 request generation에 합성 dialog context를 붙인다.</td>
+            </tr>
+            <tr>
+              <td><code>--strategy</code></td>
+              <td><code>None</code></td>
+              <td>일반 campaign: <code>default</code>, legacy 보정 후 <code>default,state_breaker</code>; packet-file: <code>identity</code></td>
+              <td><code>identity</code> baseline 또는 <code>default</code> fuzzing 선택.</td>
+            </tr>
+            <tr>
+              <td><code>--profile</code></td>
+              <td><code>None</code></td>
+              <td><code>legacy</code></td>
+              <td>mutation policy 축이다.</td>
+            </tr>
+            <tr>
+              <td><code>--layer</code></td>
+              <td><code>None</code></td>
+              <td>일반 campaign: <code>model,wire,byte</code>; packet-file: <code>byte</code></td>
+              <td>MESSAGE native burst에서는 보통 <code>byte</code>로 고정한다.</td>
+            </tr>
+            <tr>
+              <td><code>--max-cases</code></td>
+              <td><code>1000</code></td>
+              <td>동일</td>
+              <td>총 case 수. 장시간 실행은 <code>10000</code> 이상으로 늘린다.</td>
+            </tr>
+            <tr>
+              <td><code>--mutations-per-case</code></td>
+              <td><code>1</code></td>
+              <td>동일</td>
+              <td>한 case에 변이를 여러 번 stacking한다.</td>
+            </tr>
+            <tr>
+              <td><code>--timeout</code></td>
+              <td><code>5.0</code></td>
+              <td>동일</td>
+              <td>응답 대기 시간. 고속 송신은 <code>0.01</code>처럼 낮춘다.</td>
+            </tr>
+            <tr>
+              <td><code>--cooldown</code></td>
+              <td><code>0.2</code></td>
+              <td>동일</td>
+              <td>case 사이 대기. burst는 <code>0</code>을 쓴다.</td>
+            </tr>
+            <tr>
+              <td><code>--oracle-log-grace</code></td>
+              <td><code>None</code></td>
+              <td>INVITE: 8초, 그 외 stateless method: 1초</td>
+              <td><code>0</code>으로 낮추면 로그 대기 오버헤드를 줄인다.</td>
+            </tr>
+            <tr>
+              <td><code>--wait-idle-timeout</code></td>
+              <td><code>10.0</code></td>
+              <td>동일</td>
+              <td>INVITE call state idle 대기. MESSAGE에는 영향이 작다.</td>
+            </tr>
+            <tr>
+              <td><code>--seed-start</code></td>
+              <td><code>0</code></td>
+              <td>동일</td>
+              <td>재현 시작 seed다.</td>
+            </tr>
+            <tr>
+              <td><code>--output</code></td>
+              <td><code>None</code></td>
+              <td><code>results/YYYYMMDD_HHMMSS_xxxxxxxx</code> 자동 생성</td>
+              <td>결과 디렉터리 이름을 고정한다.</td>
+            </tr>
+            <tr>
+              <td><code>--process-name</code></td>
+              <td><code>baresip</code></td>
+              <td>real-UE에서는 process check가 자동 비활성화될 수 있음</td>
+              <td>softphone process liveness check 대상이다.</td>
+            </tr>
+            <tr>
+              <td><code>--no-process-check</code></td>
+              <td><code>None</code></td>
+              <td>real-UE mode에서는 자동 비활성화</td>
+              <td>process liveness check를 끈다.</td>
+            </tr>
+            <tr>
+              <td><code>--transport</code></td>
+              <td><code>UDP</code></td>
+              <td>native IPsec은 현재 UDP/TCP만 허용, 일반적으로 UDP 사용</td>
+              <td>SIP transport다.</td>
+            </tr>
+            <tr>
+              <td><code>--mode</code></td>
+              <td><code>real-ue-direct</code></td>
+              <td>동일</td>
+              <td>기본 sender 실행 경로다.</td>
+            </tr>
+            <tr>
+              <td><code>--log-path</code></td>
+              <td><code>None</code></td>
+              <td>생략 시 target process log 검사 없음</td>
+              <td>stack trace 탐지용 로그 파일 경로다.</td>
+            </tr>
+            <tr>
+              <td><code>--adb</code> / <code>--no-adb</code></td>
+              <td><code>None</code></td>
+              <td>real-UE에서는 자동 활성, <code>--ios</code>와 함께 명시 없으면 꺼짐</td>
+              <td><code>--no-adb</code>는 고속 송신에서 logcat 오버헤드를 줄인다.</td>
+            </tr>
+            <tr>
+              <td><code>--adb-serial</code></td>
+              <td><code>None</code></td>
+              <td>생략 시 adb 기본 선택</td>
+              <td>여러 Android 기기가 붙은 경우 지정한다.</td>
+            </tr>
+            <tr>
+              <td><code>--adb-buffers</code></td>
+              <td><code>None</code></td>
+              <td>config 기본 logcat buffer set 사용</td>
+              <td><code>main,system,radio,crash</code>처럼 수집 버퍼를 제한한다.</td>
+            </tr>
+            <tr>
+              <td><code>--ios</code> / <code>--no-ios</code></td>
+              <td><code>False</code></td>
+              <td>동일</td>
+              <td>iPhone syslog/crash report 수집을 켠다.</td>
+            </tr>
+            <tr>
+              <td><code>--ios-udid</code></td>
+              <td><code>None</code></td>
+              <td>USB iPhone 1대면 auto resolve</td>
+              <td>대상 iPhone UDID다.</td>
+            </tr>
+            <tr>
+              <td><code>--ios-filter-processes</code></td>
+              <td><code>None</code></td>
+              <td>config 기본 process filter set 사용</td>
+              <td><code>idevicesyslog -p</code> process filter다.</td>
+            </tr>
+            <tr>
+              <td><code>--ios-diagnostics</code> / <code>--no-ios-diagnostics</code></td>
+              <td><code>False</code></td>
+              <td>동일</td>
+              <td>case별 diagnostics 실행. 느리므로 burst에서는 보통 끈다.</td>
+            </tr>
+            <tr>
+              <td><code>--pcap</code> / <code>--no-pcap</code></td>
+              <td><code>None</code></td>
+              <td>real-UE에서는 자동 활성</td>
+              <td><code>--no-pcap</code>은 고속 송신에서 tcpdump 오버헤드를 줄인다.</td>
+            </tr>
+            <tr>
+              <td><code>--pcap-interface</code></td>
+              <td><code>any</code></td>
+              <td>real-UE에서 <code>br-volte</code>로 보정</td>
+              <td>tcpdump capture interface다.</td>
+            </tr>
+            <tr>
+              <td><code>--target-msisdn</code></td>
+              <td><code>None</code></td>
+              <td>real-UE CLI에서 <code>111111</code> 주입</td>
+              <td>UE Contact, xfrm state, native IPsec resolve 기준이다.</td>
+            </tr>
+            <tr>
+              <td><code>--impi</code></td>
+              <td><code>None</code></td>
+              <td>resolver가 Contact user를 IMPI로 사용, 실패 시 <code>VMF_IMPI</code> fallback</td>
+              <td>Contact user/IMPI 자동 resolve가 실패할 때만 명시한다.</td>
+            </tr>
+            <tr>
+              <td><code>--mt</code> / <code>--no-mt</code></td>
+              <td><code>False</code></td>
+              <td><code>--mt</code>가 template을 <code>3gpp</code>로 켬</td>
+              <td>MESSAGE에서는 SMS-over-IMS MT packet bytes 경로를 사용한다.</td>
+            </tr>
+            <tr>
+              <td><code>--mt-invite-template</code></td>
+              <td><code>None</code></td>
+              <td><code>--mt</code> 사용 시 <code>3gpp</code></td>
+              <td>INVITE template 이름 또는 파일 경로다.</td>
+            </tr>
+            <tr>
+              <td><code>--packet-file</code></td>
+              <td><code>None</code></td>
+              <td>사용 시 method/layer/strategy가 verbatim contract로 보정</td>
+              <td>raw SIP 파일을 변이 없이 보낼 때 사용한다. <code>--mt</code>와 상호배타다.</td>
+            </tr>
+            <tr>
+              <td><code>--ipsec-mode</code></td>
+              <td><code>None</code></td>
+              <td>real-UE CLI에서 <code>native</code> 주입, <code>ipsec</code>은 native alias</td>
+              <td>native/null/bypass 송신 경로를 고른다.</td>
+            </tr>
+            <tr>
+              <td><code>--preserve-via</code> / <code>--no-preserve-via</code></td>
+              <td><code>False</code></td>
+              <td><code>--mt</code> + non-native에서는 자동 보존</td>
+              <td>Via host/port rewrite를 막는다.</td>
+            </tr>
+            <tr>
+              <td><code>--preserve-contact</code> / <code>--no-preserve-contact</code></td>
+              <td><code>False</code></td>
+              <td><code>--mt</code> + non-native에서는 자동 보존</td>
+              <td>Contact host/port rewrite를 막는다.</td>
+            </tr>
+            <tr>
+              <td><code>--pixel</code> / <code>--no-pixel</code></td>
+              <td><code>False</code></td>
+              <td>동일</td>
+              <td>Request-URI를 resolved UE Contact URI로 바꿔 Pixel/Shannon IMS 호환성을 높인다.</td>
+            </tr>
+            <tr>
+              <td><code>--mo-contact-host</code></td>
+              <td><code>10.20.20.9</code></td>
+              <td>동일</td>
+              <td>MT INVITE Contact의 originating UE IP다.</td>
+            </tr>
+            <tr>
+              <td><code>--mo-contact-port-pc</code></td>
+              <td><code>31800</code></td>
+              <td>동일</td>
+              <td>MO UE protected client port다.</td>
+            </tr>
+            <tr>
+              <td><code>--mo-contact-port-ps</code></td>
+              <td><code>31100</code></td>
+              <td>동일</td>
+              <td>MO UE protected server port다.</td>
+            </tr>
+            <tr>
+              <td><code>--from-msisdn</code></td>
+              <td><code>222222</code></td>
+              <td>동일</td>
+              <td>MT INVITE/MESSAGE의 originating identity다.</td>
+            </tr>
+            <tr>
+              <td><code>--mt-local-port</code></td>
+              <td><code>15100</code></td>
+              <td>native에서는 authoritative 하지 않음</td>
+              <td>null/bypass MT 경로의 local port/Via sent-by 동기화에 쓴다.</td>
+            </tr>
+            <tr>
+              <td><code>--crash-analysis</code> / <code>--no-crash-analysis</code></td>
+              <td><code>False</code></td>
+              <td>동일</td>
+              <td>실시간 crash analysis/reporting을 켠다.</td>
+            </tr>
+            <tr>
+              <td><code>--resume</code> / <code>--no-resume</code></td>
+              <td><code>False</code></td>
+              <td>동일</td>
+              <td>기존 output checkpoint에서 이어서 실행한다.</td>
+            </tr>
+            <tr>
+              <td><code>--circuit-breaker</code></td>
+              <td><code>10</code></td>
+              <td><code>0</code>이면 비활성화</td>
+              <td>timeout/unknown 연속 N회에서 abort한다. 장시간 timeout campaign은 <code>0</code>을 쓴다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Report / Replay 옵션</h2>
+        <p>
+          실행 옵션은 아니지만 같은 <code>fuzzer campaign</code> 하위 명령에서
+          결과 확인과 재현에 쓰는 옵션이다.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>명령</th>
+              <th>옵션</th>
+              <th>기본값</th>
+              <th>의미</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>campaign report &lt;path&gt;</code></td>
+              <td><code>--filter</code></td>
+              <td><code>None</code></td>
+              <td>
+                verdict 목록으로 case를 필터링한다. 예:
+                <code>--filter suspicious,crash,stack_failure</code>
+              </td>
+            </tr>
+            <tr>
+              <td><code>campaign report &lt;path&gt;</code></td>
+              <td><code>--html</code></td>
+              <td><code>False</code></td>
+              <td>JSONL 결과에서 standalone HTML report를 생성한다.</td>
+            </tr>
+            <tr>
+              <td><code>campaign replay &lt;path&gt;</code></td>
+              <td><code>--case-id</code></td>
+              <td>필수</td>
+              <td>지정한 case의 reproduction command를 다시 실행한다.</td>
             </tr>
           </tbody>
         </table>

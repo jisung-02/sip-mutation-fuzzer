@@ -45,10 +45,55 @@ class RealUEDirectHelperTests(unittest.TestCase):
 
         self.assertEqual(resolved.host, "10.20.20.2")
         self.assertEqual(resolved.port, 5072)
+        self.assertEqual(resolved.impi, "001010000123512")
         self.assertEqual(
             resolved.observer_events,
             ("resolver:scscf-kamctl:222222->10.20.20.2:5072",),
         )
+
+    def test_resolver_returns_impi_from_pcscf_register_contact(self) -> None:
+        resolver = RealUEDirectResolver()
+        target = TargetEndpoint(mode="real-ue-direct", msisdn="111111")
+
+        def fake_run(args, **kwargs):
+            if args == ["docker", "exec", "pcscf", "ip", "xfrm", "state"]:
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        "src 10.20.20.5 dst 172.22.0.21\n"
+                        "\tproto esp spi 0x00001004 reqid 4100 mode transport\n"
+                        "\tsel src 10.20.20.5/32 dst 172.22.0.21/32 sport 49168 dport 5102\n"
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["docker", "exec", "scscf", "kamctl", "ul"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+            if args[:5] == ["docker", "exec", "pcscf", "kamctl", "ul"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+            if args[:4] == ["docker", "exec", "mysql", "mysql"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+            if args == ["docker", "logs", "pcscf", "--tail", "500"]:
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        "3(45) NOTICE: <script>: Contact header: "
+                        '<sip:001010000123511@10.20.20.5:5060>;+sip.instance="x"\n'
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected command: {args!r}")
+
+        with (
+            patch.object(resolver, "_lookup_imsi_from_pyhss", return_value="001010000123511"),
+            patch("volte_mutation_fuzzer.sender.real_ue.subprocess.run", side_effect=fake_run),
+        ):
+            resolved = resolver.resolve(target)
+
+        self.assertEqual(resolved.host, "10.20.20.5")
+        self.assertEqual(resolved.port, 5060)
+        self.assertEqual(resolved.impi, "001010000123511")
 
     def test_check_route_to_target_uses_darwin_route_get(self) -> None:
         with (

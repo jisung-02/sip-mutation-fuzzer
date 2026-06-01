@@ -42,7 +42,7 @@ _XFRM_DPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.DOTALL,
 )
 _KAMCTL_CONTACT_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"Contact:\s*<sip:[^@]+@([\d.]+):(\d+)"
+    r"(?:Contact:\s*)?<sip:(?P<impi>[^@;>\s]+)@(?P<host>[\d.]+):(?P<port>\d+)"
 )
 _PCSCF_LOG_CONTACT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"Contact header:\s*<sip:(\d+)@([\d.]+):(\d+)>"
@@ -242,6 +242,7 @@ class RealUEDirectResolver:
                     host=contact.host,
                     port=contact.port,
                     source=f"{container}-kamctl",
+                    impi=contact.impi,
                 )
         return None
 
@@ -284,9 +285,10 @@ class RealUEDirectResolver:
         if match is not None:
             return UEContact(
                 msisdn=msisdn,
-                host=match.group(1),
-                port=int(match.group(2)),
+                host=match.group("host"),
+                port=int(match.group("port")),
                 source="scscf-mysql",
+                impi=match.group("impi"),
             )
         return None
 
@@ -330,6 +332,7 @@ class RealUEDirectResolver:
                 host=host,
                 port=port,
                 source="pcscf-log",
+                impi=imsi,
             )
         return None
 
@@ -544,9 +547,10 @@ class RealUEDirectResolver:
             if direct_match is not None:
                 return UEContact(
                     msisdn=msisdn,
-                    host=direct_match.group(1),
-                    port=int(direct_match.group(2)),
+                    host=direct_match.group("host"),
+                    port=int(direct_match.group("port")),
                     source="kamctl",
+                    impi=direct_match.group("impi"),
                 )
             return None
 
@@ -562,9 +566,10 @@ class RealUEDirectResolver:
             if match is not None:
                 return UEContact(
                     msisdn=msisdn,
-                    host=match.group(1),
-                    port=int(match.group(2)),
+                    host=match.group("host"),
+                    port=int(match.group("port")),
                     source="kamctl",
+                    impi=match.group("impi"),
                 )
         return None
 
