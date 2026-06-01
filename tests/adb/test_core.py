@@ -209,9 +209,7 @@ def test_take_snapshot_full_profile_runs_shell_dumps_concurrently(
         "meminfo output\n"
     )
     assert Path(snapshot.dmesg_path).read_text(encoding="utf-8") == "dmesg output\n"
-    assert any(
-        "dumpsys telephony.registry" in entry for entry in started
-    ), started
+    assert any("dumpsys telephony.registry" in entry for entry in started), started
     assert any("dumpsys ims" in entry for entry in started), started
 
 
@@ -287,7 +285,14 @@ def test_take_snapshot_light_profile_keeps_telephony_and_logcat(
         timeout: int,
     ) -> _DummyCompletedProcess:
         called_cmds.append(tuple(cmd))
-        if tuple(cmd) == ("adb", "-s", "SER123", "shell", "dumpsys", "telephony.registry"):
+        if tuple(cmd) == (
+            "adb",
+            "-s",
+            "SER123",
+            "shell",
+            "dumpsys",
+            "telephony.registry",
+        ):
             return _DummyCompletedProcess(stdout="telephony output\n")
         raise AssertionError(f"unexpected shell command: {cmd}")
 
@@ -310,12 +315,14 @@ def test_take_snapshot_light_profile_keeps_telephony_and_logcat(
     assert Path(snapshot.telephony_path).read_text(encoding="utf-8") == (
         "telephony output\n"
     )
-    assert Path(tmp_path / "snapshots" / "logcat_main.txt").read_text(
-        encoding="utf-8"
-    ) == "main-window\n"
-    assert Path(tmp_path / "snapshots" / "logcat_radio.txt").read_text(
-        encoding="utf-8"
-    ) == "radio-window\n"
+    assert (
+        Path(tmp_path / "snapshots" / "logcat_main.txt").read_text(encoding="utf-8")
+        == "main-window\n"
+    )
+    assert (
+        Path(tmp_path / "snapshots" / "logcat_radio.txt").read_text(encoding="utf-8")
+        == "radio-window\n"
+    )
     assert Path(snapshot.logcat_path).read_text(encoding="utf-8") == (
         "radio-window\nmain-window\n"
     )
@@ -524,8 +531,10 @@ def test_take_snapshot_uses_collector_window_for_logcat(tmp_path: Path) -> None:
     assert "radio-first" in body
     assert "main-second" in body
     assert "boundary-window" in body
-    assert body.index("radio-first") < body.index("main-second") < body.index(
-        "boundary-window"
+    assert (
+        body.index("radio-first")
+        < body.index("main-second")
+        < body.index("boundary-window")
     )
     assert not any("logcat" in cmd for cmd in calls)
 
@@ -543,8 +552,14 @@ class AdbLogCollectorTests(unittest.TestCase):
             collector.start(clear=True)
             collector.stop()
 
-        run_mock.assert_called_once_with(
-            ["adb", "-s", "SER123", "logcat", "-c"],
+        self.assertEqual(run_mock.call_count, 2)
+        run_mock.assert_any_call(
+            ["adb", "-s", "SER123", "logcat", "-b", "main", "-c"],
+            capture_output=True,
+            timeout=10,
+        )
+        run_mock.assert_any_call(
+            ["adb", "-s", "SER123", "logcat", "-b", "radio", "-c"],
             capture_output=True,
             timeout=10,
         )
@@ -799,10 +814,12 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         events = detector.feed_lines(
             [("radio", line) for line in _read_fixture("logcat_rilj_unexpected.txt")]
         )
-        # RILJ tag is in the whitelist; oem_ril_error pattern matches.
+        # RILJ tag is in the whitelist; routine "error: 0" unexpected
+        # responses are warning-level noise, not modem failure evidence.
         self.assertGreaterEqual(len(events), 2)
         self.assertTrue(all(e.source_tag == "RILJ" for e in events))
-        self.assertEqual(events[0].pattern_name, "oem_ril_error")
+        self.assertEqual(events[0].pattern_name, "rilj_unexpected_response")
+        self.assertEqual(events[0].severity, "warning")
 
     def test_memory_crash_lines_promote_regardless_of_tag(self) -> None:
         # fatal_signal patterns bypass the whitelist — even a non-IMS tag
@@ -855,7 +872,9 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         # conservatively — better to over-report than silently swallow real
         # crashes from a misconfigured collector.
         detector = AdbAnomalyDetector()
-        event = detector.feed_line("crash", "Fatal signal SIGSEGV in some unknown format")
+        event = detector.feed_line(
+            "crash", "Fatal signal SIGSEGV in some unknown format"
+        )
         assert event is not None
         self.assertEqual(event.source_tag, None)
 
@@ -871,8 +890,8 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
 
     def test_source_tag_recorded_on_event(self) -> None:
         detector = AdbAnomalyDetector()
-        # oem_ril_error needs "error" in the line; the real captured line
-        # has "error: 0" which qualifies.
+        # "error: 0" is a successful modem response status despite the RILJ
+        # wording. Keep the event for correlation, but do not promote it.
         line = (
             "04-25 12:00:00.000 E/RILJ    ( 2153): processResponse: "
             "Unexpected response! serial: 3000, error: 0 [PHONE0]"
@@ -880,9 +899,8 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         event = detector.feed_line("radio", line)
         assert event is not None
         self.assertEqual(event.source_tag, "RILJ")
-        self.assertEqual(event.pattern_name, "oem_ril_error")
-        # promoted to critical so verdict can upgrade to stack_failure
-        self.assertEqual(event.severity, "critical")
+        self.assertEqual(event.pattern_name, "rilj_unexpected_response")
+        self.assertEqual(event.severity, "warning")
 
     def test_threadtime_format_tag_extraction(self) -> None:
         detector = AdbAnomalyDetector()
@@ -897,7 +915,9 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         event = detector.feed_line("crash", line)
         assert event is not None
         self.assertEqual(event.source_tag, "AndroidRuntime")
-        self.assertIn(event.pattern_name, ("android_runtime_fatal", "uncaught_java_exception"))
+        self.assertIn(
+            event.pattern_name, ("android_runtime_fatal", "uncaught_java_exception")
+        )
 
     def test_a31_real_imsservice_crash_promotes(self) -> None:
         # Real captured crash from A31 fuzzing campaign (2025-04-13):
@@ -914,10 +934,16 @@ class AdbAnomalyDetectorTagFilterTests(unittest.TestCase):
         # require at least one critical to keep the test resilient to
         # pattern-order changes.
         critical = [e for e in events if e.severity == "critical"]
-        self.assertGreaterEqual(len(critical), 1,
-            f"oracle missed A31 imsservice crash; events={[e.pattern_name for e in events]}")
+        self.assertGreaterEqual(
+            len(critical),
+            1,
+            f"oracle missed A31 imsservice crash; events={[e.pattern_name for e in events]}",
+        )
         # AndroidRuntime is whitelisted, so its FATAL EXCEPTION line should
         # propagate the source tag rather than being suppressed.
         ar_events = [e for e in events if e.source_tag == "AndroidRuntime"]
-        self.assertGreaterEqual(len(ar_events), 1,
-            "expected at least one event tagged 'AndroidRuntime' from the threadtime crash log")
+        self.assertGreaterEqual(
+            len(ar_events),
+            1,
+            "expected at least one event tagged 'AndroidRuntime' from the threadtime crash log",
+        )

@@ -4,7 +4,9 @@ import html
 import json
 import logging
 import math
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from volte_mutation_fuzzer.campaign.contracts import (
     CampaignResult,
@@ -56,7 +58,10 @@ def _context_lines(case: CaseResult) -> list[str]:
         value = case.details.get(key)
         if not isinstance(value, dict):
             continue
-        text = str(value.get("matched_line") or value.get("matched_pattern") or "").strip()
+        warning = cast(Mapping[str, object], value)
+        text = str(
+            warning.get("matched_line") or warning.get("matched_pattern") or ""
+        ).strip()
         if not text:
             continue
         lines.append(f"{label}: {text}")
@@ -115,7 +120,9 @@ def _svg_timeline(cases: list[CaseResult], width: int = 800, height: int = 120) 
     plot_h = height - 2 * margin_y
 
     parts: list[str] = []
-    parts.append(f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
+    parts.append(
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+    )
 
     # X axis
     parts.append(
@@ -170,7 +177,9 @@ def _svg_bar_chart(cases: list[CaseResult], width: int = 600, height: int = 200)
     total_h = margin_y * 2 + len(groups) * (bar_h + gap)
 
     parts: list[str] = []
-    parts.append(f'<svg width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">')
+    parts.append(
+        f'<svg width="{width}" height="{total_h}" viewBox="0 0 {width} {total_h}">'
+    )
 
     max_count = max((sum(v.values()) for v in groups.values()), default=1)
 
@@ -228,7 +237,11 @@ def _render_interesting_case(case: CaseResult, interesting_dir: Path) -> str:
 
     # Mutation ops
     if case.mutation_ops:
-        parts.append("<br><small><b>Mutations:</b> " + _esc(", ".join(case.mutation_ops)) + "</small>")
+        parts.append(
+            "<br><small><b>Mutations:</b> "
+            + _esc(", ".join(case.mutation_ops))
+            + "</small>"
+        )
 
     if case.details:
         parts.append(
@@ -270,9 +283,9 @@ def _render_interesting_case(case: CaseResult, interesting_dir: Path) -> str:
 
     # Reproduction command
     parts.append(
-        f'<details><summary>Reproduction</summary>'
+        f"<details><summary>Reproduction</summary>"
         f'<pre style="background:#f0f0f0;padding:6px;font-size:11px;">'
-        f'{_esc(case.reproduction_cmd)}</pre></details>'
+        f"{_esc(case.reproduction_cmd)}</pre></details>"
     )
 
     parts.append("</div>")
@@ -326,15 +339,17 @@ class HtmlReportGenerator:
         # Header
         duration = ""
         if header.started_at and header.completed_at:
-            duration = f" | {_esc(header.started_at[:16])} ~ {_esc(header.completed_at[:16])}"
+            duration = (
+                f" | {_esc(header.started_at[:16])} ~ {_esc(header.completed_at[:16])}"
+            )
         parts.append(
-            f'<h1>Campaign Report: {_esc(header.campaign_id)}'
+            f"<h1>Campaign Report: {_esc(header.campaign_id)}"
             f'<span class="status {header.status}">{header.status}</span></h1>'
         )
         parts.append(f"<p>Total: {summary.total} cases{duration}</p>")
 
         # Section 1: Summary
-        parts.append('<h2>1. Summary</h2>')
+        parts.append("<h2>1. Summary</h2>")
         parts.append('<div class="summary-row">')
         parts.append(f'<div class="chart-box">{_svg_donut(summary)}</div>')
         parts.append('<div class="legend">')
@@ -349,16 +364,16 @@ class HtmlReportGenerator:
         parts.append("</div></div>")
 
         # Section 2: Strategy/Layer bar chart
-        parts.append('<h2>2. Profile / Layer / Strategy Distribution</h2>')
+        parts.append("<h2>2. Profile / Layer / Strategy Distribution</h2>")
         parts.append(_svg_bar_chart(cases))
 
         # Section 3: Timeline
-        parts.append('<h2>3. Verdict Timeline</h2>')
+        parts.append("<h2>3. Verdict Timeline</h2>")
         parts.append(_svg_timeline(cases))
 
         # Section 4: Interesting cases
         interesting_cases = [c for c in cases if c.verdict in _INTERESTING_VERDICTS]
-        parts.append(f'<h2>4. Interesting Cases ({len(interesting_cases)})</h2>')
+        parts.append(f"<h2>4. Interesting Cases ({len(interesting_cases)})</h2>")
         if interesting_cases:
             for c in interesting_cases:
                 parts.append(_render_interesting_case(c, interesting_dir))
@@ -366,11 +381,11 @@ class HtmlReportGenerator:
             parts.append("<p>No crash/suspicious/stack_failure cases found.</p>")
 
         # Section 5: All cases table
-        parts.append(f'<h2>5. All Cases ({len(cases)})</h2>')
+        parts.append(f"<h2>5. All Cases ({len(cases)})</h2>")
         parts.append(self._cases_table(cases))
 
         # Section 6: Config
-        parts.append('<h2>6. Config</h2>')
+        parts.append("<h2>6. Config</h2>")
         parts.append("<details><summary>CampaignConfig</summary>")
         config_json = json.dumps(
             header.config.model_dump(mode="json"), ensure_ascii=False, indent=2

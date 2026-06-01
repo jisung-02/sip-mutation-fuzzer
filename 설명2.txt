@@ -1,0 +1,1980 @@
+ ▐▛███▜▌   Claude Code v2.1.140
+▝▜█████▛▘  Sonnet 4.6 · Claude Max
+  ▘▘ ▝▝    ~/Desktop/Project/volte-mutation-fuzzer
+
+❯ 현재 프로젝트 대략적인 파이프라인 설명좀                                      
+
+⏺ 주요 아키텍처 문서를 먼저 읽겠습니다.
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ VolteMutationFuzzer 파이프라인 개요
+
+  실기기(UE) 대상 VoLTE/IMS SIP 프로토콜 취약점 탐색 도구입니다. 큰 그림은
+  다음과 같습니다.
+
+  ---
+  전체 흐름
+
+  CLI 입력
+    ↓
+  CampaignConfig (설정 + MSISDN→IP 자동 resolve)
+    ↓
+  CaseGenerator (method × profile × layer × strategy 조합 생성)
+    ↓
+  Generator (SIP 패킷 생성)
+    ↓
+  Mutator (변이 적용)
+    ↓
+  Sender (실기기로 UDP 전송)
+    ↓
+  Oracle (응답 판정: normal / suspicious / timeout / crash)
+    ↓
+  ResultStore + PcapCapture + ADB/iOS 스냅샷
+
+  ---
+  핵심 컴포넌트 역할
+
+  1. Generator — SIP 패킷 원본 생성
+  - real-ue-direct 모드에서는 실제 캡처 기반 MT-INVITE 템플릿
+  (mt_invite_a31.sip.tmpl)을 사용
+  - 18개 슬롯(IMPI, port_pc/port_ps, Call-ID 등)을 동적으로 채워 렌더링
+
+  2. Mutator — 변이 엔진, 두 축으로 제어
+  - layer: model (SIP 구조 인식) → wire (텍스트 레벨) → byte (바이트 레벨)
+  - profile: legacy / delivery_preserving / ims_specific / parser_breaker
+  - strategy=default는 요청값일 뿐, 실제 concrete strategy는 profile + layer + 
+  seed로 결정됨
+
+  3. Sender (real-ue-direct 경로)
+  - resolve_protected_ports() → UE의 port_pc/port_ps 실시간 조회
+  - ipsec_mode=null: host에서 직접 소스 IP를 P-CSCF IP(172.22.0.21)로 스푸핑해
+  UDP 전송
+  - ipsec_mode=bypass: Docker P-CSCF 컨테이너 netns 진입 후 전송
+
+  4. Oracle — SIP 응답 → verdict 분류
+  - 180/200 → normal, 4xx/5xx → suspicious, 무응답 → timeout, 프로세스 종료 →
+  crash, logcat/iOS syslog 이상 → stack_failure
+
+  5. Storage — JSONL 형식 결과 저장 + pcap + ADB/iOS 스냅샷
+
+  ---
+  주요 설계 포인트
+
+  - mode(실행 경로)와 profile(변이 정책)은 독립 축 — 혼동 금지
+  - 현재 실기기 baseline이 확립된 메서드는 INVITE뿐 (real_ue_baseline)
+  - MSISDN→IP는 hardcoded 없이 항상 live resolver (kamctl → P-CSCF 로그 → xfrm
+  state) 순으로 조회
+  - 단편화 방지를 위해 payload 1400B 초과 시 경고 (fragment guard)
+
+✻ Brewed for 29s
+
+※ recap: VoLTE 실기기 퍼징 도구의 파이프라인 구조를 설명했습니다. 다음 요청을 기다리는 중입니다. (disable recaps in /config)
+
+❯ 이 흐름 설명좀                                                                
+                                                                                
+   CLI 입력                                                                     
+      ↓                                                                         
+    CampaignConfig (설정 + MSISDN→IP 자동 resolve)                              
+      ↓                                                                         
+    CaseGenerator (method × profile × layer × strategy 조합 생성)               
+      ↓                                                                         
+    Generator (SIP 패킷 생성)                                                   
+      ↓                                                                         
+    Mutator (변이 적용)                                                         
+      ↓                                                                         
+    Sender (실기기로 UDP 전송)                                                  
+      ↓                                                                         
+    Oracle (응답 판정: normal / suspicious / timeout / crash)                   
+      ↓                                                                         
+    ResultStore + PcapCapture + ADB/iOS 스냅샷                                  
+
+⏺ 핵심 구현 파일들을 읽어보겠습니다.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+⏺ 코드를 바탕으로 각 단계를 설명하겠습니다.
+
+  ---
+  파이프라인 단계별 설명 (real-ue-direct 기준)
+
+  ---
+  1. CLI 입력 → CampaignConfig
+
+  사용자가 입력한 --mode, --target-msisdn, --methods, --profile, --layer,
+  --strategy 등을 CampaignConfig로 파싱·검증한다.
+
+  이 시점에 MSISDN → UE IP도 자동으로 resolve한다:
+  kamctl ul show  →  P-CSCF 로그  →  ip xfrm state
+  환경변수 VMF_MSISDN_TO_IP_<msisdn>으로 수동 override도 가능.
+
+  ---
+  2. CaseGenerator — 조합 생성
+
+  for method in methods:
+      for profile in profiles:
+          for layer in layers:
+              for strategy in strategies:
+                  # profile이 해당 layer/strategy를 지원하는지 검증 후 yield 
+  CaseSpec
+
+  method × profile × layer × strategy 의 유효한 조합을 CaseSpec 단위로 생성한다.
+   max_cases에 도달할 때까지 round-robin으로 반복.
+
+  - template 모드면 model layer 제외 (wire text 직접 사용)
+  - strategy=default는 실제 concrete strategy가 아님 — mutator가
+  profile+layer+seed로 나중에 결정
+
+  ---
+  3. Generator — SIP 패킷 원본 생성
+
+  real-ue-direct + --mt-invite-template 경로:
+
+  mt_invite_a31.sip.tmpl (파일)
+      ↓  build_default_slots()  (18개 슬롯 채우기)
+          - impi, msisdn, port_pc/port_ps (live resolve)
+          - pcscf_ip, call_id, seed 등
+      ↓  render_mt_invoke()
+  →  wire_text (완성된 SIP 문자열)
+      ↓  parse_editable_from_wire()
+  →  EditableSIPMessage
+
+  port_pc / port_ps는 케이스마다 live로 재조회한다 (캐시 없음). UE가 재등록하면
+  포트가 바뀌는데, 캐시된 값을 쓰면 timeout이 쏟아져 실제 버그처럼 보이는 문제가
+   있었기 때문.
+
+  ---
+  4. Mutator — 변이 적용
+
+  mutator.mutate_editable(editable, MutationConfig(
+      seed=spec.seed,
+      profile=spec.profile,   # legacy / delivery_preserving / ims_specific / 
+  parser_breaker
+      strategy=spec.strategy, # identity / default / tail_chop_1 / ...
+      layer=spec.layer,       # wire / byte
+      max_operations=mutations_per_case,
+  ))
+  → MutatedWireCase (wire_text 또는 packet_bytes)
+
+  변이 레이어 구조:
+  EditableSIPMessage (wire text 파싱 결과)
+      ↓ wire layer: 헤더/공백/CRLF/Content-Length 텍스트 조작
+      ↓ byte layer: 바이트 직접 조작
+  → 변이된 SIP 패킷
+
+  identity strategy면 원본 그대로 통과 (baseline 확인용).
+
+  ---
+  5. Sender — 실기기로 UDP 전송
+
+  ipsec_mode=null 경로:
+  # 호스트에서 소스 IP를 P-CSCF IP(172.22.0.21)로 스푸핑
+  socket.bind(("0.0.0.0", mt_local_port))  # Via sent-by 포트와 일치시킴
+  socket.sendto(packet_bytes, (ue_ip, port_pc))
+
+  ipsec_mode=bypass 경로:
+  # Docker P-CSCF 컨테이너 netns 안에서 실행
+  docker exec pcscf python3 send_udp.py ...
+
+  INVITE는 응답을 전부 수집 (collect_all_responses=True). 이후 CANCEL teardown도
+   자동으로 수행 (180 Ringing 수신 확인 후).
+
+  ---
+  6. Oracle — 응답 판정
+
+  # 우선순위 순서로 판정
+  if process_crashed:    → "crash"
+  if stack_trace_found:  → "stack_failure"  (ADB logcat / iOS syslog)
+  if timeout_exceeded:   → "timeout"
+  if 4xx/5xx response:   → "suspicious"
+  if 1xx/2xx response:   → "normal"
+
+  Circuit Breaker: timeout/unknown이 연속으로 일정 횟수 이상 쌓이면 IPsec SA
+  만료 여부를 체크하고 캠페인 중단.
+
+  ---
+  7. ResultStore + PcapCapture + ADB/iOS 스냅샷
+
+  - ResultStore: 케이스마다 JSONL에 verdict, raw_request, raw_response,
+  reproduction_cmd, mutation_ops 저장
+  - PcapCapture: tcpdump로 케이스별 .pcap 파일 저장 (host <ue_ip> 필터)
+  - ADB 스냅샷: suspicious/crash/stack_failure verdict면 logcat + screenshot
+  저장
+  - iOS 스냅샷: syslog + .ips 크래시 리포트 저장
+  - 캠페인 종료 시 HTML 리포트 자동 생성
+
+  ---
+  핵심 흐름 요약 (코드 관점)
+
+  CampaignExecutor.run()
+    └─ for spec in CaseGenerator.generate():
+          └─ _execute_mt_template_case(spec)
+                1. resolve UE IP + IMPI
+                2. resolve_protected_ports() (port_pc/port_ps)
+                3. render_mt_invite() → wire_text
+                4. parse_editable_from_wire()
+                5. mutator.mutate_editable()
+                6. pcap.start()
+                7. sender.send_artifact()
+                8. teardown_invite() [CANCEL]
+                9. oracle.evaluate() → verdict
+               10. persist_case_artifacts() [JSONL + ADB/iOS]
+
+✻ Cogitated for 43s
+
+❯ 더 자세하게 설명좀                                                            
+
+⏺ 더 깊이 파볼 파일들을 읽겠습니다.
+
+  Read 3 files (ctrl+o to expand)
+
+⏺ 이제 각 단계를 코드 기준으로 아주 자세하게 설명하겠습니다.
+
+  ---
+  파이프라인 상세 설명
+
+  ---
+  1단계: CLI 입력 → CampaignConfig
+
+  사용자가 입력한 플래그들이 CampaignConfig(Pydantic 모델)로 파싱·검증된다.
+
+  --mode real-ue-direct
+  --target-msisdn 111111
+  --methods INVITE
+  --profile ims_specific
+  --layer wire
+  --strategy default
+  --max-cases 50
+
+  이 시점에 MSISDN → UE IP resolve가 시작된다:
+
+  RealUEDirectResolver.resolve() 호출
+    1순위: kamctl ul show  (Kamailio DB에서 Contact IP 조회)
+    2순위: P-CSCF kamailio 로그에서 "PCSCF: REGISTER" 라인 파싱
+    3순위: ip xfrm state (IPsec SA selector에서 UE IP 추출)
+    환경변수 override: VMF_MSISDN_TO_IP_111111=10.20.20.x
+    실패 시: 명확한 에러 + raise (hardcoded fallback 없음)
+
+  TargetEndpoint 객체도 이 시점에 생성된다. ipsec_mode=null이면
+  bind_port=mt_local_port(기본 15100)도 여기서 고정된다 — Via sent-by 포트와
+  소켓 bind 포트를 일치시켜 UE 응답이 올바른 소켓으로 들어오게 하기 위함.
+
+  ---
+  2단계: CaseGenerator — 테스트 케이스 조합 생성
+
+  CampaignExecutor.run()이 CaseGenerator(config).generate()를 호출하면
+  CaseSpec이 하나씩 yield된다.
+
+  내부 로직:
+
+  # 유효한 조합만 필터링
+  for method in methods:          # ["INVITE"]
+      for profile in profiles:    # ["ims_specific"]
+          for layer in layers:    # ["wire"]
+              for strategy in strategies:  # ["default"]
+                  # 1. 이 layer에서 이 strategy가 지원되는가? (profile_catalog)
+                  if strategy not in SUPPORTED_STRATEGIES_BY_LAYER[layer]:
+                      continue
+                  # 2. 이 profile이 이 layer+strategy 조합을 허용하는가?
+                  if not profile_supports_strategy(profile, layer, strategy):
+                      continue
+                  yield CaseSpec(case_id, seed, profile, method, layer,
+  strategy)
+
+  max_cases까지 round-robin으로 반복. identity wire strategy는 round 0에만
+  포함되고 이후 반복에서는 제외된다 (baseline은 한 번만).
+
+  seed = seed_start + case_id — 같은 seed면 동일한 변이가 재현된다.
+
+  ---
+  3단계: _execute_mt_template_case() — 분기 진입
+
+  _execute_case()에서 경로가 결정된다:
+
+  # dialog runtime path가 있는 메서드? (ACK/BYE/INFO/PRACK 등)
+  scenario = _dialog_scenario_for_runtime_method(spec.method)
+  if scenario:
+      return _execute_dialog_case(...)   # INVITE dialog 먼저 세우고 내부에서 
+  퍼징
+
+  # packet_file? (--packet-file 옵션)
+  if packet_file_bytes:
+      return _execute_packet_file_case(...)
+
+  # MT template? (--mt-invite-template a31)
+  if mt_template_text:
+      return _execute_mt_template_case(...)  # ← 여기로 진입
+
+  # 나머지: 일반 PacketModel 경로
+
+  ---
+  4단계: Generator — SIP 패킷 원본 생성 (MT template 경로)
+
+  _execute_mt_template_case() 내부:
+
+  4-1. UE IP + IMPI resolve (케이스마다 fresh)
+  resolved = ue_resolver.resolve(target, impi=impi)
+  ue_ip = resolved.host      # kamctl → P-CSCF 로그 → xfrm 순
+  impi = resolved.impi       # 
+  "001010000123511@ims.mnc001.mcc001.3gppnetwork.org"
+
+  4-2. port_pc / port_ps live 조회 (캐시 없음, 케이스마다)
+  port_pc, port_ps = resolve_protected_ports(msisdn, ue_ip=ue_ip)
+  # Strategy 1: docker logs pcscf에서 "Port is XXXXX" 파싱
+  # Strategy 2: docker exec pcscf ip xfrm state → UE IP로 필터 → dport 추출
+  # ue_ip를 넘기는 이유: IP가 바뀐 새 세대 포트와 이전 세대 IP가 섞이는 것 방지
+
+  4-3. 슬롯 치환 + 렌더링
+  slots = build_default_slots(
+      msisdn="111111",
+      impi="001010...",
+      pcscf_ip="172.22.0.21",
+      port_pc=8100,
+      port_ps=8101,
+      seed=spec.seed,          # Call-ID 등 랜덤 필드의 재현성 보장
+      ...
+  )
+  wire_text = render_mt_invoke(template_text, slots)
+  # template: mt_invite_a31.sip.tmpl (18개 {{슬롯}} 치환)
+  # 마지막에 Content-Length 자동 계산 + CRLF 정규화
+
+  4-4. 단편화 가드 체크
+  if ipsec_mode == "null" and len(wire_text.encode()) > 65535:
+      return verdict="unknown", reason="fragmentation-guard"
+
+  4-5. EditableSIPMessage 파싱
+  editable = parse_editable_from_wire(wire_text)
+  # wire_text → header별 분리된 편집 가능한 객체로 변환
+  # wire layer mutator가 이 구조를 직접 조작
+
+  ---
+  5단계: Mutator — 변이 적용
+
+  mutated_wire = mutator.mutate_editable(editable, MutationConfig(
+      seed=spec.seed,
+      profile="ims_specific",    # 어떤 변이 계열을 허용할지
+      strategy="default",        # "default"는 요청값 — 내부에서 concrete 
+  strategy로 해석
+      layer="wire",
+      max_operations=1,          # --mutations-per-case
+  ))
+
+  내부에서 일어나는 일:
+
+  strategy 결정 (resolve_effective_strategy()):
+  "default" + profile="ims_specific" + layer="wire" + seed=42
+  → PROFILE_DEFAULT_STRATEGY_POOLS["ims_specific"]["wire"]에서 seed로 하나 선택
+  → 예: "alias_port_desync"
+
+  layer별 변이 동작:
+
+  - wire layer: EditableSIPMessage 구조를 텍스트 레벨로 조작
+    - header_whitespace_noise: Via, Contact 등 헤더 주변 공백/탭 삽입
+    - final_crlf_loss: 마지막 \r\n 삭제
+    - duplicate_content_length_conflict: Content-Length 헤더를 중복 삽입 (충돌
+  값)
+    - alias_port_desync: Via 헤더의 ;alias= 파라미터 포트 값 비틀기
+    - sdp_boundary_only / sdp_struct_only / sdp_byte_edit: SDP body 내부만 조작
+  (SDP 없으면 자동 skip)
+  - byte layer: 변이된 wire_text를 bytes로 변환 후 바이트 직접 조작
+    - tail_chop_1: 마지막 1바이트 제거
+    - tail_garbage: suffix 추가
+    - header_targeted: 특정 헤더 바이트 오염
+
+  identity strategy면 변이 없이 원본 그대로 통과.
+
+  결과: MutatedWireCase (wire_text 또는 packet_bytes + 변이 기록 records)
+
+  ---
+  6단계: Sender — 실기기로 UDP 전송
+
+  SendArtifact를 만들고 sender.send_artifact(artifact, mt_target)을 호출한다.
+
+  ipsec_mode=null 경로 (_send_with_spoofed_source):
+
+  # 1. 소스 IP를 P-CSCF IP로 bind (net.ipv4.ip_nonlocal_bind=1 필요)
+  sock = socket.socket(AF_INET, SOCK_DGRAM)
+  sock.bind(("172.22.0.21", 15100))   # source_ip=172.22.0.21, bind_port=15100
+
+  # 2. Via/Contact 헤더 rewrite (--preserve-via가 없을 때)
+  payload, events = prepare_real_ue_direct_payload(
+      artifact,
+      local_host="172.22.0.21",
+      local_port=15100,
+      rewrite_via=True,    # Via: SIP/2.0/UDP 172.22.0.21:15100
+      rewrite_contact=True,
+  )
+
+  # 3. 전송 (UE IP:port_pc)
+  sock.sendto(payload, ("10.20.20.x", 8100))
+
+  # 4. 응답 수집 (INVITE는 collect_all=True → 1xx + 2xx 모두)
+  while len(observations) < 8:
+      data, addr = sock.recvfrom(65535)
+      obs = parse_sip_response(data, addr)
+      observations.append(obs)
+      if not collect_all and obs.classification != "provisional":
+          break
+
+  라우팅 체크 (check_route_to_target):
+  # UE IP까지 route가 없으면 자동으로 추가
+  ip route add 10.20.20.0/24 via <gateway>
+
+  INVITE 전송 후 CANCEL teardown (자동):
+  # 180 Ringing 수신 확인 후
+  cancel_text = wire_text.replace("INVITE ", "CANCEL ")
+  # CSeq도 CANCEL로 변경
+  sender.send_artifact(cancel_artifact, mt_target)
+  # 200 OK / 487 Request Terminated 받으면 성공
+  # 실패 시 3회 retry + 2초 extra cooldown
+
+  ---
+  7단계: Oracle — 응답 판정
+
+  OracleEngine.evaluate(send_result, context)가 여러 oracle을 순서대로 확인한다:
+
+  판정 우선순위:
+
+  1. LogOracle (log_path 지정 시)
+     → SIGSEGV, SIGABRT, Segmentation fault 등 패턴 감지
+     → 즉시 "stack_failure" 반환
+
+  2. AdbOracle (--adb 플래그 시)
+     → AdbLogCollector가 스트리밍 중인 logcat 라인을 AdbAnomalyDetector에 feed
+     → critical 이벤트 감지 시 → "stack_failure"
+     → log_grace_seconds 동안 폴링 (SIP 응답 후 수 초 뒤에 나타나는 크래시 캐치)
+
+  3. IosOracle (--ios 플래그 시)
+     → IosSyslogCollector.slice(since, until)로 구간 syslog 추출
+     → IosAnomalyDetector feed → critical 감지 시 → "stack_failure"
+
+  4. SocketOracle (항상 실행)
+     → send_result.outcome == "timeout"     → "timeout"
+     → send_result.outcome == "send_error"  → "unknown"
+     → response가 invalid SIP              → "suspicious"
+     → 정상 응답                           → "normal"
+
+  5. ProcessOracle (--check-process 시, 10케이스마다 or timeout 시)
+     → docker inspect <container> 또는 pgrep -x <process>
+     → 프로세스 없으면 → "crash"
+
+  SocketOracle의 normal 판정 세부:
+  # final_response = responses에서 마지막 non-provisional
+  # 180 Ringing → provisional (수집만)
+  # 200 OK → success → "normal"
+  # 4xx/5xx → error → "suspicious" 아님! SocketOracle은 그냥 "normal" 반환
+  # 실제 suspicious 분류는 ...아래 설명
+
+  주의: SocketOracle은 SIP 응답이 있으면 무조건 normal을 반환한다. 4xx/5xx를
+  suspicious로 올리는 것은 caller가 별도로 처리한다 (_build_case_result에서
+  verdict.response_code 기반으로 재분류).
+
+  ---
+  8단계: ResultStore + 아티팩트 저장
+
+  JSONL 저장 (campaign.jsonl):
+  // 헤더 (캠페인 시작 시)
+  {"type":"header", "campaign_id":"abc123", "config":{...}, "summary":{...}}
+
+  // 케이스마다
+  {"type":"case", "case_id":0, "seed":42, "method":"INVITE",
+   "profile":"ims_specific", "layer":"wire", "strategy":"alias_port_desync",
+   "mutation_ops":["replace_text(via)"], "verdict":"normal",
+   "reason":"outcome=success, code=180", "elapsed_ms":1523,
+   "raw_request":"INVITE sip:...", "raw_response":"SIP/2.0 180 Ringing...",
+   "reproduction_cmd":"uv run fuzzer campaign run --mode real-ue-direct ..."}
+
+  // 푸터 (캠페인 종료 시)
+  {"type":"footer", "status":"completed", "summary":{...}}
+
+  PcapCapture (케이스마다):
+  # tcpdump 시작
+  tcpdump -i br-volte host 10.20.20.x -w case_000000.pcap
+
+  # 전송 완료 후 종료
+  capture.stop()  # → pcap/case_000000.pcap
+
+  ADB 스냅샷 (verdict가 suspicious/crash/stack_failure일 때):
+  # logcat 슬라이스 (케이스 timestamp 기준)
+  # bugreport (crash/stack_failure만 full 프로파일)
+  # screenshot
+  # 저장: adb_snapshots/case_0/
+
+  iOS 스냅샷 (매 케이스):
+  # syslog slice (since=케이스 시작, until=지금)
+  # .ips crash report pull
+  # 저장: ios_snapshots/case_0/
+
+  Circuit Breaker:
+  consecutive_failures += 1  # timeout/unknown 연속 카운트
+
+  # 절반 임계값 도달 시 SA 체크
+  if consecutive_failures >= cb_threshold // 2:
+      sa_status = check_ipsec_sa_alive()
+      if not sa_status.alive:
+          # 이후 모든 케이스 verdict → "infra_failure"
+          # 즉시 캠페인 중단
+
+  # 임계값(기본 10) 도달 시 중단
+  if consecutive_failures >= cb_threshold:
+      break
+
+  캠페인 종료 시: HtmlReportGenerator가 campaign.jsonl을 읽어 HTML 리포트 자동
+  생성.
+
+  ---
+  전체 흐름 한눈에 (케이스 1회 기준)
+
+  CaseSpec(case_id=0, seed=42, method=INVITE, profile=ims_specific, layer=wire,
+  strategy=default)
+    │
+    ├─ resolve UE IP: kamctl → 10.20.20.x
+    ├─ resolve port_pc/port_ps: docker logs pcscf → 8100/8101
+    ├─ render_mt_invite(template, slots[18개]) → wire_text
+    ├─ parse_editable_from_wire(wire_text) → EditableSIPMessage
+    │
+    ├─ [Mutator] resolve_effective_strategy(default, ims_specific, wire,
+  seed=42) → alias_port_desync
+    ├─ [Mutator] apply alias_port_desync on EditableSIPMessage → MutatedWireCase
+    │   records: [MutationRecord(operator="replace_text", target=Via.alias)]
+    │
+    ├─ pcap.start() → tcpdump -w case_000000.pcap
+    │
+    ├─ [Sender] sock.bind(172.22.0.21:15100)
+    ├─ [Sender] prepare_payload: Via rewrite → 172.22.0.21:15100
+    ├─ [Sender] sendto(10.20.20.x:8100) → UE
+    ├─ [Sender] recvfrom() × N → [180 Ringing, ...]
+    ├─ [Sender] CANCEL teardown (3회 retry)
+    │
+    ├─ pcap.stop() → case_000000.pcap
+    │
+    ├─ [Oracle] AdbOracle.check() → logcat 정상
+    ├─ [Oracle] SocketOracle.judge() → outcome=provisional → "normal"
+    ├─ [Oracle] ProcessOracle skip (10케이스마다, timeout 아님)
+    │   verdict = "normal"
+    │
+    ├─ adb_snapshot (light profile: logcat만)
+    ├─ evidence.collect() → case_0/ 디렉토리
+    └─ store.append(CaseResult) → campaign.jsonl
+
+✻ Cooked for 1m 55s
+
+※ recap: VoLTE 퍼저 파이프라인 구조를 설명하는 중이었고, 사용자가 전체 흐름의 상세 설명을 요청해 각 단계를 코드 기반으로 설명 완료했다. 다음 질문을 기다리면 된다. (disable recaps in /config)
+
+❯ 센더 좀 더 자세하게 설명 그리고 bypass, native만 존재해                       
+
+⏺ 센더 관련 파일들을 더 자세히 읽겠습니다.
+
+  Read 4 files (ctrl+o to expand)
+
+⏺ 코드를 바탕으로 bypass와 native 모드만 집중해서 설명하겠습니다.
+
+  ---
+  Sender 상세 설명 (bypass / native 모드)
+
+  ---
+  진입점: SIPSenderReactor.send_artifact()
+
+  send_artifact(artifact, target)
+    ↓ target.mode == "real-ue-direct"
+    → _send_real_ue_direct()
+         ↓ target.ipsec_mode == "native"   → _send_via_native_ipsec()
+         ↓ bind_container is not None       → _send_via_container()   (bypass)
+
+  전송 전에 항상 RealUEDirectResolver.resolve(target)를 호출해서 UE IP를
+  확인한다.
+
+  ---
+  bypass 모드 (_send_via_container())
+
+  container_exec.py — Docker 컨테이너 내부 netns에서 평문 UDP/TCP를 보내는 방식.
+
+  동작 원리
+
+  fuzzer (호스트)
+    ↓ docker exec -i pcscf python3 -c <DRIVER_SCRIPT>
+  P-CSCF 컨테이너 (172.22.0.21)
+    ↓ UDP/TCP socket, bind(172.22.0.21, bind_port)
+    ↓ connect(ue_ip, port_pc)
+    ↓ send(payload)
+  UE (10.20.20.x:port_pc)
+    ↓ SIP 응답
+  P-CSCF 컨테이너 (recvfrom)
+    ↓ JSON lines (base64 인코딩) → stdout
+  fuzzer (parse & decode)
+
+  페이로드 전달 방식
+
+  호스트에서 컨테이너로 페이로드를 전달할 때 stdin을 사용한다:
+  stdin = [4바이트 big-endian 길이] + [raw payload bytes]
+
+  드라이버 스크립트가 stdin에서 이 형식으로 읽어서 소켓으로 전송한다.
+
+  응답 수신 방식
+
+  컨테이너 내부 드라이버가 응답을 받으면 JSON Lines 형식으로 stdout에 출력:
+  {"raw_b64": "<base64>", "host": "10.20.20.x", "port": 9901}
+  호스트 프로세스가 proc.stdout을 파싱해서 SocketObservation 리스트로 변환한다.
+
+  핵심 소켓 설정 (드라이버 내부)
+
+  sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+  sock.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
+  sock.bind((bind_host, bind_port))   # bind_host=172.22.0.21, 
+  bind_port=mt_local_port
+  sock.connect((remote_host, remote_port))  # ← 중요
+  sock.send(payload)
+
+  connect()를 하는 이유: Linux UDP 소켓 라우팅에서 connected 소켓이 unconnected
+  소켓(kamailio의 wildcard listener)보다 높은 우선순위를 가져, UE의 응답이
+  kamailio로 빨려가지 않고 이 소켓으로 오게 된다.
+
+  bypass 모드의 문제점
+
+  container_exec.py 파일 자체에 "Deprecated" 라고 명시되어 있다:
+  - docker exec subprocess 오버헤드가 케이스마다 발생
+  - IPsec이 실제로 걸리지 않는 평문 경로 — spec-strict UE(Pixel, A16 등)는 ESP를
+   기대하므로 drop
+  - 레거시 A31 같은 lenient UE에서만 동작했던 경로
+
+  ---
+  native 모드 (_send_via_native_ipsec())
+
+  ipsec_native.py — P-CSCF netns 안에서 실제 IPsec SA를 타는 정식 경로.
+
+  핵심 배경
+
+  ▎ Earlier iterations used SOCK_RAW + IP_HDRINCL to spoof the protected source 
+  ▎ port. That path silently bypasses Linux xfrm output processing, so "native 
+  ▎ IPsec" was in fact shipping plaintext UDP — it only appeared to work against
+  ▎  lenient UEs.
+  ▎
+  ▎ The correct approach is to use a normal kernel UDP socket inside the P-CSCF 
+  ▎ netns with an explicit bind to the protected source port. The installed xfrm
+  ▎  OUT policy then auto-encapsulates outbound traffic as ESP.
+
+  즉, SOCK_RAW로 raw packet을 직접 만들면 xfrm이 무시되고 평문으로 나간다.
+  반드시 SOCK_DGRAM으로 bind해야 커널의 xfrm OUT policy가 자동으로 ESP로 감싼다.
+
+  단계별 동작
+
+  Step 1: IPsec SA 세션 resolve (resolve_native_ipsec_session())
+
+  # docker exec pcscf ip xfrm state
+  # src=172.22.0.21 dst=10.20.20.x 방향 SA 파싱
+  # sel 라인에서 sport(P-CSCF port) ↔ dport(UE port) 매핑 추출
+
+  port_map = {
+      ue_port_pc: pcscf_port_for_pc,
+      ue_port_ps: pcscf_port_for_ps,
+  }
+
+  IMS는 SA를 4개 협상한다 (3GPP TS 33.203):
+  UE client port  ↔ P-CSCF server port  (UE가 보내는 방향)
+  UE server port  ↔ P-CSCF client port  (P-CSCF가 보내는 방향, MT-INVITE 경로)
+
+  Step 2: Preflight 체크 (preflight_native_ipsec_target())
+
+  # 컨테이너 안에 python3 + SOCK_DGRAM이 있는지 확인
+  docker exec pcscf python3 -c "import socket; 
+  sock=socket.socket(AF_INET,SOCK_DGRAM); print('ok')"
+
+  # UE port_ps → P-CSCF port 매핑 조회
+  pcscf_port = session.port_map[ue_port_ps]
+
+  MT-INVITE는 P-CSCF가 UE 쪽으로 보내는 것이므로, UE의 server port(port_ps) 로
+  보내야 한다 (port_pc는 UE의 UAC/outbound용으로, UE가 SIP listener를 열지
+  않음).
+
+  Step 3: 페이로드 준비 (prepare_real_ue_direct_payload())
+
+  # Via: SIP/2.0/UDP 172.22.0.21:<pcscf_port>;rport  (rewrite_via=True)
+  # Contact: <sip:...@172.22.0.21:<pcscf_port>>       (rewrite_contact=True)
+  payload, events = normalize_direct_wire_text(
+      wire_text,
+      local_host=session.pcscf_ip,   # 172.22.0.21
+      local_port=preflight.pcscf_port,
+  )
+
+  Step 4: UDP 드라이버 실행 (send_via_native_ipsec())
+
+  # 드라이버를 stdin으로 페이로드와 함께 실행
+  docker exec -i pcscf python3 -c <_UDP_DRIVER_SCRIPT> \
+      src_ip=172.22.0.21 \
+      src_port=<pcscf_port_ps> \
+      dst_ip=10.20.20.x \
+      dst_port=<ue_port_ps> \
+      timeout=5.0 \
+      alt_src_port=<pcscf_port_pc> \   # 보조 SA 쌍 (선택)
+      alt_dst_port=<ue_port_pc>
+
+  드라이버 내부 로직:
+
+  # Primary socket: P-CSCF server SA 쌍
+  sock_primary = SOCK_DGRAM
+  sock_primary.setsockopt(SO_REUSEADDR | SO_REUSEPORT)
+  sock_primary.bind((pcscf_ip, pcscf_port_ps))  # ← xfrm OUT policy 매칭 핵심
+  sock_primary.connect((ue_ip, ue_port_ps))      # ← kamailio wildcard보다 우선
+  sock_primary.send(payload)                     # ← xfrm이 ESP로 자동 
+  encapsulate
+
+  # Alt socket: P-CSCF client SA 쌍 (SA rekey 시 응답이 다른 쌍으로 올 수 있음)
+  sock_alt = SOCK_DGRAM
+  sock_alt.bind((pcscf_ip, pcscf_port_pc))
+  sock_alt.connect((ue_ip, ue_port_pc))
+  # 두 소켓에 select()해서 먼저 오는 응답 수신
+
+  keepalive 필터링:
+  # RFC 5626 / 3GPP: UE가 CRLF keepalive를 보내는데
+  # 응답 대기 중에 이게 먼저 오면 오분류됨
+  # → data.strip(b"\r\n\t ") 이 비어있으면 skip하고 계속 대기
+
+  실제로 Pixel 캠페인에서 78바이트 keepalive ESP가 먼저 와서 12/13 케이스가
+  timeout으로 오분류되는 이슈가 있었고, 이 필터로 해결됨.
+
+  Step 5: 응답 프레임 파싱
+
+  드라이버 stdout 응답 포맷:
+  [4바이트 big-endian 길이]
+  [ASCII peer_host \n]
+  [2바이트 big-endian peer_port]
+  [raw SIP bytes]
+  길이=0이면 timeout(응답 없음).
+
+  Step 6: 보조 응답 수집 (observe_pcscf_log_responses())
+
+  소켓에서 응답을 못 받은 경우(SO_REUSEPORT가 kamailio에 해시한 경우 등) 보조
+  수단으로 P-CSCF 로그를 폴링:
+
+  # docker logs pcscf --since <sent_at_iso>
+  # Call-ID, CSeq, Via branch로 correlation → 해당 응답 라인만 추출
+  # 0.25초 간격으로 timeout까지 반복
+
+  ---
+  두 모드 비교
+
+  항목: 구현 파일
+  bypass: container_exec.py
+  native: ipsec_native.py
+  ────────────────────────────────────────
+  항목: 실제 IPsec
+  bypass: 없음 (평문 UDP)
+  native: 있음 (xfrm → ESP)
+  ────────────────────────────────────────
+  항목: 소켓 위치
+  bypass: P-CSCF 컨테이너 netns
+  native: P-CSCF 컨테이너 netns
+  ────────────────────────────────────────
+  항목: 포트 바인딩
+  bypass: mt_local_port (임의)
+  native: P-CSCF protected port (xfrm SA 기반)
+  ────────────────────────────────────────
+  항목: 응답 수신
+  bypass: JSON/stdout
+  native: 길이 프레임/stdout + 로그 폴링
+  ────────────────────────────────────────
+  항목: UE 호환성
+  bypass: lenient UE만 (A31 구버전)
+  native: spec-strict UE (Pixel, A16, iPhone)
+  ────────────────────────────────────────
+  항목: SA 쌍 처리
+  bypass: 없음
+  native: primary + alt 이중 소켓
+  ────────────────────────────────────────
+  항목: 상태
+  bypass: Deprecated
+  native: 현재 정식 경로
+
+  ---
+  공통 흐름 요약
+
+  _send_real_ue_direct()
+    │
+    ├─ resolver.resolve() → ue_ip 확인
+    │
+    ├─ [native] resolve_native_ipsec_session()  → port_map (xfrm state)
+    │           preflight_native_ipsec_target() → pcscf_port 확인
+    │           prepare_payload()               → Via/Contact rewrite
+    │           send_via_native_ipsec()         → docker exec python3 driver
+    │               ├─ bind(pcscf_ip, pcscf_port)  ← xfrm OUT policy 트리거
+    │               ├─ connect(ue_ip, ue_port)      ← kamailio 경쟁 차단
+    │               ├─ send()                       → ESP 자동 encapsulate
+    │               ├─ select([primary, alt])        ← 이중 SA 쌍 대응
+    │               └─ keepalive skip → 실제 SIP 응답 수신
+    │           observe_pcscf_log_responses()    → 보조 폴링 (miss 시)
+    │
+    └─ [bypass] prepare_payload()               → Via/Contact rewrite
+                send_via_container()             → docker exec python3 driver
+                    ├─ bind(pcscf_ip, mt_local_port)
+                    ├─ connect(ue_ip, port_pc)
+                    └─ send() → 평문 UDP
+                    JSON/stdout → SocketObservation 변환
+
+✻ Baked for 2m 11s
+
+❯ ipsec은 어떻게 하는건지 좀 더 자세하게 설명하고 이해시켜 native일때 ipsec을   
+  어떻게 가져와서 패킷을 암호화해서 보내는지                                    
+
+⏺ 코드에서 이미 충분한 컨텍스트를 읽었으므로, 원리부터 차근차근 설명하겠습니다.
+
+  ---
+  IPsec native 모드 — 완전한 이해
+
+  ---
+  1. IMS에서 IPsec이 왜 필요한가
+
+  UE가 IMS에 등록(REGISTER)할 때, UE와 P-CSCF 사이에 IPsec 터널이 협상된다. 이후
+   모든 SIP 트래픽은 이 터널로만 통신한다.
+
+  UE ←─── ESP (암호화된 UDP) ───→ P-CSCF ←─── 평문 SIP ───→ S-CSCF
+
+  UE는 자신의 IPsec SA가 설치된 포트(port_pc, port_ps)로 오는 ESP 패킷만
+  받아들인다. 평문 UDP가 오면 드롭한다. 이게 bypass 모드가 spec-strict UE에서
+  실패하는 이유다.
+
+  ---
+  2. Linux xfrm 프레임워크 개요
+
+  Linux 커널에는 xfrm (transform) 이라는 IPsec 처리 서브시스템이 있다.
+
+  두 가지 개념이 핵심이다:
+
+  SA (Security Association) — 실제 암호화 파라미터
+  src=10.20.20.2  dst=172.22.0.21
+  proto=esp  spi=0xABCD1234
+  알고리즘: aes-128-cbc (암호화) + hmac-sha1 (무결성)
+  sport=63193  dport=5100    ← 이 포트 쌍에 대해서만 적용
+
+  SP (Security Policy) — "이 트래픽을 어떤 SA로 처리할지" 규칙
+  src=172.22.0.21  dst=10.20.20.2
+  sport=5100  dport=63193
+  → use SA(spi=0xABCD1234, proto=esp)  [OUT policy: 나가는 패킷]
+  → use SA(spi=0xDCBA5678, proto=esp)  [IN policy: 들어오는 패킷]
+
+  UE가 REGISTER할 때 Security-Client 헤더로 자신의 포트를 알려주고, P-CSCF가
+  협상 완료 후 커널에 SA/SP를 설치한다.
+
+  ---
+  3. xfrm state 실제 예시
+
+  docker exec pcscf ip xfrm state
+
+  출력 예:
+  src 10.20.20.2 dst 172.22.0.21    # UE → P-CSCF 방향 SA
+          proto esp spi 0x0a1b2c3d
+          auth hmac(sha1) ...
+          enc aes ...
+          sel src 10.20.20.2/32 dst 172.22.0.21/32 sport 63193 dport 5100
+          #     ↑ UE port_pc                                    ↑ P-CSCF client
+  port
+
+  src 10.20.20.2 dst 172.22.0.21    # UE → P-CSCF 방향 SA (server pair)
+          proto esp spi 0x0a1b2c3e
+          sel src 10.20.20.2/32 dst 172.22.0.21/32 sport 61008 dport 6100
+          #     ↑ UE port_ps                                    ↑ P-CSCF server
+  port
+
+  src 172.22.0.21 dst 10.20.20.2    # P-CSCF → UE 방향 SA
+          proto esp spi 0x0b2c3d4e
+          sel src 172.22.0.21/32 dst 10.20.20.2/32 sport 5100 dport 63193
+          #     ↑ P-CSCF client port                           ↑ UE port_pc
+
+  src 172.22.0.21 dst 10.20.20.2    # P-CSCF → UE 방향 SA (server pair)
+          proto esp spi 0x0b2c3d4f
+          sel src 172.22.0.21/32 dst 10.20.20.2/32 sport 6100 dport 61008
+          #     ↑ P-CSCF server port                           ↑ UE port_ps
+
+  IMS는 항상 4개 SA를 만든다. 각 방향(UE→PCSCF, PCSCF→UE) × 각 포트 쌍(client,
+  server) 조합이다.
+
+  ---
+  4. MT-INVITE 전송 시 어떤 SA를 써야 하는가
+
+  퍼저가 UE에게 MT-INVITE를 보내는 건 P-CSCF → UE 방향이다.
+
+  P-CSCF(172.22.0.21) → UE(10.20.20.2)
+
+  P-CSCF가 UE에게 SIP을 보낼 때는 UE의 server port(port_ps) 로 보내야 한다. UE는
+   port_ps에 SIP 수신 listener를 열어두고 있다.
+
+  따라서 써야 할 SA:
+  src=172.22.0.21  sport=6100 (P-CSCF server port)
+  dst=10.20.20.2   dport=61008 (UE port_ps)
+
+  이 SA의 selector에 매칭되는 소켓이 send()를 호출해야 xfrm OUT policy가
+  자동으로 ESP로 encapsulate한다.
+
+  ---
+  5. resolve_native_ipsec_session() — 포트 매핑 추출
+
+  # docker exec pcscf ip xfrm state 파싱
+  # src=P-CSCF_IP dst=UE_IP 방향의 SA만 골라냄
+  for line in xfrm_output:
+      if src == pcscf_ip and dst == ue_ip:
+          # sel 라인: sport=P-CSCF_port, dport=UE_port
+          port_map[dport] = sport   # UE포트 → P-CSCF포트
+
+  # 결과:
+  port_map = {
+      61008: 6100,   # UE port_ps → P-CSCF server port
+      63193: 5100,   # UE port_pc → P-CSCF client port
+  }
+
+  이 매핑이 핵심이다. UE의 어느 포트로 보낼지 알면, 커널에 설치된 SA를 타려면
+  P-CSCF에서 어느 포트를 bind()해야 하는지 알 수 있다.
+
+  ---
+  6. preflight_native_ipsec_target() — 어느 P-CSCF 포트로 bind할지 결정
+
+  # MT-INVITE는 UE의 port_ps로 보냄
+  ue_port = port_ps   # 61008
+
+  # 이 UE 포트에 매핑된 P-CSCF 포트 조회
+  pcscf_port = session.port_map[ue_port]  # 6100
+
+  ---
+  7. send_via_native_ipsec() — 암호화의 실제 발생 지점
+
+  드라이버 스크립트가 P-CSCF 컨테이너 안(= P-CSCF의 network namespace)에서
+  실행된다.
+
+  # P-CSCF netns 안에서 실행되는 코드
+  sock = socket.socket(AF_INET, SOCK_DGRAM)   # ← 일반 UDP 소켓
+
+  sock.setsockopt(SO_REUSEADDR, 1)
+  sock.setsockopt(SO_REUSEPORT, 1)
+
+  sock.bind(("172.22.0.21", 6100))    # ← P-CSCF server port로 바인드
+  #                          ^^^^
+  #   이 포트가 xfrm OUT policy의 sport=6100과 일치해야 함
+
+  sock.connect(("10.20.20.2", 61008)) # ← UE port_ps로 connect
+
+  sock.send(payload)                  # ← 이 시점에 커널이 암호화
+
+  sock.send(payload) 호출 순간 커널에서 일어나는 일:
+
+  애플리케이션: send(payload)
+        ↓
+  UDP 레이어: UDP 헤더 추가
+    src=172.22.0.21:6100  dst=10.20.20.2:61008
+        ↓
+  xfrm OUT policy 체크:
+    "src=172.22.0.21 dst=10.20.20.2 sport=6100 dport=61008"
+    → 매칭되는 SA 발견: spi=0x0b2c3d4f
+        ↓
+  ESP encapsulation:
+    [IP header] [ESP header(spi)] [암호화된 UDP+SIP] [ESP trailer] [HMAC]
+        ↓
+  wire로 전송
+
+  bind()한 포트가 SA selector의 sport와 일치하지 않으면 xfrm이 매칭되지 않아
+  평문 UDP로 나간다. SOCK_RAW로 직접 IP 패킷을 만들면 xfrm 레이어 자체를
+  우회한다. 이것이 이전 SOCK_RAW 방식이 "native IPsec인 척했지만 사실
+  평문"이었던 이유다.
+
+  ---
+  8. 이중 소켓 (alt socket) — 왜 필요한가
+
+  IMS SA는 4개고, 커널의 xfrm output policy는 SA rekey나 세션 상태에 따라 client
+   SA 쌍이나 server SA 쌍 중 어느 것을 사용할지 달라질 수 있다.
+
+  Primary socket:
+    bind(pcscf_ip, 6100)   connect(ue_ip, 61008)   ← server SA 쌍
+    → 보낸다
+
+  Alt socket:
+    bind(pcscf_ip, 5100)   connect(ue_ip, 63193)   ← client SA 쌍
+    → 응답 대기만 (보내지 않음)
+
+  UE의 응답이 어느 SA 쌍으로 돌아올지 모르기 때문에 두 포트 모두에서 select()로
+  대기한다:
+
+  ready, _, _ = select_mod.select([sock_primary, sock_alt], [], [], remaining)
+  if ready:
+      data, peer = ready[0].recvfrom(65535)  # 먼저 도착한 쪽에서 수신
+
+  ---
+  9. 전체 흐름 한눈에
+
+  [fuzzer 호스트]
+    _send_via_native_ipsec() 호출
+        │
+        ├─ resolve_native_ipsec_session()
+        │    docker exec pcscf ip xfrm state
+        │    → port_map = {61008: 6100, 63193: 5100}
+        │
+        ├─ preflight_native_ipsec_target()
+        │    ue_port = port_ps = 61008
+        │    pcscf_port = port_map[61008] = 6100
+        │
+        ├─ prepare_real_ue_direct_payload()
+        │    Via: SIP/2.0/UDP 172.22.0.21:6100;rport
+        │    Contact: <sip:...@172.22.0.21:6100>
+        │
+        └─ send_via_native_ipsec()
+             stdin = [4B length] + [SIP bytes]
+                 ↓
+             docker exec -i pcscf python3 -c <_UDP_DRIVER_SCRIPT> \
+                 172.22.0.21 6100 10.20.20.2 61008 5.0 5100 63193
+
+  [P-CSCF 컨테이너 netns]
+    sock_primary = SOCK_DGRAM
+    sock_primary.bind(172.22.0.21, 6100)   ← xfrm SA selector 매칭
+    sock_primary.connect(10.20.20.2, 61008)
+    sock_primary.send(SIP_bytes)
+        ↓
+  [Linux 커널 - xfrm]
+    OUT policy: sport=6100, dport=61008 → SA(spi=0x0b2c3d4f)
+    ESP encapsulate: AES-128-CBC + HMAC-SHA1
+    IP packet: src=172.22.0.21 dst=10.20.20.2
+        ↓
+  [물리 네트워크]
+    ESP(암호화된 SIP INVITE) → UE
+
+  [UE]
+    xfrm IN policy: ESP → 복호화 → SIP INVITE 처리
+    → 180 Ringing 응답 (ESP로 암호화해서)
+
+  [P-CSCF 컨테이너 netns]
+    select([sock_primary, sock_alt])
+    keepalive(CRLF) 필터링
+    실제 SIP 응답 수신
+    stdout: [4B length][peer_host\n][2B peer_port][response_bytes]
+
+  [fuzzer 호스트]
+    _parse_driver_response(proc.stdout)
+    → SocketObservation(status_code=180, ...)
+    → 보조: observe_pcscf_log_responses() (SO_REUSEPORT로 kamailio가 받아간 경우
+   대비)
+
+  ---
+  핵심 한 줄 요약
+
+  ▎ P-CSCF 컨테이너 netns 안에서, 커널에 이미 설치된 xfrm SA의 selector와 정확히
+  ▎  일치하는 포트로 bind()한 일반 SOCK_DGRAM을 써서 send()를 호출하면, 커널이 
+  ▎ 자동으로 ESP로 암호화해서 내보낸다. 퍼저는 암호화를 직접 하지 않는다 — 
+  ▎ 커널이 한다.
+✻ Worked for 1m 11s
+
+※ recap: VoLTE/IMS SIP 퍼저의 전체 파이프라인과 Sender 컴포넌트(bypass/native IPsec 모드)를 상세히 설명하는 중이었습니다. 사용자 질문에 답변만 하고 있어 다음 액션은 없습니다. (disable recaps in /config)
+
+❯ upf로 보내는 경우 있지 않나? pcscf안에서 보내는건가?                          
+
+⏺ infra/core.py와 라우팅 관련 코드를 읽겠습니다.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ コードを読みました。UPFの役割を整理して説明します。
+
+  ---
+  UPFとP-CSCFの関係 — パケットの経路
+
+  ---
+  ネットワーク構成
+
+  [fuzzer/P-CSCF]         [Open5GS]        [RAN]        [UE]
+  172.22.0.21        172.22.0.8(UPF)    srsRAN      10.20.20.x
+       |                    |               |              |
+       |←── Docker内部ネット ──────────────→|←── LTE/5G ──→|
+
+  핵심: UE의 IP(10.20.20.x)는 UPF가 관리하는 주소다. P-CSCF에서 UE로 보내는 모든
+   패킷은 UPF를 거쳐야 한다.
+
+  ---
+  라우팅 테이블이 전부다
+
+  infra/core.py의 setup_ue_route():
+
+  # Linux (서버)
+  ip route replace 10.20.20.0/24 via 172.22.0.8
+  #                ↑ UE IMS 서브넷    ↑ UPF IP
+
+  # macOS (개발 환경)
+  route -n add -net 10.20.20.0/24 172.22.0.8
+
+  이 한 줄이 핵심이다. 10.20.20.x로 보내는 모든 패킷의 next hop이
+  UPF(172.22.0.8)로 설정된다.
+
+  ---
+  native 모드에서 UPF는 어디에 있나
+
+  P-CSCF 컨테이너 안에서 send()가 호출될 때:
+
+  P-CSCF 컨테이너 netns
+    sock.send(ESP_payload)  ← dst=10.20.20.x
+           ↓
+    [Linux 커널 IP routing]
+    10.20.20.0/24 via 172.22.0.8 (UPF)
+           ↓
+    UPF (172.22.0.8) 수신
+           ↓
+    [GTP encapsulation]
+    GTP-U 헤더 씌워서 RAN(srsRAN)으로 포워딩
+           ↓
+    RAN → LTE 라디오 → UE
+
+  퍼저가 UPF를 직접 다루는 코드는 없다. IP 라우팅이 알아서 UPF로 보낸다. P-CSCF
+  컨테이너는 Open5GS Docker 네트워크 안에 있고, 이미 10.20.20.0/24 via UPF
+  경로가 설치되어 있다.
+
+  ---
+  라우트 체크가 native에서 skip되는 이유
+
+  sender/core.py의 _send_real_ue_direct():
+
+  if target.ipsec_mode == "native":
+      return self._send_via_native_ipsec(...)   # ← 라우트 체크 없이 바로
+
+  # native가 아닌 경우에만 라우트 체크
+  route_result = check_route_to_target(resolved.host)
+  if not route_result.ok:
+      setup_route_to_target(...)  # ip route replace ...via UPF
+
+  native 모드는 P-CSCF 컨테이너 안에서 전송하는데, 그 컨테이너는 Open5GS
+  인프라의 일부라 이미 UPF 경유 라우팅이 설치되어 있다. 호스트에서 별도로
+  라우트를 설정할 필요가 없다.
+
+  ---
+  ESP 패킷이 UPF를 통과하는 전체 그림
+
+  [P-CSCF 컨테이너 - 172.22.0.21]
+    bind(172.22.0.21, 6100)
+    connect(10.20.20.2, 61008)
+    send(SIP_INVITE)
+         ↓
+    [xfrm OUT policy]
+    src=172.22.0.21:6100 dst=10.20.20.2:61008
+    → SA 매칭 → ESP 암호화
+         ↓
+    IP packet: src=172.22.0.21  dst=10.20.20.2
+    (payload는 암호화된 ESP)
+         ↓
+    [IP routing 테이블]
+    10.20.20.0/24 via 172.22.0.8
+         ↓
+  [UPF - 172.22.0.8]
+    ESP 패킷 수신 (내용은 모름 — 그냥 포워딩)
+    GTP-U 터널로 srsRAN에게 전달
+         ↓
+  [srsRAN (eNodeB/gNB)]
+    GTP 언래핑 → LTE/5G 프레임으로 변환
+         ↓
+  [UE - 10.20.20.2]
+    LTE 모뎀 수신 → GTP 언래핑
+    IP 패킷: src=172.22.0.21 dst=10.20.20.2
+    [xfrm IN policy]
+    ESP → 복호화 → UDP SIP INVITE
+    SIP 스택으로 전달 → 180 Ringing
+
+  ---
+  한 줄 요약
+
+  ▎ P-CSCF 컨테이너 안에서 send()를 호출하면 xfrm이 ESP로 암호화하고, IP 
+  ▎ 라우팅이 자동으로 UPF를 next hop으로 사용해서 UE까지 전달한다. 퍼저 코드는 
+  ▎ UPF를 직접 다루지 않는다 — 인프라 라우팅이 투명하게 처리한다.
+
+✻ Worked for 1m 14s
+
+※ recap: VoLTE mutation fuzzer 파이프라인 구조와 Sender의 bypass/native IPsec 동작 원리를 설명했다. 특히 native 모드에서 P-CSCF 컨테이너 안 SOCK_DGRAM bind로 xfrm이 자동 ESP 암호화하고 UPF를 통해 UE에 전달되는 흐름까지 정리 완료. 다음 질문 대기 중.
+
+❯ /export 설명                                                                  
+  ⎿  Conversation exported to:
+     /Users/chaejisung/Desktop/Project/volte-mutation-fuzzer/설명.txt
+
+※ recap: VoLTE mutation fuzzer 파이프라인 구조를 학습 중이다. CLI→Generator→Mutator→Sender→Oracle 흐름을 설명했고, native IPsec 모드에서 P-CSCF netns 안 SOCK_DGRAM bind로 xfrm이 자동 ESP 암호화하고 UPF 경유 UE 전달하는 원리까지 다뤘다.
+
+❯ 이거 전체를 완전하게 이해 가능하게 더 자세하게 설명해볼래                     
+
+⏺ 전체를 처음부터 완전하게 설명하겠습니다. 코드를 이미 충분히 읽었으므로 바로
+  씁니다.
+
+  ---
+  VolteMutationFuzzer — 완전한 이해
+
+  ---
+  0. 이 도구가 존재하는 이유
+
+  VoLTE(Voice over LTE)에서 스마트폰은 IMS(IP Multimedia Subsystem)라는 서버
+  인프라를 통해 통화한다. 통화 시작 시 SIP(Session Initiation Protocol)이라는
+  텍스트 기반 프로토콜로 신호를 주고받는다.
+
+  이 도구의 목표: SIP 패킷을 의도적으로 손상(변이)시켜서 실제 스마트폰(UE)에 
+  보내고, 스마트폰이 비정상적으로 반응하는지(크래시, 이상 동작) 관찰한다.
+
+  ---
+  1. 인프라 전체 구성
+
+  먼저 무엇이 어디에 있는지 파악해야 모든 게 이해된다.
+
+  [서버 163.180.185.51]
+  │
+  ├── Docker 컨테이너들 (Open5GS + Kamailio IMS)
+  │   ├── pcscf  (172.22.0.21)  ← P-CSCF: UE와 직접 SIP 통신
+  │   ├── scscf  (172.22.0.x)   ← S-CSCF: SIP 라우팅
+  │   ├── hss    (172.22.0.x)   ← HSS: 가입자 DB
+  │   ├── upf    (172.22.0.8)   ← UPF: UE 데이터 플레인 게이트웨이
+  │   └── mysql, mongo, ...
+  │
+  ├── srsRAN (eNodeB/gNB)       ← LTE/5G 기지국 역할
+  │
+  └── 퍼저 프로세스 (uv run fuzzer ...)
+      └── 이 코드가 Docker API + 소켓을 통해 모든 걸 제어
+
+  [실제 UE들] (LTE로 서버에 접속)
+  ├── MSISDN 111111: Pixel 9 / Galaxy A17 (IP: 가변, xfrm live resolve)
+  └── MSISDN 222222: iPhone 16e            (IP: 10.20.20.2)
+
+  UE는 LTE 라디오로 서버의 srsRAN에 붙고, Open5GS EPC를 통해 IMS 네트워크에
+  등록된다. 등록 완료 후 UE와 P-CSCF 사이에 IPsec 터널이 설치된다.
+
+  ---
+  2. UE 등록 시 무슨 일이 일어나는가 (배경 지식)
+
+  퍼저가 동작하기 전에 이미 일어난 일들이다. 이걸 알아야 퍼저가 왜 저런 식으로
+  동작하는지 이해된다.
+
+  1. UE 전원 ON + PLMN 선택
+     UE → srsRAN → Open5GS MME: Attach Request
+
+  2. EPS 인증 + 세션 수립
+     UE IP 할당: 10.20.20.2 (UPF가 관리)
+     GTP 터널: UPF ↔ srsRAN ↔ UE
+
+  3. IMS 등록 (SIP REGISTER)
+     UE → P-CSCF → S-CSCF → HSS
+
+     이때 UE가 Security-Client 헤더 전송:
+     Security-Client: ipsec-3gpp;alg=...;port-c=63193;port-s=61008;...
+     #                                         ↑ UE UAC port  ↑ UE UAS port
+
+  4. P-CSCF가 IPsec SA 협상 및 커널에 설치
+     xfrm state에 4개 SA 등록:
+     - UE:63193 ↔ PCSCF:5100  (UE→PCSCF, client pair)
+     - UE:61008 ↔ PCSCF:6100  (UE→PCSCF, server pair)
+     - PCSCF:5100 ↔ UE:63193  (PCSCF→UE, client pair)
+     - PCSCF:6100 ↔ UE:61008  (PCSCF→UE, server pair)  ← MT-INVITE 이 경로
+
+  이 상태가 갖춰진 후에야 퍼저를 실행할 수 있다.
+
+  ---
+  3. 파이프라인 전체 흐름
+
+  사용자 CLI 입력
+        ↓
+  CampaignConfig (설정 검증 + MSISDN→IP resolve)
+        ↓
+  CampaignExecutor.run() — 메인 루프
+        ↓
+  ┌─────────────────────────────────────────────────┐
+  │  for spec in CaseGenerator.generate():          │
+  │      case_result = _execute_case(spec)          │
+  │            ↓                                    │
+  │      [분기 결정]                                 │
+  │      ├─ dialog runtime 메서드? → _execute_dialog_case()       │
+  │      ├─ MT template 있음?    → _execute_mt_template_case()    │
+  │      └─ 기본               → 일반 PacketModel 경로           │
+  │                                                 │
+  │      store.append(case_result)                  │
+  │      circuit breaker 체크                       │
+  │      cooldown sleep                             │
+  └─────────────────────────────────────────────────┘
+        ↓
+  HtmlReportGenerator.generate()
+
+  현재 real-ue-direct 운영 기준에서는 _execute_mt_template_case() 경로가
+  핵심이다. 여기서부터 케이스 1회 실행을 완전히 분해한다.
+
+  ---
+  4. STEP 1 — CLI 입력 → CampaignConfig
+
+  uv run fuzzer campaign run \
+    --mode real-ue-direct \
+    --target-msisdn 222222 \
+    --methods INVITE \
+    --profile ims_specific \
+    --layer wire \
+    --strategy default \
+    --mt-invite-template a31 \
+    --ipsec-mode native \
+    --max-cases 50
+
+  이 CLI 입력이 CampaignConfig Pydantic 모델로 파싱·검증된다.
+
+  중요한 초기화:
+
+  # TargetEndpoint 생성
+  target = TargetEndpoint(
+      mode="real-ue-direct",
+      msisdn="222222",         # host는 None — live resolve 예정
+      ipsec_mode="native",
+      bind_container="pcscf",  # native 모드에서 컨테이너 이름
+      bind_port=None,          # native는 xfrm SA에서 포트를 직접 결정
+  )
+
+  # MT template 로드 (파일을 한 번만 읽어 메모리에)
+  mt_template_text = load_mt_invite_template("a31")
+  # → generator/templates/mt_invite_a31.sip.tmpl 파일 내용 (실제 캡처 기반 SIP 
+  패킷)
+
+  # RealUEDirectResolver 초기화
+  ue_resolver = RealUEDirectResolver()
+  # → scscf_container, pcscf_container, mysql_container 환경 변수 로드
+
+  ---
+  5. STEP 2 — CaseGenerator
+
+  CaseGenerator는 (method × profile × layer × strategy) 조합 중 유효한 것만
+  생성한다.
+
+  combos = []
+  for method in ["INVITE"]:
+      for profile in ["ims_specific"]:
+          for layer in ["wire"]:
+              for strategy in ["default"]:
+                  # 두 가지 검증:
+                  # 1. 이 layer에서 "default"가 지원되는가?
+                  if "default" not in SUPPORTED_STRATEGIES_BY_LAYER["wire"]:
+                      continue
+                  # 2. ims_specific profile이 wire+"default" 조합을 허용하는가?
+                  if not profile_supports_strategy("ims_specific", "wire",
+  "default"):
+                      continue
+                  combos.append(("ims_specific", "INVITE", "wire", "default"))
+
+  max_cases=50이면 조합이 1개라도 50번 반복한다. 각 반복마다 seed가 증가해서
+  매번 다른 변이가 생성된다:
+
+  CaseSpec(
+      case_id=0,
+      seed=seed_start + 0,  # 첫 번째
+      method="INVITE",
+      profile="ims_specific",
+      layer="wire",
+      strategy="default",
+  )
+  CaseSpec(case_id=1, seed=seed_start+1, ...)
+  ...
+  CaseSpec(case_id=49, seed=seed_start+49, ...)
+
+  identity strategy는 round 0에만 포함 (baseline 1회). 이후 라운드에서는
+  제외된다.
+
+  ---
+  6. STEP 3 — _execute_mt_template_case() 진입
+
+  _execute_case(spec)에서 경로 결정:
+
+  # INVITE는 dialog 경로가 있지만 MT template이 있으면 MT 경로 우선
+  # (--mt-invite-template 플래그)
+  if mt_template_text is not None and spec.response_code is None:
+      return _execute_mt_template_case(spec, ...)
+
+  ---
+  7. STEP 4 — UE IP + IMPI 동적 Resolve
+
+  resolved = ue_resolver.resolve(target, impi=None)
+  ue_ip = resolved.host   # "10.20.20.2"
+  impi = resolved.impi    # "001010000123512@ims.mnc001.mcc001.3gppnetwork.org"
+
+  _lookup_ue_contact() 내부에서 6단계 체인 실행:
+
+  Step 1: docker exec scscf kamctl ul show sip:222222@*
+          → 파싱: Contact: <sip:222222@10.20.20.2:8200>
+          → UEContact(host="10.20.20.2", port=8200, source="kamctl")
+
+          ← 신선도 체크: _xfrm_active_ue_ips()로 현재 SA가 있는 IP인지 확인
+             xfrm state에 10.20.20.2가 있으면 → 채택
+             없으면 (UE 재등록으로 IP 바뀜) → 다음 단계
+
+  Step 2: docker exec pcscf kamctl ul show  (P-CSCF kamctl)
+  Step 3: docker exec mysql mysql ... SELECT contact FROM location WHERE ...
+  Step 4: docker logs pcscf --tail 500
+          "Contact header: <sip:123512@10.20.20.2:8200>" 라인 파싱
+  Step 5: docker logs pcscf에서 OPTIONS keepalive ping 파싱
+          "OPTIONS to sip:001010000123512@10.20.20.2:8200 via ..."
+  Step 6: docker exec pcscf ip xfrm state
+          sel src 10.20.20.2/32 → 직접 IP 추출 (최후 수단)
+
+  각 단계마다 xfrm state의 활성 IP와 교차 검증한다. stale 캐시로 잘못된 IP를
+  보내면 timeout만 쌓이기 때문이다.
+
+  ---
+  8. STEP 5 — port_pc / port_ps 동적 Resolve
+
+  port_pc, port_ps = resolve_protected_ports("222222", ue_ip="10.20.20.2")
+
+  3가지 전략 순서:
+
+  Strategy 1: Security-Client 헤더 (가장 신뢰)
+
+  # docker logs pcscf --since 5m 출력에서:
+  # "Security-Client=ipsec-3gpp;alg=...;port-c=63193;port-s=61008;..."
+  # 이 헤더는 UE가 REGISTER할 때 보내는 것 — 가장 정확한 값
+
+  # ±20라인 window에서 ue_ip(10.20.20.2)가 보이는 Security-Client 매칭
+  # → port_pc=63193, port_ps=61008
+
+  iPhone 같은 UE는 포트가 인접하지 않다 (63193, 61008). 이전에 port_ps = port_pc
+   + 1 같은 추정을 썼는데 iPhone에서 완전히 틀렸고, 이 전략으로 해결됐다.
+
+  Strategy 2: ip xfrm state (커널 권위 소스)
+
+  # docker exec pcscf ip xfrm state
+  # src=172.22.0.21 dst=10.20.20.2 방향 SA 파싱
+  # sel sport=X dport=Y 에서 (X, Y) 쌍 추출
+  # 
+  # dport 기준 정렬:
+  #   smaller dport → sport이 UE port_ps
+  #   larger dport  → sport이 UE port_pc
+  # (P-CSCF client port < server port 관례: 5100 < 6100)
+  #
+  # dport가 정확히 2개일 때만 사용. 3개 이상이면 ambiguous → 다음 전략
+
+  Strategy 3: Term UE connection 로그 (레거시 fallback)
+
+  # "Term UE connection information: IP is 10.20.20.2 and Port is 63193"
+  # port_pc = 63193
+  # port_ps = port_pc + 1  ← 인접 포트 가정 (구형 fallback)
+
+  결과:
+  port_pc = 63193  # UE의 UAC port (outbound)
+  port_ps = 61008  # UE의 UAS port (inbound, SIP listener)
+
+  ---
+  9. STEP 6 — MT Template 렌더링
+
+  slots = build_default_slots(
+      msisdn="222222",
+      impi="001010000123512@ims.mnc001.mcc001.3gppnetwork.org",
+      pcscf_ip="172.22.0.21",
+      port_pc=63193,
+      port_ps=61008,
+      seed=42,            # Call-ID 등 랜덤 필드의 재현성
+      ue_ip="10.20.20.2",
+      local_port=15100,   # native 모드: mt_local_port (Via sent-by용)
+  )
+  wire_text = render_mt_invite(template_text, slots)
+
+  mt_invite_a31.sip.tmpl 파일은 실제 캡처에서 뽑은 완전한 3GPP MT-INVITE다.
+  {{impi}}, {{request_uri_port_pc}} 등 18개 슬롯이 있고 모두 채워진다.
+
+  렌더링 후 처리:
+  # 1. Content-Length 자동 계산
+  header, body = wire_text.split("\r\n\r\n", 1)
+  content_length = len(body.encode("utf-8"))
+  wire_text = wire_text.replace("{{content_length}}", str(content_length))
+
+  # 2. CRLF 정규화 (\n → \r\n)
+  wire_text = normalize_crlf(wire_text)
+
+  ---
+  10. STEP 7 — Mutator (변이 엔진)
+
+  editable = parse_editable_from_wire(wire_text)
+  # wire text → EditableSIPMessage (헤더별 분리된 편집 가능 구조)
+
+  mutated_wire = mutator.mutate_editable(editable, MutationConfig(
+      seed=42,
+      profile="ims_specific",
+      strategy="default",      # 요청값 — 내부에서 concrete strategy로 해석
+      layer="wire",
+      max_operations=1,
+  ))
+
+  strategy="default" 해석 과정:
+
+  resolve_effective_strategy(
+      requested="default",
+      profile="ims_specific",
+      layer="wire",
+      seed=42,
+  )
+  # → PROFILE_DEFAULT_STRATEGY_POOLS["ims_specific"]["wire"] 에서 seed=42로 선택
+  # 예: ["header_whitespace_noise", "alias_port_desync", "sdp_boundary_only", 
+  ...]
+  # seed 42 → random.choice() → "alias_port_desync"
+
+  같은 seed면 항상 같은 concrete strategy가 선택된다. 재현 가능성의 핵심이다.
+
+  wire layer 변이 종류:
+
+  Strategy: header_whitespace_noise
+  동작: Via, Contact 헤더 주변 공백/탭 추가
+  ────────────────────────────────────────
+  Strategy: alias_port_desync
+  동작: Via의 ;alias=IP~port~1 파라미터 포트 값 조작
+  ────────────────────────────────────────
+  Strategy: final_crlf_loss
+  동작: 마지막 \r\n 제거
+  ────────────────────────────────────────
+  Strategy: duplicate_content_length_conflict
+  동작: Content-Length 헤더 중복 삽입 (서로 다른 값)
+  ────────────────────────────────────────
+  Strategy: sdp_boundary_only
+  동작: SDP body의 미디어 라인 경계 토큰 조작
+  ────────────────────────────────────────
+  Strategy: sdp_struct_only
+  동작: SDP body의 라인 집합 구조 변경
+  ────────────────────────────────────────
+  Strategy: sdp_byte_edit
+  동작: SDP body 내에서만 바이트 수준 조작
+
+  identity면 변이 없음 — 원본 그대로 반환.
+
+  ims_specific + wire 기본 풀에는 SDP 전략 3종이 포함된다 (2026-04-27~).
+  Content-Type: application/sdp body가 없으면 SDP 전략은 자동 skip.
+
+  결과:
+  MutatedWireCase(
+      wire_text="INVITE sip:222222@...",  # 변이된 SIP 텍스트
+      records=[MutationRecord(operator="replace_text", target=ViaAlias)],
+      profile="ims_specific",
+      strategy="alias_port_desync",  # resolved concrete strategy
+      final_layer="wire",
+  )
+
+  ---
+  11. STEP 8 — Sender (native 모드 완전 분해)
+
+  artifact = SendArtifact(
+      wire_text=mutated_wire.wire_text,
+      preserve_via=True,    # --preserve-via: Via 헤더 수동 보존
+      preserve_contact=True,
+  )
+
+  mt_target = target.model_copy(update={
+      "host": "10.20.20.2",
+      "port": 61008,         # port_ps: UE의 SIP listener 포트
+      "ipsec_mode": "native",
+      "bind_container": "pcscf",
+      "bind_port": None,     # native는 xfrm SA에서 포트 결정
+  })
+
+  send_result = sender.send_artifact(artifact, mt_target,
+  collect_all_responses=True)
+
+  _send_via_native_ipsec() 내부 — 6단계:
+
+  11-1. IPsec 세션 Resolve
+
+  session = resolve_native_ipsec_session(
+      ue_ip="10.20.20.2",
+      pcscf_container="pcscf",
+  )
+
+  docker exec pcscf ip xfrm state
+
+  출력에서 src=172.22.0.21 dst=10.20.20.2 방향 SA만 파싱:
+
+  src 172.22.0.21 dst 10.20.20.2
+      proto esp spi 0xABC...
+      sel src 172.22.0.21/32 dst 10.20.20.2/32
+          sport 5100 dport 63193   → port_map[63193] = 5100
+
+  src 172.22.0.21 dst 10.20.20.2
+      proto esp spi 0xDEF...
+      sel src 172.22.0.21/32 dst 10.20.20.2/32
+          sport 6100 dport 61008   → port_map[61008] = 6100
+
+  session = ResolvedNativeIPsecSession(
+      ue_ip="10.20.20.2",
+      pcscf_ip="172.22.0.21",
+      port_map={63193: 5100, 61008: 6100},
+  )
+
+  11-2. Preflight — 어느 P-CSCF 포트로 bind할지 결정
+
+  MT-INVITE는 UE의 server port(port_ps=61008) 로 보낸다. UE는 이 포트에서 SIP
+  수신을 기다린다. port_pc(63193)는 UE가 외부로 보낼 때 사용하는 UAC 포트라 SIP
+  listener가 없다.
+
+  ue_port = 61008   # port_ps
+  pcscf_port = session.port_map[61008]  # 6100
+
+  컨테이너에 python3 + SOCK_DGRAM이 있는지 확인:
+  docker exec pcscf python3 -c "import socket; 
+  socket.socket(AF_INET,SOCK_DGRAM).close(); print('ok')"
+
+  11-3. 페이로드 준비
+
+  payload, events = prepare_real_ue_direct_payload(
+      artifact,
+      local_host="172.22.0.21",
+      local_port=6100,          # P-CSCF server port (Via sent-by에 들어갈 값)
+      rewrite_via=not artifact.preserve_via,
+      rewrite_contact=not artifact.preserve_contact,
+  )
+
+  preserve_via=True면 Via를 수정하지 않는다. 원본 템플릿의 Via가 이미 올바른
+  포트를 가지고 있기 때문이다.
+
+  11-4. Correlation 추출
+
+  correlation = extract_correlation_from_artifact(artifact)
+  # Call-ID, CSeq, Via branch 파싱
+  # → 나중에 P-CSCF 로그에서 이 케이스의 응답을 필터링하는 데 사용
+
+  11-5. UDP 드라이버 실행 — 암호화의 실제 발생 지점
+
+  native_result = send_via_native_ipsec(
+      container="pcscf",
+      src_ip="172.22.0.21",
+      src_port=6100,           # P-CSCF server port (SA selector의 sport)
+      dst_ip="10.20.20.2",
+      dst_port=61008,          # UE port_ps (SA selector의 dport)
+      payload=payload,
+      timeout_seconds=5.0,
+      transport="UDP",
+      alt_src_port=5100,       # P-CSCF client port (보조 SA 쌍)
+      alt_dst_port=63193,      # UE port_pc (보조 SA 쌍)
+  )
+
+  실제로 실행되는 명령:
+  docker exec -i pcscf python3 -c <_UDP_DRIVER_SCRIPT> \
+      172.22.0.21 6100 10.20.20.2 61008 5.0 5100 63193
+
+  stdin으로 페이로드 전달:
+  [4바이트 big-endian 길이][raw SIP bytes]
+
+  드라이버 스크립트 내부 (P-CSCF 컨테이너 netns):
+
+  # Primary socket: PCSCF:6100 ↔ UE:61008 (server SA 쌍)
+  sock_primary = socket.socket(AF_INET, SOCK_DGRAM)
+  sock_primary.setsockopt(SO_REUSEADDR, 1)
+  sock_primary.setsockopt(SO_REUSEPORT, 1)  # kamailio와 포트 공유
+  sock_primary.bind(("172.22.0.21", 6100))   # ← xfrm SA selector sport와 일치
+  sock_primary.connect(("10.20.20.2", 61008)) # ← kamailio wildcard보다 우선순위
+   높음
+
+  # Alt socket: PCSCF:5100 ↔ UE:63193 (client SA 쌍)
+  sock_alt = socket.socket(AF_INET, SOCK_DGRAM)
+  sock_alt.bind(("172.22.0.21", 5100))
+  sock_alt.connect(("10.20.20.2", 63193))
+
+  # 전송
+  sock_primary.send(payload)
+  #                 ↑
+  # 이 시점 커널이 하는 일:
+  #   UDP 헤더 추가: src=172.22.0.21:6100 dst=10.20.20.2:61008
+  #   xfrm OUT policy 조회: sport=6100, dport=61008 → SA(spi=0xDEF...) 매칭
+  #   AES-128-CBC 암호화 + HMAC-SHA1 무결성 코드 추가
+  #   ESP 헤더 씌우기: [IP][ESP header][암호화된 UDP+SIP][ESP trailer][HMAC]
+  #   IP routing: dst=10.20.20.2 → 10.20.20.0/24 via 172.22.0.8 (UPF)
+  #   → 패킷을 UPF로 전달
+
+  # keepalive 필터링 + 응답 대기
+  deadline = time.monotonic() + timeout_seconds
+  while True:
+      ready, _, _ = select_mod.select([sock_primary, sock_alt], [], [],
+  remaining)
+      data, peer = ready[0].recvfrom(65535)
+
+      # CRLF keepalive 필터 (RFC 5626)
+      # UE가 연결 유지를 위해 주기적으로 \r\n만 보냄
+      # 이걸 SIP 응답으로 오인하면 오분류됨
+      if not data.strip(b"\r\n\t "):
+          continue  # keepalive → 무시하고 계속 대기
+
+      # 실제 SIP 응답 → 길이 프레임으로 stdout에 출력
+      result_data, result_peer = data, peer
+      break
+
+  # stdout 프레임 포맷:
+  # [4B length][ASCII host\n][2B port][SIP response bytes]
+
+  11-6. 패킷의 UPF 경유
+
+  [P-CSCF 컨테이너 netns]
+    ESP 패킷 (src=172.22.0.21, dst=10.20.20.2)
+          ↓
+    [커널 IP routing]
+    route: 10.20.20.0/24 via 172.22.0.8
+          ↓
+  [UPF 172.22.0.8]
+    ESP 패킷 수신 (내용 모름, 그냥 포워딩)
+    GTP-U 터널로 srsRAN에게 전달
+          ↓
+  [srsRAN]
+    GTP 언래핑 → LTE 프레임으로 변환
+          ↓
+  [UE 10.20.20.2] (LTE 수신)
+    GTP 언래핑
+    [xfrm IN policy]
+    ESP → AES 복호화 → UDP SIP INVITE 복원
+    SIP 스택 전달 → 화면 벨 울림
+    → 180 Ringing 응답 (같은 경로로 역방향)
+
+  11-7. 응답 수신 + 보조 로그 폴링
+
+  드라이버 stdout 파싱:
+  response_bytes, peer_host, peer_port = _parse_driver_response(proc.stdout)
+  if response_bytes is not None:
+      observation = parse_sip_response(response_bytes, (peer_host, peer_port))
+      observations.append(observation)
+
+  SO_REUSEPORT 때문에 응답이 kamailio 소켓으로 빨려간 경우 보조 수단:
+  observations.extend(
+      observe_pcscf_log_responses(
+          container="pcscf",
+          since=sent_at_iso,    # 전송 시점 이후 로그만
+          ue_ip="10.20.20.2",
+          ue_port=61008,
+          correlation=correlation,  # Call-ID, CSeq, branch로 이 케이스 응답만 
+  필터
+          timeout_seconds=remaining,
+          poll_interval_seconds=0.25,
+      )
+  )
+
+  ---
+  12. STEP 9 — INVITE 이후 CANCEL teardown
+
+  if is_invite:
+      teardown_events = _teardown_invite(wire_text, mt_target, send_result,
+  config)
+
+  INVITE를 보내면 UE가 벨이 울리는 상태가 된다. 이걸 정리하지 않으면 다음
+  케이스에서 UE가 이미 통화 중인 상태가 되어 퍼징이 꼬인다.
+
+  # 1. 180 Ringing 받은 경우에만 CANCEL 전송 (RFC 3261)
+  has_provisional = any(100 <= obs.status_code < 200 for obs in
+  send_result.responses)
+  if not has_provisional:
+      return  # 응답 없었으면 CANCEL 불필요
+
+  # 2. INVITE wire text에서 CANCEL 생성
+  cancel_text = wire_text.replace("INVITE ", "CANCEL ", count=1)
+  cancel_text = re.sub(r"(CSeq:\s*\d+)\s+INVITE", r"\1 CANCEL", cancel_text)
+
+  # 3. 전송 (최대 3회 retry)
+  for attempt in range(3):
+      cancel_result = sender.send_artifact(cancel_artifact, mt_target)
+      if any(obs.status_code in (200, 487) for obs in cancel_result.responses):
+          break  # 200 OK 또는 487 Request Terminated
+      time.sleep(0.5)
+  else:
+      time.sleep(2.0)  # 실패 시 UE 자체 타이머 대기
+
+  ---
+  13. STEP 10 — Oracle (판정 엔진)
+
+  verdict = oracle.evaluate(send_result, context, process_name="pcscf")
+
+  OracleEngine.evaluate() 내부 판정 순서:
+
+  SocketOracle (항상 실행)
+
+  outcome = send_result.outcome  # timeout / success / error / invalid_response
+  final = send_result.final_response  # 마지막 수신 응답
+
+  if outcome == "send_error":   → "unknown"
+  if outcome == "timeout":      → "timeout"  (응답 없음)
+  if outcome == "invalid":      → "suspicious" (SIP 파싱 불가)
+  else:                         → "normal"   (응답 있음)
+
+  주의: SocketOracle은 4xx/5xx도 normal로 반환한다. 이건 "응답을 받았다"는
+  의미이고, 4xx가 suspicious인지는 결과 분석 단계에서 판단한다.
+
+  AdbOracle (--adb 플래그 시)
+
+  # AdbLogCollector가 백그라운드에서 logcat 스트리밍 중
+  lines = adb_collector.get_lines()  # 케이스 시작 이후 새 라인들
+  detector.feed_lines(lines)
+  events = detector.drain_events()
+
+  critical = [e for e in events if e.severity == "critical"]
+  if critical:
+      return OracleVerdict(verdict="stack_failure", ...)
+
+  AdbAnomalyDetector의 감지 패턴 (Android):
+  - SIGSEGV, SIGABRT, Segmentation fault
+  - ANR (Application Not Responding)
+  - com.sec.imsservice 크래시 로그
+  - java.lang.RuntimeException, NullPointerException (IMS 관련)
+
+  IosOracle (--ios 플래그 시)
+
+  # IosSyslogCollector가 백그라운드에서 syslog 스트리밍
+  lines = ios_collector.slice(since_ts, now)  # 시간 구간 슬라이싱
+  detector.feed_lines(lines)
+  events = detector.drain_events()
+
+  if critical:
+      return OracleVerdict(verdict="stack_failure", ...)
+
+  log_grace_seconds 폴링
+
+  # SIP 응답 직후가 아니라 수 초 뒤에 크래시가 나타나는 경우가 있음
+  # 예: Samsung com.sec.imsservice가 CSeq 파싱에서 200 OK 보낸 뒤 7초 후 죽음
+  grace_end = time.monotonic() + context.log_grace_seconds
+  while time.monotonic() < grace_end:
+      adb_result = adb_oracle.check()  # 0.25초마다 폴링
+      if adb_result.matched:
+          return OracleVerdict(verdict="stack_failure", ...)
+      time.sleep(0.25)
+
+  ProcessOracle (10케이스마다 또는 timeout 시)
+
+  # docker inspect pcscf → State.Status == "running" 확인
+  proc = process_oracle.check("pcscf")
+  if not proc.alive:
+      return OracleVerdict(verdict="crash", ...)
+
+  ---
+  14. STEP 11 — Circuit Breaker
+
+  if verdict in ("timeout", "unknown"):
+      consecutive_failures += 1
+
+      # 절반 임계값에서 SA 체크 (기본 5회)
+      if consecutive_failures >= cb_threshold // 2:
+          sa_status = check_ipsec_sa_alive()
+          # docker exec pcscf ip xfrm state에서 10.20.20.x SA 개수 카운트
+          if not sa_status.alive:
+              # UE 재등록 필요 → 캠페인 중단
+              case_result.verdict = "infra_failure"
+              break
+          else:
+              # SA는 살아있지만 timeout streak
+              # UE가 재등록해서 port_pc/port_ps가 바뀌었을 가능성
+              time.sleep(2.0)  # 짧은 쿨다운
+
+      if consecutive_failures >= cb_threshold:  # 기본 10회
+          break  # 캠페인 중단
+  else:
+      consecutive_failures = 0  # 정상 응답이면 리셋
+
+  ---
+  15. STEP 12 — ResultStore + 아티팩트 저장
+
+  # 1. JSONL 기록
+  store.append(CaseResult(
+      case_id=42,
+      seed=1042,
+      method="INVITE",
+      profile="ims_specific",
+      layer="wire",
+      strategy="alias_port_desync",   # resolved concrete strategy
+      mutation_ops=("replace_text(Via.alias)",),
+      verdict="normal",
+      reason="outcome=success, code=180",
+      response_code=180,
+      elapsed_ms=1523.4,
+      raw_request="INVITE sip:222222@10.20.20.2:61008 SIP/2.0\r\n...",
+      raw_response="SIP/2.0 180 Ringing\r\n...",
+      reproduction_cmd="uv run fuzzer campaign run --mode real-ue-direct "
+                       "--target-msisdn 222222 --impi ... "
+                       "--mt-invite-template a31 --ipsec-mode native "
+                       "--methods INVITE --profile ims_specific --layer wire "
+                       "--strategy alias_port_desync --seed-start 1042 
+  --max-cases 1",
+  ))
+
+  # 2. ADB 스냅샷 (suspicious/crash/stack_failure)
+  adb_snapshot_dir = "campaign_dir/adb_snapshots/case_42/"
+  # logcat (light: logcat만, full: + bugreport)
+  # screenshot
+
+  # 3. iOS 스냅샷 (매 케이스)
+  ios_snapshot_dir = "campaign_dir/ios_snapshots/case_42/"
+  # syslog slice
+  # .ips crash report pull
+
+  # 4. Evidence 수집
+  evidence.collect(case_result, sent_payload, pcap_path, adb_snapshot_dir,
+  ios_snapshot_dir)
+
+  # 5. 실시간 크래시 분석
+  crash_analyzer.analyze_case_immediately(case_result)
+
+  ---
+  16. 캠페인 종료
+
+  # JSONL 푸터 기록
+  store.write_footer(CampaignResult(status="completed", summary=...))
+
+  # HTML 리포트 생성
+  HtmlReportGenerator(jsonl_path).generate()
+  # campaign.jsonl을 읽어 verdict 분포, 변이 오퍼레이터 통계,
+  # suspicious/crash 케이스 목록, reproduction_cmd 포함 리포트 생성
+
+  ---
+  전체 흐름 한눈에 (케이스 1회)
+
+  CLI("--mode real-ue-direct --target-msisdn 222222 --ipsec-mode native ...")
+    ↓ CampaignConfig 검증
+    ↓ MT template 로드 (파일 1회)
+
+  CaseSpec(seed=1042, method=INVITE, profile=ims_specific, layer=wire,
+  strategy=default)
+    ↓
+  [Resolve] kamctl → xfrm 교차검증 → ue_ip=10.20.20.2, impi=001010...
+  [Resolve] docker logs pcscf Security-Client → port_pc=63193, port_ps=61008
+    ↓
+  [Generate] render_mt_invite(template, 18개 슬롯) → wire_text
+    ↓ parse_editable_from_wire
+    ↓
+  [Mutate] resolve_effective_strategy(default, ims_specific, wire, seed=1042)
+           → "alias_port_desync"
+           → Via 헤더 alias 파라미터 포트 값 비틀기
+           → MutatedWireCase(wire_text=..., strategy="alias_port_desync")
+    ↓
+  [Send-native]
+    resolve_native_ipsec_session() → port_map={63193:5100, 61008:6100}
+    preflight: ue_port=61008 → pcscf_port=6100
+    prepare_payload: Via/Contact 헤더 rewrite (preserve=True면 skip)
+    docker exec -i pcscf python3 -c <driver>
+        bind(172.22.0.21, 6100) ← xfrm SA selector 매칭
+        connect(10.20.20.2, 61008)
+        send(payload)  → 커널 xfrm → AES ESP → UPF → srsRAN → LTE → UE
+        select([primary, alt]) + keepalive 필터
+        → SIP/2.0 180 Ringing 수신
+    CANCEL teardown (3회 retry)
+    ↓
+  [pcap] case_000042.pcap 저장
+    ↓
+  [Oracle]
+    SocketOracle: outcome=success → "normal"
+    AdbOracle: logcat 정상
+    IosOracle: syslog 정상
+    → verdict="normal", elapsed_ms=1523
+    ↓
+  [Store] campaign.jsonl에 JSONL 한 줄 추가
+  [ADB] light 스냅샷 (logcat slice)
+  [iOS] ios_snapshots/case_42/ 저장
+    ↓
+  console 출력: case 42 | normal | 1523ms | alias_port_desync
+
+  ---
+  핵심 설계 결정 요약
+
+  결정: UE IP를 캐시하지 않고 매 케이스마다 live resolve
+  이유: UE 재등록 시 IP 바뀜 → stale 캐시가 silent timeout 유발
+  ────────────────────────────────────────
+  결정: port_pc/port_ps를 +1 추정 안 함
+  이유: iPhone은 비인접 포트 (63193, 61008) → 추정이 완전히 틀림
+  ────────────────────────────────────────
+  결정: SOCK_DGRAM으로 bind (SOCK_RAW 아님)
+  이유: RAW socket은 xfrm을 우회해서 평문으로 나감 → spec-strict UE 드롭
+  ────────────────────────────────────────
+  결정: connect() 호출 필수
+  이유: connected socket이 kamailio wildcard보다 Linux UDP routing 우선순위 높음
+  ────────────────────────────────────────
+  결정: Primary + Alt 이중 소켓
+  이유: SA rekey 시 응답이 다른 SA 쌍으로 올 수 있음
+  ────────────────────────────────────────
+  결정: keepalive 필터링
+  이유: CRLF keepalive를 SIP 응답으로 오인하면 timeout 오분류
+  ────────────────────────────────────────
+  결정: P-CSCF 로그 보조 폴링
+  이유: SO_REUSEPORT로 응답이 kamailio에 빨려간 경우 대비
+  ────────────────────────────────────────
+  결정: Circuit breaker + SA 체크
+  이유: SA 만료를 timeout streak과 구분 (다른 원인이므로 다른 대응)
+  ────────────────────────────────────────
+  결정: reproduction_cmd에 resolved strategy 기록
+  이유: requested strategy("default")가 아닌 실제 concrete
+    strategy("alias_port_desync")를 남겨야 재현 가능
+
+✻ Cooked for 3m 44s

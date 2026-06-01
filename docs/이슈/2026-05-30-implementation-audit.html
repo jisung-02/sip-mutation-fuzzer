@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2026-05-30 Implementation Audit</title>
+  <style>
+:root {
+  color-scheme: light;
+  --bg: #f7f7f4;
+  --paper: #ffffff;
+  --ink: #1f2328;
+  --muted: #667085;
+  --line: #d7d9dd;
+  --accent: #145c52;
+  --accent-2: #9a3412;
+  --code-bg: #f1f3f5;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.62;
+}
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 56px 28px 88px;
+}
+article {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 46px 54px;
+  box-shadow: 0 18px 50px rgba(16, 24, 40, 0.08);
+}
+h1, h2, h3 { line-height: 1.24; letter-spacing: 0; }
+h1 {
+  margin: 0 0 24px;
+  font-size: 2.2rem;
+  color: #0f172a;
+  border-bottom: 3px solid var(--accent);
+  padding-bottom: 18px;
+}
+h2 {
+  margin: 42px 0 16px;
+  font-size: 1.45rem;
+  color: var(--accent);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+h3 {
+  margin: 30px 0 12px;
+  font-size: 1.12rem;
+  color: var(--accent-2);
+}
+p { margin: 0 0 15px; }
+ul, ol { margin: 0 0 18px 24px; padding: 0; }
+li { margin: 7px 0; }
+a { color: #0969da; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+pre {
+  margin: 18px 0 22px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  background: #111827;
+  color: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #253142;
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: 0.88rem; }
+.table-wrap { overflow-x: auto; margin: 18px 0 24px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94rem;
+}
+th, td {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #eef4f2; color: #143832; font-weight: 700; }
+tr:nth-child(even) td { background: #fbfbfa; }
+@media (max-width: 720px) {
+  main { padding: 20px 12px 48px; }
+  article { padding: 26px 18px; }
+  h1 { font-size: 1.75rem; }
+}
+</style>
+</head>
+<body>
+  <main>
+    <article>
+<h1 id="2026-05-30-implementation-audit">2026-05-30 Implementation Audit</h1>
+<p>대상 브랜치: <code>audit/dead-code-cleanup-implementation-check</code> 감사 기준 커밋: <code>1dcbe5c chore: remove unused dead code</code> 기준 브랜치: <code>main</code> (<code>5829e6b feat(tools): add docker-clean task to stop and remove all Docker containers</code>)</p>
+<p>이 보고서는 사용자 요청의 &quot;잘못 구현된 것&quot;을 구현/검증 증거 기준으로 분류한다. 현재 프로젝트 지침에 맞춰 <code>real-ue-direct</code> 및 실기기 경로를 우선했고, 소프트폰 경로는 테스트 실패 분류에 필요한 범위에서만 확인했다.</p>
+<h2 id="결론">결론</h2>
+<p>실제 구현 버그는 <code>--packet-file</code> 캠페인 계약 쪽에 집중되어 있다.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>분류</th><th>항목</th><th>판단</th></tr></thead>
+<tbody>
+<tr><td>실제 구현 버그</td><td><code>--packet-file</code> layer validation 누락</td><td>수정 필요</td></tr>
+<tr><td>실제 구현 버그</td><td><code>--packet-file</code> 가 methods/response_codes/strategy metadata 를 느슨하게 받아 잘못된 case 를 생성</td><td>수정 필요</td></tr>
+<tr><td>테스트 debt</td><td>ADB/oracle/reproduction/native-IPsec 관련 7개 실패</td><td>구현보다 테스트 기대값이 낡은 것으로 판단</td></tr>
+<tr><td>타입 debt</td><td><code>uv run ty check src</code> 10 diagnostics</td><td>런타임 버그 증거는 약하지만 정리 필요</td></tr>
+<tr><td>브랜치 diff</td><td>dead-code cleanup 자체</td><td>repo 내부 참조 기준 추가 구현 버그는 발견하지 못함</td></tr>
+</tbody></table></div>
+<h2 id="검증-명령">검증 명령</h2>
+<pre><code class="language-bash">git status --short --branch
+# ## audit/dead-code-cleanup-implementation-check
+# ?? docs/이슈/2026-05-30-implementation-audit.md
+# ?? 설명.txt
+# ?? 설명2.txt
+
+git diff --stat main...HEAD
+# 11 files changed, 134 insertions(+), 210 deletions(-)
+
+git diff --check main...HEAD
+# 통과
+
+uv run python -m compileall -q src scripts
+# 통과
+
+uv run ruff check .
+# All checks passed!
+
+uv run --with vulture vulture src scripts --min-confidence 90
+# 통과, 출력 없음
+
+uv run ty check src
+# 10 diagnostics
+
+uv run pytest -q
+# 8 failed, 902 passed, 182 subtests passed</code></pre>
+<h2 id="실제-구현-문제">실제 구현 문제</h2>
+<h3 id="p1---packet-file-이-wire-model-layer-를-거부하지-않는다">P1. <code>--packet-file</code> 이 <code>wire</code>/<code>model</code> layer 를 거부하지 않는다</h3>
+<p>근거:</p>
+<ul>
+<li><a href="../../README.md:202">README.md:202</a> 는 <code>--packet-file</code> 이 파일 SIP 패킷을 변이 없이 바이트 1:1로 송신한다고 설명한다.</li>
+<li><a href="../../README.md:218">README.md:218</a> 는 <code>--layer</code> 를 <code>byte</code> 또는 <code>auto</code> 만 허용한다고 명시한다.</li>
+<li><a href="../../tests/campaign/test_contracts.py:259">tests/campaign/test_contracts.py:259</a> 는 <code>layers=(&quot;wire&quot;,)</code> 를 <code>ValidationError</code> 로 기대한다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/contracts.py:233">src/volte_mutation_fuzzer/campaign/contracts.py:233</a> 의 <code>packet_file</code> validator 는 <code>mode</code>, <code>target_msisdn</code>, 파일 존재 여부만 확인하고 layer 를 검사하지 않는다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:133">src/volte_mutation_fuzzer/campaign/core.py:133</a> 는 <code>packet_file_active</code> 일 때 <code>effective_layers = (&quot;byte&quot;,)</code> 로 조용히 collapse 한다.</li>
+</ul>
+<p>실제 실패:</p>
+<pre><code class="language-text">tests/campaign/test_contracts.py::PacketFileConfigTests::test_packet_file_rejects_wire_layer
+AssertionError: ValidationError not raised</code></pre>
+<p>영향:</p>
+<ul>
+<li>사용자가 <code>--packet-file --layer wire</code> 또는 <code>--layer model</code> 을 줘도 즉시 실패하지 않는다.</li>
+<li>실제 실행은 사용자가 요청한 layer 와 다르게 <code>byte</code> case 로 저장된다.</li>
+<li>raw bytes/NUL 보존 경로에서 &quot;명시적 거부&quot; 대신 &quot;묵시적 변환&quot;이 일어나 재현 명령과 결과 메타데이터를 흐린다.</li>
+</ul>
+<p>권장 수정:</p>
+<ul>
+<li><code>CampaignConfig</code> 의 <code>packet_file</code> validator 에서 <code>set(self.layers) &lt;= {&quot;byte&quot;, &quot;auto&quot;}</code> 를 강제한다.</li>
+<li>위반 시 <code>ValueError(&quot;packet_file supports layers: byte, auto&quot;)</code> 를 발생시킨다.</li>
+<li><code>CaseGenerator</code> 의 silent collapse 는 <code>auto</code> 처리 정도로만 남기고, invalid layer 는 config 단계에서 막는다.</li>
+</ul>
+<h3 id="p1---packet-file-이-단일-raw-packet-계약인데-여러-method-response-case-를-생성할-수-있다">P1. <code>--packet-file</code> 이 단일 raw packet 계약인데 여러 method/response case 를 생성할 수 있다</h3>
+<p>근거:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/contracts.py:141">src/volte_mutation_fuzzer/campaign/contracts.py:141</a> 는 <code>methods</code> 와 <code>response_codes</code> 가 모두 비어 있으면 모든 SIP method 를 기본값으로 넣는다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:141">src/volte_mutation_fuzzer/campaign/core.py:141</a> 는 <code>config.methods</code> 를 그대로 순회해 case 를 생성한다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:156">src/volte_mutation_fuzzer/campaign/core.py:156</a> 는 <code>response_codes</code> 도 별도로 case 로 생성한다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:814">src/volte_mutation_fuzzer/campaign/core.py:814</a> 는 <code>spec.response_code is None</code> 인 경우에만 packet-file executor 로 보낸다. response case 는 packet-file 을 무시하고 일반 synthetic response path 로 간다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:1447">src/volte_mutation_fuzzer/campaign/core.py:1447</a> 와 <a href="../../src/volte_mutation_fuzzer/campaign/core.py:1480">src/volte_mutation_fuzzer/campaign/core.py:1480</a> 은 packet-file 내부에서도 <code>spec.method</code> 로 INVITE teardown/oracle grace 를 결정한다.</li>
+</ul>
+<p>재현 가능한 current-state 증거:</p>
+<pre><code class="language-bash">uv run python - &lt;&lt;&#x27;PY&#x27;
+import tempfile
+from pathlib import Path
+from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
+from volte_mutation_fuzzer.campaign.core import CaseGenerator
+
+p = Path(tempfile.NamedTemporaryFile(delete=False).name)
+p.write_bytes(b&quot;OPTIONS sip:u@h SIP/2.0\r\n\r\n&quot;)
+cfg = CampaignConfig(
+    mode=&quot;real-ue-direct&quot;,
+    target_host=&quot;10.20.20.8&quot;,
+    target_msisdn=&quot;111111&quot;,
+    packet_file=str(p),
+    max_cases=5,
+)
+print(cfg.layers, cfg.strategies)
+for case in CaseGenerator(cfg).generate():
+    print(case.model_dump())
+p.unlink()
+PY</code></pre>
+<p>출력 요지:</p>
+<pre><code class="language-text">layers (&#x27;model&#x27;, &#x27;wire&#x27;, &#x27;byte&#x27;) strategies (&#x27;default&#x27;, &#x27;state_breaker&#x27;)
+case_id=0 method=&#x27;ACK&#x27;    layer=&#x27;byte&#x27; strategy=&#x27;default&#x27;
+case_id=1 method=&#x27;BYE&#x27;    layer=&#x27;byte&#x27; strategy=&#x27;default&#x27;
+case_id=2 method=&#x27;CANCEL&#x27; layer=&#x27;byte&#x27; strategy=&#x27;default&#x27;
+case_id=3 method=&#x27;INFO&#x27;   layer=&#x27;byte&#x27; strategy=&#x27;default&#x27;
+case_id=4 method=&#x27;INVITE&#x27; layer=&#x27;byte&#x27; strategy=&#x27;default&#x27;</code></pre>
+<p>같은 파일 바이트가 ACK/BYE/CANCEL/INFO/INVITE 라벨로 저장된다. 파일 start-line 이 <code>OPTIONS</code> 여도 oracle/teardown 판단은 case label 을 따른다.</p>
+<p><code>response_codes</code> 도 같이 허용된다.</p>
+<pre><code class="language-text">CampaignConfig(..., packet_file=..., methods=(&quot;INVITE&quot;,), response_codes=(486,))
+=&gt; case 0: packet-file INVITE
+=&gt; case 1: synthetic response 486 INVITE</code></pre>
+<p>영향:</p>
+<ul>
+<li>&quot;파일 패킷 그대로 송신&quot; 캠페인 안에 synthetic response fuzzing 이 섞일 수 있다.</li>
+<li>raw packet 의 실제 method 와 result metadata 의 <code>method</code> 가 달라질 수 있다.</li>
+<li>INVITE 파일이 ACK/BYE 라벨로 실행되면 <code>collect_all_responses</code>, teardown, oracle grace 가 잘못 적용된다.</li>
+<li><code>strategy=default</code> / seed 값이 저장되지만 packet-file path 는 mutator 를 전혀 호출하지 않아 실제 변이는 없다.</li>
+</ul>
+<p>권장 수정:</p>
+<ul>
+<li><code>packet_file</code> 모드에서는 <code>response_codes</code> 를 금지한다.</li>
+<li><code>packet_file</code> 모드에서는 method 를 정확히 하나만 허용하거나, 파일 start-line 에서 method 를 파싱해 <code>methods</code> 를 자동 고정한다. 운영 실수 방지 관점에서는 &quot;파일에서 파싱하고 사용자가 다른 method 를 주면 reject&quot; 가 가장 안전하다.</li>
+<li><code>packet_file</code> 모드에서는 strategy 를 <code>identity</code> 로 강제하거나, non-identity strategy 를 reject 한다. 적어도 result/reproduction metadata 가 &quot;mutated default strategy&quot; 처럼 보이면 안 된다.</li>
+<li>테스트를 추가한다:</li>
+<li><code>packet_file</code> + methods omitted =&gt; reject 또는 파일 method 로 one-case</li>
+<li><code>packet_file</code> + multiple methods =&gt; reject</li>
+<li><code>packet_file</code> + response_codes =&gt; reject</li>
+<li><code>packet_file</code> + non-identity strategy =&gt; reject 또는 metadata identity 고정</li>
+</ul>
+<h2 id="테스트-기대값이-낡은-항목">테스트 기대값이 낡은 항목</h2>
+<p><code>uv run pytest -q</code> 의 8개 실패 중 위 <code>packet_file</code> validator 실패 1개만 실제 구현 버그로 봤다. 아래 7개는 현재 구현, 주석, 문서화된 운영 이력과 대조했을 때 테스트가 예전 동작을 기대한다.</p>
+<h3 id="adb-logcat-clear-호출-횟수">ADB logcat clear 호출 횟수</h3>
+<p>실패:</p>
+<pre><code class="language-text">tests/adb/test_core.py::AdbLogCollectorTests::test_start_spawns_process_per_buffer_and_clears_logcat</code></pre>
+<p>현재 구현:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/adb/core.py:529">src/volte_mutation_fuzzer/adb/core.py:529</a> 에서 configured buffer 마다 <code>adb logcat -b &lt;buffer&gt; -c</code> 를 호출한다.</li>
+<li><a href="2026-04-26-워크로그.md:188">docs/이슈/2026-04-26-워크로그.md:188</a> 는 <code>adb logcat -c</code> 가 main buffer 만 비워 stale radio/system/crash 로그가 재매칭되던 문제를 기록한다.</li>
+</ul>
+<p>판단: 구현이 맞고 테스트가 낡았다. 테스트는 <code>run_mock.assert_called_once_with([&quot;adb&quot;, ..., &quot;logcat&quot;, &quot;-c&quot;])</code> 대신 buffer별 clear 호출을 기대해야 한다.</p>
+<h3 id="rilj-unexpected-response-분류">RILJ unexpected response 분류</h3>
+<p>실패:</p>
+<pre><code class="language-text">tests/adb/test_core.py::AdbAnomalyDetectorTagFilterTests::test_rilj_unexpected_response_kept
+tests/adb/test_core.py::AdbAnomalyDetectorTagFilterTests::test_source_tag_recorded_on_event</code></pre>
+<p>현재 구현:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/adb/patterns.py:141">src/volte_mutation_fuzzer/adb/patterns.py:141</a> 은 <code>oem_ril_error</code> 를 명시적 failure token 만 critical 로 잡게 좁혔다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/adb/patterns.py:165">src/volte_mutation_fuzzer/adb/patterns.py:165</a> 은 <code>RILJ processResponse: Unexpected response</code> 를 <code>rilj_unexpected_response</code> warning 으로 분리한다.</li>
+<li><a href="2026-04-26-워크로그.md:90">docs/이슈/2026-04-26-워크로그.md:90</a> 와 <a href="2026-04-26-워크로그.md:167">docs/이슈/2026-04-26-워크로그.md:167</a> 가 false positive 제거 의도를 기록한다.</li>
+</ul>
+<p>판단: 구현이 맞고 테스트가 낡았다. <code>error: 0</code> 을 critical <code>oem_ril_error</code> 로 승격하면 routine stale modem response 가 <code>stack_failure</code> 를 만든다.</p>
+<h3 id="unrelated-process-death-매칭">unrelated process death 매칭</h3>
+<p>실패:</p>
+<pre><code class="language-text">tests/adb/test_patterns.py::AnomalyPatternsTests::test_process_died_unrelated_proc_matches</code></pre>
+<p>현재 구현:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/adb/patterns.py:282">src/volte_mutation_fuzzer/adb/patterns.py:282</a> 근처 주석과 process death 계열은 일반 앱 lifecycle noise 를 줄이도록 좁혀져 있다.</li>
+<li><a href="2026-04-26-워크로그.md:160">docs/이슈/2026-04-26-워크로그.md:160</a> 은 <code>process_died</code> 를 IMS daemon/RIL/system_server/surfaceflinger 로 제한한 이유를 기록한다.</li>
+</ul>
+<p>판단: 구현이 맞고 테스트가 낡았다. <code>Process com.example.unrelated ... has died</code> 까지 critical 로 잡으면 fuzzing oracle 이 일반 앱 종료 noise 에 오염된다.</p>
+<h3 id="request-reproduction-command-형식">request reproduction command 형식</h3>
+<p>실패:</p>
+<pre><code class="language-text">tests/campaign/test_core.py::CampaignExecutorTests::test_reproduction_cmd_contains_method_and_seed
+tests/campaign/test_core.py::ReproductionCmdMultiMutationTests::test_default_omits_mutations_per_case</code></pre>
+<p>현재 구현:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:1924">src/volte_mutation_fuzzer/campaign/core.py:1924</a> 의 request case reproduction command 는 <code>uv run fuzzer campaign run --seed-start &lt;seed&gt; --max-cases 1 ...</code> 형식이다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/core.py:1972">src/volte_mutation_fuzzer/campaign/core.py:1972</a> 주석대로 response_code dialog case 만 <code>mutate response | send packet</code> pipe 형식을 유지한다.</li>
+<li><code>git log</code> 에 <code>4e7800e fix(campaign): rewrite reproduction_cmd to use campaign run format</code> 이 존재한다.</li>
+</ul>
+<p>판단: 구현이 맞고 테스트가 낡았다. request case 재현은 timeout/cooldown/pcap/circuit breaker/oracle grace/ipsec 등 campaign 실행 조건까지 같이 보존해야 한다.</p>
+<h3 id="native-ipsec-mock-expectation">native IPsec mock expectation</h3>
+<p>실패:</p>
+<pre><code class="language-text">tests/sender/test_core.py::SIPSenderReactorTests::test_send_real_ue_direct_native_uses_native_ipsec_observer_path</code></pre>
+<p>현재 구현:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/sender/core.py:540">src/volte_mutation_fuzzer/sender/core.py:540</a> 가 <code>send_via_native_ipsec(..., alt_src_port=0, alt_dst_port=0)</code> 를 명시 전달한다.</li>
+<li><a href="IMS-IPsec-SA-dispatch.md:148">docs/이슈/IMS-IPsec-SA-dispatch.md:148</a> 는 <code>send_via_native_ipsec</code> 시그니처 확장과 default 0 의 기존 동작 보존을 기록한다.</li>
+</ul>
+<p>판단: 구현이 맞고 테스트 mock expectation 이 새 optional args 를 반영하지 못했다.</p>
+<h2 id="타입-체크-debt">타입 체크 debt</h2>
+<p><code>uv run ty check src</code> 는 10 diagnostics 를 낸다. 현재 런타임 실패 증거가 있는 항목과 순수 타입 narrowing noise 를 분리한다.</p>
+<p>우선 정리할 항목:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/cli.py:323">src/volte_mutation_fuzzer/campaign/cli.py:323</a></li>
+<li><code>CampaignConfig.profiles</code> 타입은 <code>tuple[str, ...]</code> 이지만 CLI 는 <code>profiles=profile</code> 로 <code>str | None</code> 을 넘긴다.</li>
+<li>Pydantic validator 가 런타임에서는 처리하지만 CLI boundary 에서 <code>_parse_csv(profile) or (&quot;legacy&quot;,)</code> 로 맞추는 편이 명확하다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/mutator/cli.py:98">src/volte_mutation_fuzzer/mutator/cli.py:98</a></li>
+<li><code>MutationConfig.layer</code> 는 <code>Literal[&quot;model&quot;, &quot;wire&quot;, &quot;byte&quot;, &quot;auto&quot;]</code> 인데 <code>_build_config(..., layer: str)</code> 를 그대로 넘긴다.</li>
+<li>CLI validation/cast 위치를 명확히 해야 한다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/mutator/core.py:871">src/volte_mutation_fuzzer/mutator/core.py:871</a></li>
+<li>wire branch 에서 <code>editable_message</code> 가 Optional 로 남은 채 <code>_mutate_wire</code> 에 전달된다.</li>
+<li>런타임 invariant 는 맞지만 <code>assert editable_message is not None</code> 로 명시하는 편이 안전하다.</li>
+</ul>
+<p>타입 narrowing noise 로 보이는 항목:</p>
+<ul>
+<li><a href="../../src/volte_mutation_fuzzer/campaign/report.py:59">src/volte_mutation_fuzzer/campaign/report.py:59</a></li>
+<li><code>case.details.get(...)</code> 결과를 <code>dict</code> 로 좁힌 뒤 <code>.get(&quot;matched_line&quot;)</code> 를 호출하지만 ty 가 key type 을 <code>Never</code> 로 본다.</li>
+<li><a href="../../src/volte_mutation_fuzzer/mutator/cli.py:403">src/volte_mutation_fuzzer/mutator/cli.py:403</a></li>
+<li>mutation record display formatting 에서 dict/list narrowing 이 ty 에 충분히 전달되지 않는다.</li>
+</ul>
+<h2 id="dead-code-cleanup-branch-audit">Dead-code cleanup branch audit</h2>
+<p><code>main...HEAD</code> diff 는 주로 unused symbol 제거와 formatting 변경이다.</p>
+<p>제거된 repo-internal symbol 참조 확인:</p>
+<pre><code class="language-bash">rg -n &quot;CrashAnalyzer|grouped_response_counts|REGISTER_PUBLISH\\b|MESSAGE_SUBSCRIBE_REFER|VARIANTS|STRUCT_VARIANTS|replace_headers|print_live_stats&quot; -S .</code></pre>
+<p>결과 요지:</p>
+<ul>
+<li>repo 내부에서 제거된 <code>CrashAnalyzer</code> alias, <code>grouped_response_counts</code>, <code>REGISTER_PUBLISH</code>, <code>MESSAGE_SUBSCRIBE_REFER</code>, <code>VARIANTS</code>, <code>STRUCT_VARIANTS</code>, <code>replace_headers</code>, <code>print_live_stats</code> 를 호출하는 production path 는 발견하지 못했다.</li>
+<li>남은 <code>BYTE_EDIT_VARIANTS</code> 참조는 제거 대상이 아니며 현재 tests/source 에서 쓰인다.</li>
+</ul>
+<p>주의:</p>
+<ul>
+<li><code>scripts/crash_analyzer.py</code> 의 <code>CrashAnalyzer = CampaignCrashAnalyzer</code> alias 제거는 repo 내부 기준으로는 안전해 보인다.</li>
+<li>다만 외부에서 이 script module 을 import 해 <code>CrashAnalyzer</code> 라는 이름을 사용했다면 깨질 수 있다. 이 저장소가 <code>scripts/</code> 를 public API 로 약속한 증거는 찾지 못해 구현 버그로 분류하지 않았다.</li>
+</ul>
+<h2 id="문서-운영-주의">문서/운영 주의</h2>
+<p>감사 중 구현 버그와 별개로 문서 staleness 가 보였다.</p>
+<ul>
+<li><code>AGENTS.md</code> 와 <a href="../AI_AGENT_GUIDE.md:55">docs/AI_AGENT_GUIDE.md:55</a> 는 현재 testbed 에서 <code>111111</code> 이 Pixel 9 / Galaxy A17 로 회전 중이고 UE IP 는 live resolver 기준이라고 한다.</li>
+<li><a href="../A31_REAL_UE_GUIDE.md:10">docs/A31_REAL_UE_GUIDE.md:10</a> 과 <a href="../A31_REAL_UE_GUIDE.md:307">docs/A31_REAL_UE_GUIDE.md:307</a> 은 여전히 <code>111111 = A31</code>, <code>10.20.20.8</code> 중심 설명을 강하게 담고 있다.</li>
+</ul>
+<p>이는 이번 구현 버그 범위에는 넣지 않았지만, 실기기 운영자가 오래된 guide 를 복붙하면 stale target 으로 오판할 수 있다. 별도 문서 정리가 필요하다.</p>
+<h2 id="우선순위">우선순위</h2>
+<ol>
+<li><code>packet_file</code> 계약 수정</li>
+</ol>
+<ul>
+<li>layer: <code>byte</code>/<code>auto</code> 만 허용</li>
+<li>response_codes: 금지</li>
+<li>methods: 파일 start-line 과 일치하는 단일 method 로 강제</li>
+<li>strategy: <code>identity</code> 강제 또는 non-identity reject</li>
+</ul>
+<ol>
+<li>stale test 7개 업데이트</li>
+</ol>
+<ul>
+<li>ADB buffer별 clear</li>
+<li>RILJ unexpected response warning 분리</li>
+<li>unrelated process death suppression</li>
+<li>request reproduction command = campaign run</li>
+<li>native IPsec <code>alt_src_port=0</code>, <code>alt_dst_port=0</code></li>
+</ul>
+<ol>
+<li><code>ty check src</code> 의 CLI boundary / Optional narrowing 정리</li>
+<li>A31 guide / USAGE 의 stale device mapping 문서 정리</li>
+</ol>
+    </article>
+  </main>
+</body>
+</html>

@@ -33,15 +33,15 @@
 - 완료 직전 검증/리뷰: `requesting-code-review`, `review`, `verification-before-completion`
 - 문서 동기화: `document-release`
 
-Samsung Galaxy A31 등 실제 UE를 대상으로 한 MT-INVITE 변이 퍼징을 통해 취약점을 발견할 수 있는 도구입니다.
+Samsung Galaxy A31 검증 이력을 포함해 현재 testbed 의 실제 UE를 대상으로 MT-INVITE 변이 퍼징을 수행하는 도구입니다.
 
 ## 🎯 Quick Start
 
-### Samsung A31 실기기 퍼징
+### Real-UE 실기기 baseline
 ```bash
 uv run fuzzer campaign run \
   --mode real-ue-direct \
-  --target-msisdn 111111 \
+  --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --layer wire --strategy identity \
   --mt-invite-template a31 \
   --ipsec-mode null \
@@ -90,7 +90,7 @@ src/volte_mutation_fuzzer/
 - **[문제 해결](docs/TROUBLESHOOTING.md)** - 자주 발생하는 문제와 해결책
 
 ### 📱 실기기 퍼징
-- **[A31 Real-UE 가이드](docs/A31_REAL_UE_GUIDE.md)** - Samsung A31 실기기 퍼징 완벽 가이드
+- **[Real-UE 가이드](docs/A31_REAL_UE_GUIDE.md)** - A31 historical baseline 과 현재 testbed 실기기 퍼징 가이드
 - **[iOS 로그 수집 가이드](docs/iOS_LOG_COLLECTION.md)** - iPhone(libimobiledevice) 수집 설계·구현 문서
 - **[서버 환경 설정](docs/SERVER_SETUP.md)** - IMS 서버 환경 구성 방법
 
@@ -101,7 +101,7 @@ src/volte_mutation_fuzzer/
 ## 🎯 주요 기능
 
 ### 1. **실기기 지원**
-- Samsung Galaxy A31 (MSISDN: 111111) 검증 완료
+- Samsung Galaxy A31 historical baseline (2026-04-11) 검증 완료
 - 실제 수신 벨 울림 + 180 Ringing 응답 확인
 - pcap 캡처 + adb 자동 스냅샷
 - **iPhone**: USB로 1대 연결되어 있으면 `--ios` 한 줄로 자동 활성 (UDID auto-resolve, syslog 스트림 + crash report pull)
@@ -130,7 +130,7 @@ src/volte_mutation_fuzzer/
 | 222222 | 001010000123512 | 10.20.20.2 | iPhone 16e (iOS 26.1) | manual PLMN select 로 attach 성공 |
 
 이력 노트:
-- 메모리 `project_a31_real_ue_direct_breakthrough.md` 에 박힌 "111111 = A31, IP=10.20.20.8" 은 2026-04-11 시점 환경. 현재는 A31 슬롯이 다른 디바이스로 회전 중. attach 성공 시 IP 가 다를 수 있어 live resolver 결과를 신뢰하고, hardcoded 매핑은 fallback 으로만 본다.
+- 메모리 `project_a31_real_ue_direct_breakthrough.md` 에 박힌 "111111 = A31, IP=10.20.20.8" 은 2026-04-11 시점 환경. 현재는 A31 슬롯이 다른 디바이스로 회전 중. attach 성공 시 IP 가 다를 수 있어 live resolver 결과를 신뢰한다. hardcoded fallback 은 제거되었고, resolver 실패 시에만 `VMF_MSISDN_TO_IP_<msisdn>` 를 명시한다.
 - iPhone 16e 의 protected port 페어는 `port_pc=63193 / port_ps=61008` 처럼 비-인접. fuzzer 의 native IPsec 경로는 `Security-Client` 헤더 + xfrm `dport` 매핑으로 정확 추출 (commit `0a03f78`).
 - iPhone 전용 mt-invite-template 부재 — 현재 `a31` template 가 generic 3GPP MT-INVITE 형식이라 일단 호환되지만 iPhone 응답 검증은 미완. SDP fuzzing 캠페인 시 baseline (identity strategy) 으로 정상 attach/응답 확인 후 진행 권장.
 
@@ -176,7 +176,7 @@ export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 ```bash
 --strategy identity  # 무변이, oracle 역할
 ```
-예상: A31 울림 + normal verdict
+예상: 대상 UE 울림 + normal verdict
 
 ### 2. **변이 퍼징** (default)
 ```bash  
@@ -231,11 +231,11 @@ export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 
 **주요 개선**:
 ```bash
-# Before (복잡)
+# Before (복잡, historical A31 snapshot)
 --target-host 10.20.20.8 --target-msisdn 111111 --source-ip 172.22.0.21
 
 # After (간단)
---target-msisdn 111111 --ipsec-mode null
+--target-msisdn <TARGET_MSISDN> --ipsec-mode null
 ```
 
 ---

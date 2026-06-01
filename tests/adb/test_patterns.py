@@ -104,14 +104,19 @@ class AnomalyPatternsTests(unittest.TestCase):
         # isolation — those are filtered out at the feed_line level by
         # the SIPMSG outbound-echo pre-check, see tests/adb/test_core.py.
         from volte_mutation_fuzzer.adb.patterns import ANOMALY_PATTERNS
-        sip_server_err = next(p for p in ANOMALY_PATTERNS if p.name == "sip_server_error")
+
+        sip_server_err = next(
+            p for p in ANOMALY_PATTERNS if p.name == "sip_server_error"
+        )
         line = "I/SIPMSG[0,2]( 2815): [-->] SIP/2.0 500 Server Internal Error"
         self.assertIsNone(sip_server_err.compiled.search(line))
 
     # ---- new patterns: memory safety / sanitizers ----
 
     def test_address_sanitizer_matches(self) -> None:
-        pattern = _match_pattern("AddressSanitizer: heap-buffer-overflow on address 0xdead")
+        pattern = _match_pattern(
+            "AddressSanitizer: heap-buffer-overflow on address 0xdead"
+        )
         assert pattern is not None
         # several overlapping patterns can win first depending on order;
         # what matters is severity and category.
@@ -154,7 +159,9 @@ class AnomalyPatternsTests(unittest.TestCase):
         self.assertEqual(pattern.name, "use_after_free")
 
     def test_oom_native_matches(self) -> None:
-        pattern = _match_pattern("Out of memory: Killed process 9999 (com.sec.imsservice)")
+        pattern = _match_pattern(
+            "Out of memory: Killed process 9999 (com.sec.imsservice)"
+        )
         assert pattern is not None
         # could match either out_of_memory_native or oom_kill — both correct
         self.assertIn(pattern.name, ("out_of_memory_native", "oom_kill"))
@@ -168,10 +175,14 @@ class AnomalyPatternsTests(unittest.TestCase):
     def test_unsatisfied_link_error_matches(self) -> None:
         pattern = _match_pattern("java.lang.UnsatisfiedLinkError: libims_native.so")
         assert pattern is not None
-        self.assertIn(pattern.name, ("unsatisfied_link_error", "uncaught_java_exception"))
+        self.assertIn(
+            pattern.name, ("unsatisfied_link_error", "uncaught_java_exception")
+        )
 
     def test_bad_alloc_matches(self) -> None:
-        pattern = _match_pattern("terminating with uncaught exception of type std::bad_alloc")
+        pattern = _match_pattern(
+            "terminating with uncaught exception of type std::bad_alloc"
+        )
         assert pattern is not None
         self.assertEqual(pattern.name, "bad_alloc")
 
@@ -247,12 +258,10 @@ class AnomalyPatternsTests(unittest.TestCase):
         self.assertIn(pattern.name, ("process_died", "ims_service_crash"))
         self.assertEqual(pattern.severity, "critical")
 
-    def test_process_died_unrelated_proc_matches(self) -> None:
-        # When the dead process isn't IMS, ims_service_crash won't match,
-        # so the new process_died pattern is responsible.
+    def test_process_died_unrelated_proc_is_suppressed(self) -> None:
+        # Generic app lifecycle noise must not be promoted to stack_failure.
         pattern = _match_pattern("Process com.example.unrelated (pid 1234) has died")
-        assert pattern is not None
-        self.assertEqual(pattern.name, "process_died")
+        self.assertIsNone(pattern)
 
     def test_binder_died_matches(self) -> None:
         pattern = _match_pattern("BinderProxy died: onServiceDisconnected for ims")

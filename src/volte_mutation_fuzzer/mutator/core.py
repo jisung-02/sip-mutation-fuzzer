@@ -152,10 +152,10 @@ _MODEL_EXCLUDED_FIELDS: frozenset[str] = frozenset(
         "extension_headers",
         "content_type",
         # Routing-critical: mutating these prevents packet delivery or response receipt
-        "request_uri",      # Changed = packet won't reach UE
-        "via",              # Changed = can't receive response (180 etc)
-        "call_id",          # Changed = BYE/CANCEL dialog matching breaks
-        "cseq",             # Changed = transaction matching breaks
+        "request_uri",  # Changed = packet won't reach UE
+        "via",  # Changed = can't receive response (180 etc)
+        "call_id",  # Changed = BYE/CANCEL dialog matching breaks
+        "cseq",  # Changed = transaction matching breaks
     }
 )
 
@@ -449,7 +449,9 @@ class SIPMutator:
             if not available_targets:
                 break
             selected_target = available_targets[rng.randrange(len(available_targets))]
-            operator = self._resolve_wire_operator(selected_target, current_message, rng)
+            operator = self._resolve_wire_operator(
+                selected_target, current_message, rng
+            )
             current_message, record = self._apply_wire_operator(
                 current_message, selected_target, operator, rng
             )
@@ -506,9 +508,7 @@ class SIPMutator:
                     config.strategy != "safe"
                     or not self._is_byte_target_protected(
                         candidate,
-                        self._collect_protected_byte_ranges(
-                            current_bytes.data
-                        ),
+                        self._collect_protected_byte_ranges(current_bytes.data),
                     )
                 )
             )
@@ -589,18 +589,15 @@ class SIPMutator:
         editable_message: EditableSIPMessage | None,
     ) -> bool:
         if strategy == "alias_port_desync" and layer == "wire":
-            return (
-                editable_message is not None
-                and self._has_contact_alias(editable_message)
+            return editable_message is not None and self._has_contact_alias(
+                editable_message
             )
-        if (
-            layer == "wire"
-            and strategy in {"sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}
-        ):
-            return (
-                editable_message is not None
-                and self._has_sdp_body(editable_message)
-            )
+        if layer == "wire" and strategy in {
+            "sdp_boundary_only",
+            "sdp_struct_only",
+            "sdp_byte_edit",
+        }:
+            return editable_message is not None and self._has_sdp_body(editable_message)
         return True
 
     def _has_sdp_body(self, editable_message: EditableSIPMessage) -> bool:
@@ -865,6 +862,7 @@ class SIPMutator:
 
         if effective_layer == "wire":
             wire_target = target if target is None or target.layer == "wire" else None
+            assert editable_message is not None
             return self._mutate_wire(
                 packet=packet,
                 definition=definition,
@@ -1296,7 +1294,9 @@ class SIPMutator:
             header_index = int(header_match.group(1))
             if header_index >= len(editable_message.headers):
                 continue
-            header_name = self._header_name_key(editable_message.headers[header_index].name)
+            header_name = self._header_name_key(
+                editable_message.headers[header_index].name
+            )
             if header_name in IMS_PROFILE_HEADER_NAMES:
                 ims_targets.append(target)
 
@@ -1547,15 +1547,24 @@ class SIPMutator:
         # Common SIP/integer-field boundary values that historically expose
         # off-by-one, signed/unsigned wrap, and width-conversion bugs.
         numeric_boundaries = (
-            "0", "1", "-1",
-            "127", "128",
-            "255", "256",
-            "32767", "32768",
-            "65535", "65536",
-            "2147483647", "2147483648",
-            "4294967295", "4294967296",
+            "0",
+            "1",
+            "-1",
+            "127",
+            "128",
+            "255",
+            "256",
+            "32767",
+            "32768",
+            "65535",
+            "65536",
+            "2147483647",
+            "2147483648",
+            "4294967295",
+            "4294967296",
             "9999999999",
-            "18446744073709551615", "18446744073709551616",
+            "18446744073709551615",
+            "18446744073709551616",
         )
         # Cap at ~8KB so the resulting SIP packet stays within the practical
         # UDP send budget (UDP max payload is 65507; ESP/IPsec headers and the
@@ -1564,7 +1573,13 @@ class SIPMutator:
         # noise (unknown verdicts) instead of useful boundary signal.
         length_boundaries = (1, 256, 1024, 4096, 8192)
 
-        variants = ("numeric", "zero_length", "single_char", "huge_length", "negative_overflow")
+        variants = (
+            "numeric",
+            "zero_length",
+            "single_char",
+            "huge_length",
+            "negative_overflow",
+        )
         variant = variants[rng.randrange(len(variants))]
         if variant == "numeric":
             mutated_value = numeric_boundaries[rng.randrange(len(numeric_boundaries))]
@@ -1577,7 +1592,9 @@ class SIPMutator:
             mutated_value = "A" * length
         else:
             # negative_overflow: leading minus + boundary digits
-            mutated_value = "-" + numeric_boundaries[rng.randrange(len(numeric_boundaries))]
+            mutated_value = (
+                "-" + numeric_boundaries[rng.randrange(len(numeric_boundaries))]
+            )
 
         headers[index] = EditableHeader(
             name=original_header.name,
@@ -1589,7 +1606,9 @@ class SIPMutator:
         target = MutationTarget(layer="wire", path=f"header[{index}]")
         # Truncate after-snapshot to keep records readable when huge_length picked.
         after_for_record = (
-            mutated_value if len(mutated_value) <= 80 else f"{mutated_value[:40]}…(len={len(mutated_value)})"
+            mutated_value
+            if len(mutated_value) <= 80
+            else f"{mutated_value[:40]}…(len={len(mutated_value)})"
         )
         record = self._record_mutation(
             target=target,
@@ -1730,7 +1749,13 @@ class SIPMutator:
             variants = (
                 all_variants
                 if length >= 2
-                else ("trim_last", "flip_last", "dup_byte", "insert_byte", "insert_null")
+                else (
+                    "trim_last",
+                    "flip_last",
+                    "dup_byte",
+                    "insert_byte",
+                    "insert_null",
+                )
             )
             variant = variants[rng.randrange(len(variants))]
 
@@ -1755,7 +1780,9 @@ class SIPMutator:
             elif variant == "dup_byte":
                 pos = rng.randrange(length)
                 mutated_value = (
-                    original_value[: pos + 1] + original_value[pos] + original_value[pos + 1 :]
+                    original_value[: pos + 1]
+                    + original_value[pos]
+                    + original_value[pos + 1 :]
                 )
             elif variant == "swap_adjacent":
                 pos = rng.randrange(length - 1)
@@ -1811,9 +1838,7 @@ class SIPMutator:
         """
         content_types = editable_message.header_values("Content-Type")
         if not any("application/sdp" in ct.lower() for ct in content_types):
-            raise ValueError(
-                "sdp_boundary_only requires Content-Type: application/sdp"
-            )
+            raise ValueError("sdp_boundary_only requires Content-Type: application/sdp")
         if not editable_message.body:
             raise ValueError("sdp_boundary_only requires a non-empty SDP body")
 
@@ -1876,9 +1901,7 @@ class SIPMutator:
         """
         content_types = editable_message.header_values("Content-Type")
         if not any("application/sdp" in ct.lower() for ct in content_types):
-            raise ValueError(
-                "sdp_struct_only requires Content-Type: application/sdp"
-            )
+            raise ValueError("sdp_struct_only requires Content-Type: application/sdp")
         if not editable_message.body:
             raise ValueError("sdp_struct_only requires a non-empty SDP body")
 
@@ -1945,9 +1968,7 @@ class SIPMutator:
         """
         content_types = editable_message.header_values("Content-Type")
         if not any("application/sdp" in ct.lower() for ct in content_types):
-            raise ValueError(
-                "sdp_byte_edit requires Content-Type: application/sdp"
-            )
+            raise ValueError("sdp_byte_edit requires Content-Type: application/sdp")
         if not editable_message.body:
             raise ValueError("sdp_byte_edit requires a non-empty SDP body")
 
@@ -2197,9 +2218,7 @@ class SIPMutator:
                 # Pick a byte within this header's value range
                 if start < end:
                     byte_idx = rng.randrange(start, end)
-                    byte_target = MutationTarget(
-                        layer="byte", path=f"byte[{byte_idx}]"
-                    )
+                    byte_target = MutationTarget(layer="byte", path=f"byte[{byte_idx}]")
                     operator = "flip_byte"
                     current_bytes, record = self._apply_byte_operator(
                         current_bytes, byte_target, operator, rng
@@ -2266,7 +2285,7 @@ class SIPMutator:
             return True
         # header:Via, header:Call-ID, header:CSeq, header[N] for those
         if path.startswith("header:"):
-            header_name = path[len("header:"):]
+            header_name = path[len("header:") :]
             if header_name.lower() in _SAFE_PROTECTED_HEADER_NAMES:
                 return True
         if path.startswith("header["):
@@ -2316,8 +2335,7 @@ class SIPMutator:
             rng_start = int(match.group(1))
             rng_end = int(match.group(2))
             return any(
-                rng_start < end and rng_end > start
-                for start, end in protected_ranges
+                rng_start < end and rng_end > start for start, end in protected_ranges
             )
         if path == "segment:start_line":
             return True  # Start line contains Request-URI

@@ -39,7 +39,11 @@ def _parse_response_codes(raw: str | None) -> tuple[int, ...] | None:
 @app.command("run")
 def run_command(
     target_host: Annotated[
-        str | None, typer.Option("--target-host", help="Target SIP host (auto-resolved from --target-msisdn if not provided).")
+        str | None,
+        typer.Option(
+            "--target-host",
+            help="Target SIP host (auto-resolved from --target-msisdn if not provided).",
+        ),
     ] = None,
     target_port: Annotated[
         int, typer.Option("--target-port", help="Target SIP port.")
@@ -128,7 +132,11 @@ def run_command(
         int, typer.Option("--seed-start", help="Starting seed value.")
     ] = 0,
     output: Annotated[
-        str | None, typer.Option("--output", help="Campaign directory name under results/ (auto-generated if omitted).")
+        str | None,
+        typer.Option(
+            "--output",
+            help="Campaign directory name under results/ (auto-generated if omitted).",
+        ),
     ] = None,
     process_name: Annotated[
         str,
@@ -137,7 +145,11 @@ def run_command(
         ),
     ] = "baresip",
     no_process_check: Annotated[
-        bool | None, typer.Option("--no-process-check", help="Disable process liveness check. Auto-disabled for real-ue-direct mode.")
+        bool | None,
+        typer.Option(
+            "--no-process-check",
+            help="Disable process liveness check. Auto-disabled for real-ue-direct mode.",
+        ),
     ] = None,
     transport: Annotated[
         str, typer.Option("--transport", help="Transport protocol (UDP/TCP).")
@@ -154,7 +166,11 @@ def run_command(
         ),
     ] = None,
     adb: Annotated[
-        bool | None, typer.Option("--adb/--no-adb", help="Enable ADB logcat monitoring. Auto-enabled for real-ue-direct mode.")
+        bool | None,
+        typer.Option(
+            "--adb/--no-adb",
+            help="Enable ADB logcat monitoring. Auto-enabled for real-ue-direct mode.",
+        ),
     ] = None,
     adb_serial: Annotated[
         str | None, typer.Option("--adb-serial", help="ADB device serial.")
@@ -201,7 +217,10 @@ def run_command(
     ] = "any",
     target_msisdn: Annotated[
         str | None,
-        typer.Option("--target-msisdn", help="UE MSISDN for real-ue-direct MT INVITE template mode."),
+        typer.Option(
+            "--target-msisdn",
+            help="UE MSISDN for real-ue-direct MT INVITE template mode.",
+        ),
     ] = None,
     impi: Annotated[
         str | None,
@@ -209,11 +228,16 @@ def run_command(
     ] = None,
     mt: Annotated[
         bool,
-        typer.Option("--mt/--no-mt", help="Use 3GPP standard MT-INVITE format for all packets."),
+        typer.Option(
+            "--mt/--no-mt", help="Use 3GPP standard MT-INVITE format for all packets."
+        ),
     ] = False,
     mt_invite_template: Annotated[
         str | None,
-        typer.Option("--mt-invite-template", help="MT INVITE template name (e.g. '3gpp') or file path. --mt uses default template."),
+        typer.Option(
+            "--mt-invite-template",
+            help="MT INVITE template name (e.g. '3gpp') or file path. --mt uses default template.",
+        ),
     ] = None,
     packet_file: Annotated[
         str | None,
@@ -235,31 +259,47 @@ def run_command(
     ] = None,
     preserve_via: Annotated[
         bool,
-        typer.Option("--preserve-via/--no-preserve-via", help="Do not rewrite Via host/port."),
+        typer.Option(
+            "--preserve-via/--no-preserve-via", help="Do not rewrite Via host/port."
+        ),
     ] = False,
     preserve_contact: Annotated[
         bool,
-        typer.Option("--preserve-contact/--no-preserve-contact", help="Do not rewrite Contact host/port."),
+        typer.Option(
+            "--preserve-contact/--no-preserve-contact",
+            help="Do not rewrite Contact host/port.",
+        ),
     ] = False,
     pixel_mode: Annotated[
         bool,
-        typer.Option("--pixel/--no-pixel", help="Pixel mode: rewrite Request-URI to use resolved UE Contact URI (UUID@IP:port) so Shannon IMS accepts the packet."),
+        typer.Option(
+            "--pixel/--no-pixel",
+            help="Pixel mode: rewrite Request-URI to use resolved UE Contact URI (UUID@IP:port) so Shannon IMS accepts the packet.",
+        ),
     ] = False,
     mo_contact_host: Annotated[
         str,
-        typer.Option("--mo-contact-host", help="MO UE IP for MT INVITE Contact header."),
+        typer.Option(
+            "--mo-contact-host", help="MO UE IP for MT INVITE Contact header."
+        ),
     ] = "10.20.20.9",
     mo_contact_port_pc: Annotated[
         int,
-        typer.Option("--mo-contact-port-pc", help="MO UE protected client port for Contact."),
+        typer.Option(
+            "--mo-contact-port-pc", help="MO UE protected client port for Contact."
+        ),
     ] = 31800,
     mo_contact_port_ps: Annotated[
         int,
-        typer.Option("--mo-contact-port-ps", help="MO UE protected server port for Contact."),
+        typer.Option(
+            "--mo-contact-port-ps", help="MO UE protected server port for Contact."
+        ),
     ] = 31100,
     from_msisdn: Annotated[
         str,
-        typer.Option("--from-msisdn", help="Originating MSISDN for From/Contact in MT INVITE."),
+        typer.Option(
+            "--from-msisdn", help="Originating MSISDN for From/Contact in MT INVITE."
+        ),
     ] = "222222",
     mt_local_port: Annotated[
         int,
@@ -277,16 +317,27 @@ def run_command(
     ] = False,
     resume: Annotated[
         bool,
-        typer.Option("--resume/--no-resume", help="Resume campaign from last checkpoint in output file."),
+        typer.Option(
+            "--resume/--no-resume",
+            help="Resume campaign from last checkpoint in output file.",
+        ),
     ] = False,
     circuit_breaker: Annotated[
         int,
-        typer.Option("--circuit-breaker", help="Abort after N consecutive timeout/unknown verdicts. 0 to disable."),
+        typer.Option(
+            "--circuit-breaker",
+            help="Abort after N consecutive timeout/unknown verdicts. 0 to disable.",
+        ),
     ] = 10,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
-    strategies = _parse_csv(strategy) or ("default",)
-    layers = _parse_csv(layer) or ("model", "wire", "byte")
+    strategies = _parse_csv(strategy) or (
+        ("identity",) if packet_file is not None else ("default",)
+    )
+    layers = _parse_csv(layer) or (
+        ("byte",) if packet_file is not None else ("model", "wire", "byte")
+    )
+    profiles = tuple(profile.split(",")) if profile is not None else ("legacy",)
 
     if ipsec_mode is not None and ipsec_mode not in _IPSEC_MODES:
         typer.echo(
@@ -320,7 +371,7 @@ def run_command(
             methods=_parse_methods(methods) or (),
             response_codes=_parse_response_codes(response_codes) or (),
             with_dialog=bool(with_dialog) if with_dialog is not None else False,
-            profiles=profile,
+            profiles=profiles,
             strategies=strategies,
             layers=layers,
             max_cases=max_cases,
@@ -360,13 +411,11 @@ def run_command(
             ios_filter_processes=ios_filter_processes_value,
             oracle_log_grace_seconds=oracle_log_grace,
             post_campaign_log_grace_seconds=(
-                10.0
-                if oracle_log_grace is not None and oracle_log_grace < 8.0
-                else 0.0
+                10.0 if oracle_log_grace is not None and oracle_log_grace < 8.0 else 0.0
             ),
             wait_idle_timeout_seconds=wait_idle_timeout,
         )
-        if strategy is None:
+        if strategy is None and config.packet_file is None:
             default_strategies = (
                 ("default", "state_breaker")
                 if config.profiles == ("legacy",)

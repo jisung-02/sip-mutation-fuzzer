@@ -248,11 +248,15 @@ class SIPSenderReactorTests(unittest.TestCase):
             ) as mock_resolve_ports,
             patch(
                 "volte_mutation_fuzzer.sender.core.check_route_to_target",
-                side_effect=AssertionError("route-check should not run for native IPsec"),
+                side_effect=AssertionError(
+                    "route-check should not run for native IPsec"
+                ),
             ),
             patch(
                 "volte_mutation_fuzzer.sender.core.setup_route_to_target",
-                side_effect=AssertionError("route-setup should not run for native IPsec"),
+                side_effect=AssertionError(
+                    "route-setup should not run for native IPsec"
+                ),
             ),
             patch(
                 "volte_mutation_fuzzer.sender.core.resolve_native_ipsec_session",
@@ -347,7 +351,10 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.assertIn("native-ipsec:preflight:ok:pcscf", result.observer_events)
         self.assertIn("native-ipsec:send:ok", result.observer_events)
         self.assertTrue(
-            any(event.startswith("native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101") for event in result.observer_events)
+            any(
+                event.startswith("native-ipsec:tuple:172.22.0.21:5103->10.20.20.8:8101")
+                for event in result.observer_events
+            )
         )
         mock_resolve.assert_called_once()
         mock_resolve_ports.assert_called_once_with("111111", ue_ip="10.20.20.8")
@@ -367,6 +374,8 @@ class SIPSenderReactorTests(unittest.TestCase):
             payload=b"normalized-payload",
             timeout_seconds=0.4,
             transport="UDP",
+            alt_src_port=0,
+            alt_dst_port=0,
         )
         mock_prepare.assert_called_once_with(
             artifact,
@@ -374,6 +383,7 @@ class SIPSenderReactorTests(unittest.TestCase):
             local_port=5103,
             rewrite_via=True,
             rewrite_contact=True,
+            rewrite_request_uri=None,
         )
         mock_observe.assert_called_once_with(
             container="legacy-netns",
@@ -566,13 +576,16 @@ class SIPSenderReactorTests(unittest.TestCase):
                         "volte_mutation_fuzzer.sender.ipsec_native",
                         fromlist=["NativeIPsecError"],
                     ).NativeIPsecError(
-                        "native injector exploded", observer_events=("native-ipsec:send:failed",)
+                        "native injector exploded",
+                        observer_events=("native-ipsec:send:failed",),
                     )
                 ),
             ),
             patch(
                 "volte_mutation_fuzzer.sender.core.observe_pcscf_log_responses",
-                side_effect=AssertionError("observer should not run after send failure"),
+                side_effect=AssertionError(
+                    "observer should not run after send failure"
+                ),
             ),
         ):
             result = self.reactor.send_artifact(

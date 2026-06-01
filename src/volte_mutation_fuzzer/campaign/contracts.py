@@ -9,6 +9,20 @@ from volte_mutation_fuzzer.sip.common import SIPMethod
 
 ALL_SIP_METHODS = tuple(method.value for method in SIPMethod)
 _DEFAULT_REAL_UE_SOURCE_IP = "172.22.0.21"
+_PACKET_FILE_DEFAULT_STRATEGIES = ("default", "state_breaker")
+
+
+def _parse_packet_file_method(packet_path: Path) -> str:
+    with packet_path.open("rb") as fh:
+        first_line = fh.readline(4096)
+
+    parts = first_line.strip().split(maxsplit=1)
+    method = parts[0].decode("ascii", errors="ignore").upper() if parts else ""
+    if method not in ALL_SIP_METHODS:
+        raise ValueError(
+            "packet_file start-line must be a SIP request line with a supported method"
+        )
+    return method
 
 
 class CampaignConfig(BaseModel):
@@ -200,7 +214,9 @@ class CampaignConfig(BaseModel):
         # real-ue-direct: target_host는 None 허용 — RealUEDirectResolver가 동적 resolve
         if self.mode == "real-ue-direct":
             if self.target_host is None and self.target_msisdn is None:
-                raise ValueError("real-ue-direct mode requires either target_host or target_msisdn")
+                raise ValueError(
+                    "real-ue-direct mode requires either target_host or target_msisdn"
+                )
             if self.ipsec_mode == "native" and self.target_msisdn is None:
                 raise ValueError(
                     "native ipsec_mode requires target_msisdn in real-ue-direct mode"
@@ -241,7 +257,42 @@ class CampaignConfig(BaseModel):
                 raise ValueError("packet_file requires target_msisdn")
             packet_path = Path(self.packet_file)
             if not packet_path.is_file():
-                raise ValueError(f"packet_file not found or not a regular file: {self.packet_file}")
+                raise ValueError(
+                    f"packet_file not found or not a regular file: {self.packet_file}"
+                )
+            packet_method = _parse_packet_file_method(packet_path)
+            if self.response_codes:
+                raise ValueError("packet_file does not support response_codes")
+            if "layers" not in self.model_fields_set:
+                object.__setattr__(self, "layers", ("byte",))
+            else:
+                if set(self.layers) - {"byte", "auto"}:
+                    raise ValueError("packet_file supports layers: byte, auto")
+                if "auto" in self.layers:
+                    object.__setattr__(
+                        self,
+                        "layers",
+                        tuple(layer for layer in self.layers if layer != "auto")
+                        or ("byte",),
+                    )
+
+            if (
+                "strategies" not in self.model_fields_set
+                and self.strategies == _PACKET_FILE_DEFAULT_STRATEGIES
+            ):
+                object.__setattr__(self, "strategies", ("identity",))
+            elif self.strategies != ("identity",):
+                raise ValueError("packet_file supports only identity strategy")
+
+            if not self.methods or self.methods == ALL_SIP_METHODS:
+                object.__setattr__(self, "methods", (packet_method,))
+            elif len(self.methods) != 1:
+                raise ValueError("packet_file supports exactly one method")
+            elif self.methods[0] != packet_method:
+                raise ValueError(
+                    "packet_file method must match file start-line "
+                    f"({self.methods[0]} != {packet_method})"
+                )
             if self.ipsec_mode is None:
                 object.__setattr__(self, "ipsec_mode", "null")
 

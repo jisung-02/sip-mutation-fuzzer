@@ -69,7 +69,9 @@ class CampaignConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.oracle_log_grace_seconds_for_method("INVITE"), 0.0)
 
-    def test_oracle_log_grace_seconds_for_method_preserves_explicit_override(self) -> None:
+    def test_oracle_log_grace_seconds_for_method_preserves_explicit_override(
+        self,
+    ) -> None:
         cfg = CampaignConfig(
             target_host="10.20.20.8",
             mode="real-ue-direct",
@@ -192,9 +194,7 @@ class PacketFileConfigTests(unittest.TestCase):
     """``--packet-file`` option validators on CampaignConfig."""
 
     def setUp(self) -> None:
-        self._tmp = tempfile.NamedTemporaryFile(
-            suffix=".sip", delete=False
-        )
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".sip", delete=False)
         # Include a NUL byte so we cover the binary-safe path.
         self._tmp.write(b"OPTIONS sip:user@host SIP/2.0\r\n\x00\r\n")
         self._tmp.close()
@@ -212,6 +212,19 @@ class PacketFileConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.packet_file, self._path)
         self.assertEqual(cfg.ipsec_mode, "null")  # default for packet_file mode
+
+    def test_packet_file_defaults_to_file_method_byte_layer_and_identity_strategy(
+        self,
+    ) -> None:
+        cfg = CampaignConfig(
+            mode="real-ue-direct",
+            target_msisdn="111111",
+            packet_file=self._path,
+        )
+
+        self.assertEqual(cfg.methods, ("OPTIONS",))
+        self.assertEqual(cfg.layers, ("byte",))
+        self.assertEqual(cfg.strategies, ("identity",))
 
     def test_packet_file_rejects_softphone_mode(self) -> None:
         with self.assertRaises(ValidationError) as ctx:
@@ -265,6 +278,69 @@ class PacketFileConfigTests(unittest.TestCase):
                 layers=("wire",),
             )
         self.assertIn("packet_file supports layers", str(ctx.exception))
+
+    def test_packet_file_rejects_multiple_methods(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file=self._path,
+                methods=("OPTIONS", "INVITE"),
+                layers=("byte",),
+            )
+        self.assertIn("packet_file supports exactly one method", str(ctx.exception))
+
+    def test_packet_file_rejects_method_mismatch(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file=self._path,
+                methods=("INVITE",),
+                layers=("byte",),
+            )
+        self.assertIn(
+            "packet_file method must match file start-line", str(ctx.exception)
+        )
+
+    def test_packet_file_rejects_response_codes(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file=self._path,
+                methods=("OPTIONS",),
+                response_codes=(486,),
+                layers=("byte",),
+            )
+        self.assertIn("packet_file does not support response_codes", str(ctx.exception))
+
+    def test_packet_file_rejects_non_identity_strategy(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file=self._path,
+                methods=("OPTIONS",),
+                layers=("byte",),
+                strategies=("default",),
+            )
+        self.assertIn("packet_file supports only identity strategy", str(ctx.exception))
+
+    def test_packet_file_rejects_missing_request_line(self) -> None:
+        empty = tempfile.NamedTemporaryFile(suffix=".sip", delete=False)
+        empty.close()
+        self.addCleanup(lambda: Path(empty.name).unlink(missing_ok=True))
+
+        with self.assertRaises(ValidationError) as ctx:
+            CampaignConfig(
+                mode="real-ue-direct",
+                target_msisdn="111111",
+                packet_file=empty.name,
+                layers=("byte",),
+                strategies=("identity",),
+            )
+        self.assertIn("packet_file start-line", str(ctx.exception))
 
     def test_packet_file_rejects_missing_path(self) -> None:
         with self.assertRaises(ValidationError) as ctx:

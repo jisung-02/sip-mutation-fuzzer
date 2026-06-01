@@ -80,6 +80,7 @@ class CampaignRunCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Use tmpdir as results_dir, with output name "test_run"
             import os
+
             os.environ["_VMF_TEST_RESULTS_DIR"] = tmpdir
             result = self.runner.invoke(
                 app,
@@ -113,6 +114,7 @@ class CampaignRunCLITests(unittest.TestCase):
             self.assertTrue((campaign_dir / "campaign.jsonl").exists())
             # cleanup
             import shutil
+
             shutil.rmtree("results/test_run", ignore_errors=True)
 
     def test_run_command_passes_crash_analysis_flags(self) -> None:
@@ -165,6 +167,53 @@ class CampaignRunCLITests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertTrue(captured["config"].crash_analysis)
+
+    def test_run_command_packet_file_defaults_to_verbatim_contract(self) -> None:
+        captured: dict[str, CampaignConfig] = {}
+
+        packet = tempfile.NamedTemporaryFile(suffix=".sip", delete=False)
+        packet.write(b"OPTIONS sip:user@host SIP/2.0\r\n\r\n")
+        packet.close()
+        self.addCleanup(lambda: Path(packet.name).unlink(missing_ok=True))
+
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.campaign_dir = Path("results") / "packet_file_cli"
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-packet-file",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--mode",
+                    "real-ue-direct",
+                    "--target-msisdn",
+                    "111111",
+                    "--packet-file",
+                    packet.name,
+                    "--max-cases",
+                    "1",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].methods, ("OPTIONS",))
+        self.assertEqual(captured["config"].layers, ("byte",))
+        self.assertEqual(captured["config"].strategies, ("identity",))
 
     def test_run_command_parses_profile_and_scales_default_strategy_by_profile(
         self,

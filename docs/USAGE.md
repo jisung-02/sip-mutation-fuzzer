@@ -15,12 +15,12 @@ uv sync
 # 소프트폰 대상 퍼징
 uv run fuzzer campaign run --target-host 127.0.0.1 --max-cases 10
 
-# A31 실기기 대상 퍼징  
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+# 실기기 대상 퍼징
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --mt-invite-template a31 --ipsec-mode null --max-cases 5
 
-# A31 실기기 대상 실제 IPsec 경로 검증
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+# 실기기 대상 실제 IPsec 경로 검증
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --mt-invite-template a31 --ipsec-mode native --max-cases 1
 ```
 
@@ -59,7 +59,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 # 대상 설정
 --target-host <IP>          # 목적지 IP (auto-resolve 가능)
 --target-port <PORT>        # 목적지 포트 (기본: 5060)  
---target-msisdn <MSISDN>    # UE MSISDN (111111=A31, 222222=Test)
+--target-msisdn <MSISDN>    # UE MSISDN. 현재 매핑은 live resolver 기준
 --transport UDP|TCP         # 전송 프로토콜 (기본: UDP)
 --mode softphone|real-ue-direct  # 동작 모드
 
@@ -131,7 +131,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 
 ```bash
 # IMS 헤더/alias 중심 변이: real-UE 경로에서도 자연스럽게 사용 가능
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 \
   --methods INVITE --profile ims_specific --layer wire --strategy default \
   --max-cases 10
@@ -149,8 +149,8 @@ uv run fuzzer campaign run --target-host 127.0.0.1 \
 # OPTIONS 핑테스트 (빠름)
 uv run fuzzer campaign run --target-host 127.0.0.1 --methods OPTIONS --max-cases 5
 
-# A31 connectivity 테스트  
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+# real-UE connectivity 테스트
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 --profile legacy \
   --strategy identity --max-cases 1
 ```
@@ -163,7 +163,7 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 # 1) real-ue baseline smoke: 현재 실기기 baseline 은 INVITE
 uv run fuzzer campaign run \
   --mode real-ue-direct \
-  --target-msisdn 111111 \
+  --target-msisdn <TARGET_MSISDN> \
   --methods INVITE \
   --profile legacy \
   --layer wire \
@@ -218,8 +218,8 @@ uv run fuzzer campaign run --target-host 192.168.1.100 \
   --methods OPTIONS,INVITE,MESSAGE \
   --profile legacy --layer model,wire,byte --strategy default --max-cases 500
 
-# A31: INVITE 집중 + 바이트 변이
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+# real-UE: INVITE 집중 + 바이트 변이
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 \
   --methods INVITE --profile ims_specific --layer byte --strategy default --max-cases 200
 ```
@@ -227,11 +227,11 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ### 3. 고급 분석 (pcap + adb)
 ```bash
 # 완전한 데이터 수집
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 \
   --profile delivery_preserving --layer wire,byte --strategy default --max-cases 100 \
   --pcap --pcap-interface br-volte --pcap-dir results/pcaps \
-  --adb --adb-serial SM_A315F_12345 \
+  --adb --adb-serial <ANDROID_SERIAL> \
   --output results/full_analysis.jsonl
 ```
 
@@ -279,9 +279,8 @@ results/
 ### MSISDN 매핑 커스터마이징
 ```bash
 # 기본 매핑 오버라이드  
-export VMF_MSISDN_TO_IP_111111=192.168.1.201
-export VMF_MSISDN_TO_IP_222222=192.168.1.202
-export VMF_MSISDN_TO_IP_333333=192.168.1.203  # 새 UE 추가
+# live resolver 실패 시에만 명시 override
+export VMF_MSISDN_TO_IP_<MSISDN>=<UE_IP>
 
 # P-CSCF IP 설정
 export VMF_REAL_UE_PCSCF_IP=172.22.0.21
@@ -356,7 +355,7 @@ uv run fuzzer mutate packet --layer wire --strategy duplicate_content_length_con
 uv run fuzzer mutate packet --layer byte --strategy tail_chop_1 < baseline.json
 
 # MT-template / real-UE 집중 전략
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --methods INVITE --layer wire \
   --strategy alias_port_desync --mt-invite-template a31 --ipsec-mode null \
   --max-cases 1
@@ -367,17 +366,17 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 ### 개발/디버그 사이클
 ```bash
 # 1. 연결성 확인
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 --profile legacy \
   --strategy identity --max-cases 1
 
 # 2. 소규모 테스트
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 --profile ims_specific \
   --strategy default --max-cases 10
 
 # 3. 본격 퍼징
-uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
   --mt-invite-template a31 --profile delivery_preserving \
   --strategy default --max-cases 1000 \
   --pcap --adb --adb-serial <SERIAL>
@@ -395,7 +394,7 @@ mkdir -p $OUTPUT_DIR
 # Layer별 분할 실행
 for LAYER in wire byte; do
     uv run fuzzer campaign run \
-        --mode real-ue-direct --target-msisdn 111111 \
+        --mode real-ue-direct --target-msisdn <TARGET_MSISDN> \
         --mt-invite-template a31 \
         --profile parser_breaker --layer $LAYER --strategy default --max-cases 2000 \
         --output $OUTPUT_DIR/campaign_$LAYER.jsonl \
@@ -413,11 +412,11 @@ wait  # 모든 백그라운드 작업 완료 대기
 # fuzzer 실행 로그
 tail -f results/campaign.jsonl
 
-# A31 상태 확인  
+# 현재 UE 상태 확인
 docker logs pcscf --since 1m | grep "Term UE"
 
 # 네트워크 트래픽
-sudo tcpdump -i br-volte host 10.20.20.8
+sudo tcpdump -i br-volte host <UE_IP>
 ```
 
 ### 문제 진단
@@ -429,8 +428,8 @@ uv run fuzzer campaign run --verbose ...
 uv run fuzzer campaign replay results/campaign.jsonl --case-id <ID>
 
 # 네트워크 연결 테스트
-ping 10.20.20.8
-docker exec pcscf ping 10.20.20.8
+ping <UE_IP>
+docker exec pcscf ping <UE_IP>
 ```
 
 ---

@@ -32,9 +32,7 @@ from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from tests.sender._server import UDPResponder
 
 REALISTIC_MT_REQUEST_URI = "sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~1"
-REALISTIC_MT_MUTATED_REQUEST_URI = (
-    "sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~9"
-)
+REALISTIC_MT_MUTATED_REQUEST_URI = "sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~9"
 
 
 # ---------------------------------------------------------------------------
@@ -409,24 +407,28 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             send_completed_at=100.2,
         )
 
-        with unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
             ),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.monotonic",
-            side_effect=[10.0, 10.9],
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.monotonic",
+                side_effect=[10.0, 10.9],
+            ),
         ):
             result = executor._execute_case(spec)
 
@@ -478,12 +480,14 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             send_completed_at=1.1,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch.object(
-            executor._mutator,
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
                 "mutate_editable",
                 return_value=SimpleNamespace(
                     final_layer="wire",
@@ -491,22 +495,25 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
                     packet_bytes=None,
                     records=(),
                 ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
             ),
-        ) as evaluate_mock:
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ) as evaluate_mock,
+        ):
             executor._execute_case(spec)
 
         context = evaluate_mock.call_args.args[1]
@@ -557,22 +564,25 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             send_completed_at=1.1,
         )
 
-        with unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
             ),
-        ) as evaluate_mock:
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ) as evaluate_mock,
+        ):
             executor._execute_case(spec)
 
         context = evaluate_mock.call_args.args[1]
@@ -619,21 +629,24 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             error=None,
         )
 
-        with unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
-            return_value=fake_exchange,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                return_value=fake_exchange,
             ),
-        ) as evaluate_mock:
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ) as evaluate_mock,
+        ):
             executor._execute_case(spec)
 
         context = evaluate_mock.call_args.args[1]
@@ -691,24 +704,28 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
                 setup_succeeded=True,
             )
 
-            with unittest.mock.patch(
-                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
-                return_value=exchange,
-            ), unittest.mock.patch.object(
-                executor._oracle,
-                "evaluate",
-                return_value=SimpleNamespace(
-                    verdict="normal",
-                    reason="ok",
-                    response_code=200,
-                    elapsed_ms=100.0,
-                    process_alive=True,
-                    details={},
+            with (
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                    return_value=exchange,
                 ),
-            ), unittest.mock.patch.object(
-                executor,
-                "_persist_case_artifacts",
-                side_effect=lambda _spec, case_result, **kwargs: case_result,
+                unittest.mock.patch.object(
+                    executor._oracle,
+                    "evaluate",
+                    return_value=SimpleNamespace(
+                        verdict="normal",
+                        reason="ok",
+                        response_code=200,
+                        elapsed_ms=100.0,
+                        process_alive=True,
+                        details={},
+                    ),
+                ),
+                unittest.mock.patch.object(
+                    executor,
+                    "_persist_case_artifacts",
+                    side_effect=lambda _spec, case_result, **kwargs: case_result,
+                ),
             ):
                 result = executor._execute_case(spec)
 
@@ -753,13 +770,16 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
                 setup_succeeded=True,
             )
 
-            with unittest.mock.patch(
-                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
-                return_value=exchange,
-            ), unittest.mock.patch.object(
-                executor,
-                "_persist_case_artifacts",
-                side_effect=lambda _spec, case_result, **kwargs: case_result,
+            with (
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                    return_value=exchange,
+                ),
+                unittest.mock.patch.object(
+                    executor,
+                    "_persist_case_artifacts",
+                    side_effect=lambda _spec, case_result, **kwargs: case_result,
+                ),
             ):
                 result = executor._execute_case(spec)
 
@@ -794,9 +814,7 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             strategy="default",
         )
         invite_wire = (
-            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
-            "CSeq: 1 INVITE\r\n"
-            "\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n"
         )
         send_result = SendReceiveResult(
             target=TargetEndpoint(
@@ -822,51 +840,61 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             send_completed_at=1.1,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.build_default_slots",
-            return_value={},
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
-            return_value=invite_wire,
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="wire",
-                wire_text=invite_wire,
-                packet_bytes=None,
-                records=(),
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor,
-            "_teardown_invite",
-            return_value=[],
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.build_default_slots",
+                return_value={},
             ),
-        ), unittest.mock.patch.object(
-            executor._evidence,
-            "collect",
-            side_effect=lambda *args, **kwargs: time.monotonic(),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.monotonic",
-            side_effect=[101.0, 102.5],
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+                return_value=invite_wire,
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="wire",
+                    wire_text=invite_wire,
+                    packet_bytes=None,
+                    records=(),
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor,
+                "_teardown_invite",
+                return_value=[],
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._evidence,
+                "collect",
+                side_effect=lambda *args, **kwargs: time.monotonic(),
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.monotonic",
+                side_effect=[101.0, 102.5],
+            ),
         ):
             result = executor._execute_mt_template_case(
                 spec,
@@ -914,23 +942,27 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             error=None,
         )
 
-        with unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
             ),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
-            return_value=fake_exchange,
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.monotonic",
-            side_effect=[10.0, 10.9],
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                return_value=fake_exchange,
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.monotonic",
+                side_effect=[10.0, 10.9],
+            ),
         ):
             result = executor._execute_case(spec)
 
@@ -960,7 +992,6 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             for line in path.read_text().splitlines():
                 obj = json.loads(line)
                 self.assertIn("type", obj)
-
 
     def test_resolve_ports_live_forwards_ue_ip_to_resolver(self) -> None:
         """The MT campaign path resolves ue_ip and ports separately. The fix
@@ -1035,7 +1066,8 @@ class CampaignExecutorTests(unittest.TestCase):
             cfg = self._make_config(
                 responder.host,
                 responder.port,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
             )
             executor = CampaignExecutor(cfg)
             result = executor.run()
@@ -1069,13 +1101,16 @@ class CampaignExecutorTests(unittest.TestCase):
                 timestamp=1.0,
             )
 
-            with unittest.mock.patch.object(
-                executor,
-                "_execute_case",
-                return_value=fake_case,
-            ), unittest.mock.patch(
-                "volte_mutation_fuzzer.campaign.core.PcapCapture.wait_for_pending_exports"
-            ) as wait_mock:
+            with (
+                unittest.mock.patch.object(
+                    executor,
+                    "_execute_case",
+                    return_value=fake_case,
+                ),
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.campaign.core.PcapCapture.wait_for_pending_exports"
+                ) as wait_mock,
+            ):
                 executor.run()
 
         wait_mock.assert_called_once_with()
@@ -1093,15 +1128,19 @@ class CampaignExecutorTests(unittest.TestCase):
             )
             executor = CampaignExecutor(cfg)
 
-            with unittest.mock.patch.object(
-                executor,
-                "_execute_case",
-                side_effect=KeyboardInterrupt,
-            ), unittest.mock.patch(
-                "volte_mutation_fuzzer.campaign.core.PcapCapture.wait_for_pending_exports"
-            ) as wait_mock, unittest.mock.patch(
-                "volte_mutation_fuzzer.campaign.core.HtmlReportGenerator.generate",
-                return_value=Path(tmpdir) / "report.html",
+            with (
+                unittest.mock.patch.object(
+                    executor,
+                    "_execute_case",
+                    side_effect=KeyboardInterrupt,
+                ),
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.campaign.core.PcapCapture.wait_for_pending_exports"
+                ) as wait_mock,
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.campaign.core.HtmlReportGenerator.generate",
+                    return_value=Path(tmpdir) / "report.html",
+                ),
             ):
                 result = executor.run()
 
@@ -1156,37 +1195,42 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=100.2,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_build_packet",
-            return_value=object(),
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate",
-            return_value=SimpleNamespace(
-                original_packet=object(),
-                mutated_packet=object(),
-                wire_text="SIP/2.0 200 OK\r\n\r\n",
-                packet_bytes=None,
-                records=(),
-                seed=0,
-                profile="parser_breaker",
-                strategy="final_crlf_loss",
-                final_layer="wire",
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_build_packet",
+                return_value=object(),
             ),
-        ) as mutate_mock, unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=12.5,
-                process_alive=True,
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate",
+                return_value=SimpleNamespace(
+                    original_packet=object(),
+                    mutated_packet=object(),
+                    wire_text="SIP/2.0 200 OK\r\n\r\n",
+                    packet_bytes=None,
+                    records=(),
+                    seed=0,
+                    profile="parser_breaker",
+                    strategy="final_crlf_loss",
+                    final_layer="wire",
+                ),
+            ) as mutate_mock,
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
             ),
         ):
             result = executor._execute_case(spec)
@@ -1224,14 +1268,17 @@ class CampaignExecutorTests(unittest.TestCase):
             timestamp=1.0,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_execute_dialog_case",
-            return_value=expected,
-        ) as dialog_mock, unittest.mock.patch.object(
-            executor,
-            "_build_packet",
-        ) as build_packet_mock:
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_execute_dialog_case",
+                return_value=expected,
+            ) as dialog_mock,
+            unittest.mock.patch.object(
+                executor,
+                "_build_packet",
+            ) as build_packet_mock,
+        ):
             result = executor._execute_case(spec)
 
         self.assertIs(result, expected)
@@ -1271,14 +1318,17 @@ class CampaignExecutorTests(unittest.TestCase):
             timestamp=1.0,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_execute_dialog_case",
-            return_value=expected,
-        ) as dialog_mock, unittest.mock.patch.object(
-            executor,
-            "_execute_mt_template_case",
-        ) as mt_mock:
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_execute_dialog_case",
+                return_value=expected,
+            ) as dialog_mock,
+            unittest.mock.patch.object(
+                executor,
+                "_execute_mt_template_case",
+            ) as mt_mock,
+        ):
             result = executor._execute_case(spec)
 
         self.assertIs(result, expected)
@@ -1316,14 +1366,17 @@ class CampaignExecutorTests(unittest.TestCase):
             timestamp=1.0,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_execute_mt_template_case",
-            return_value=expected,
-        ) as mt_mock, unittest.mock.patch.object(
-            executor,
-            "_execute_dialog_case",
-        ) as dialog_mock:
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_execute_mt_template_case",
+                return_value=expected,
+            ) as mt_mock,
+            unittest.mock.patch.object(
+                executor,
+                "_execute_dialog_case",
+            ) as dialog_mock,
+        ):
             result = executor._execute_case(spec)
 
         self.assertIs(result, expected)
@@ -1358,21 +1411,26 @@ class CampaignExecutorTests(unittest.TestCase):
             timestamp=1.0,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_execute_dialog_case",
-            return_value=expected,
-        ) as dialog_mock, unittest.mock.patch.object(
-            executor,
-            "_build_packet",
-        ) as build_packet_mock:
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_execute_dialog_case",
+                return_value=expected,
+            ) as dialog_mock,
+            unittest.mock.patch.object(
+                executor,
+                "_build_packet",
+            ) as build_packet_mock,
+        ):
             result = executor._execute_case(spec)
 
         self.assertIs(result, expected)
         dialog_mock.assert_called_once()
         build_packet_mock.assert_not_called()
 
-    def test_execute_case_uses_resolved_profile_and_strategy_from_mutator_output(self) -> None:
+    def test_execute_case_uses_resolved_profile_and_strategy_from_mutator_output(
+        self,
+    ) -> None:
         cfg = self._make_config(
             "127.0.0.1",
             5060,
@@ -1405,37 +1463,42 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=100.2,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_build_packet",
-            return_value=object(),
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate",
-            return_value=SimpleNamespace(
-                original_packet=object(),
-                mutated_packet=object(),
-                wire_text="SIP/2.0 200 OK\r\n\r\n",
-                packet_bytes=None,
-                records=(),
-                seed=0,
-                profile="delivery_preserving",
-                strategy="final_crlf_loss",
-                final_layer="wire",
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_build_packet",
+                return_value=object(),
             ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=12.5,
-                process_alive=True,
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate",
+                return_value=SimpleNamespace(
+                    original_packet=object(),
+                    mutated_packet=object(),
+                    wire_text="SIP/2.0 200 OK\r\n\r\n",
+                    packet_bytes=None,
+                    records=(),
+                    seed=0,
+                    profile="delivery_preserving",
+                    strategy="final_crlf_loss",
+                    final_layer="wire",
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
             ),
         ):
             result = executor._execute_case(spec)
@@ -1445,7 +1508,9 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("--profile delivery_preserving", result.reproduction_cmd)
         self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
 
-    def test_execute_case_preserves_resolved_profile_and_strategy_on_send_failure(self) -> None:
+    def test_execute_case_preserves_resolved_profile_and_strategy_on_send_failure(
+        self,
+    ) -> None:
         cfg = self._make_config(
             "127.0.0.1",
             5060,
@@ -1462,28 +1527,32 @@ class CampaignExecutorTests(unittest.TestCase):
             strategy="default",
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_build_packet",
-            return_value=object(),
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate",
-            return_value=SimpleNamespace(
-                original_packet=object(),
-                mutated_packet=object(),
-                wire_text="SIP/2.0 200 OK\r\n\r\n",
-                packet_bytes=None,
-                records=(),
-                seed=0,
-                profile="delivery_preserving",
-                strategy="final_crlf_loss",
-                final_layer="wire",
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_build_packet",
+                return_value=object(),
             ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            side_effect=RuntimeError("send failed"),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate",
+                return_value=SimpleNamespace(
+                    original_packet=object(),
+                    mutated_packet=object(),
+                    wire_text="SIP/2.0 200 OK\r\n\r\n",
+                    packet_bytes=None,
+                    records=(),
+                    seed=0,
+                    profile="delivery_preserving",
+                    strategy="final_crlf_loss",
+                    final_layer="wire",
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=RuntimeError("send failed"),
+            ),
         ):
             result = executor._execute_case(spec)
 
@@ -1493,7 +1562,9 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("--strategy final_crlf_loss", result.reproduction_cmd)
         self.assertIn("executor error: send failed", result.reason)
 
-    def test_execute_mt_template_case_preserves_resolved_profile_and_strategy_on_send_failure(self) -> None:
+    def test_execute_mt_template_case_preserves_resolved_profile_and_strategy_on_send_failure(
+        self,
+    ) -> None:
         cfg = self._make_config(
             "10.20.20.8",
             5060,
@@ -1517,36 +1588,40 @@ class CampaignExecutorTests(unittest.TestCase):
             profile="legacy",
         )
         invite_wire = (
-            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
-            "CSeq: 1 INVITE\r\n"
-            "\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n"
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.build_default_slots",
-            return_value={},
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
-            return_value=invite_wire,
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="wire",
-                wire_text=invite_wire,
-                packet_bytes=None,
-                records=(),
-                profile="delivery_preserving",
-                strategy="final_crlf_loss",
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            side_effect=RuntimeError("mt send failed"),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.build_default_slots",
+                return_value={},
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+                return_value=invite_wire,
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="wire",
+                    wire_text=invite_wire,
+                    packet_bytes=None,
+                    records=(),
+                    profile="delivery_preserving",
+                    strategy="final_crlf_loss",
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=RuntimeError("mt send failed"),
+            ),
         ):
             result = executor._execute_mt_template_case(
                 spec,
@@ -1593,31 +1668,38 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=100.2,
         )
 
-        with unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=12.5,
-                process_alive=True,
+        with (
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
             ),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
-            return_value=SimpleNamespace(),
-        ) as snapshot_mock, unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.time",
-            side_effect=[100.0, 101.0],
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
+                return_value=SimpleNamespace(),
+            ) as snapshot_mock,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.time",
+                side_effect=[100.0, 101.0],
+            ),
         ):
             executor._execute_case(spec)
 
         self.assertEqual(snapshot_mock.call_count, 1)
-        self.assertEqual(snapshot_mock.call_args.kwargs["collector"], executor._adb_collector)
+        self.assertEqual(
+            snapshot_mock.call_args.kwargs["collector"], executor._adb_collector
+        )
         self.assertEqual(snapshot_mock.call_args.kwargs["log_since"], 100.0)
         self.assertEqual(snapshot_mock.call_args.kwargs["log_until"], 101.0)
         self.assertEqual(snapshot_mock.call_args.kwargs["profile"], "light")
@@ -1647,25 +1729,28 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=100.2,
         )
 
-        with unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="timeout",
-                reason="no response received within timeout",
-                response_code=None,
-                elapsed_ms=12.5,
-                process_alive=None,
-                details={
-                    "adb_warning": {
-                        "severity": "warning",
-                        "matched_line": "IMS deregist triggered by network change",
-                    }
-                },
+        with (
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="timeout",
+                    reason="no response received within timeout",
+                    response_code=None,
+                    elapsed_ms=12.5,
+                    process_alive=None,
+                    details={
+                        "adb_warning": {
+                            "severity": "warning",
+                            "matched_line": "IMS deregist triggered by network change",
+                        }
+                    },
+                ),
             ),
         ):
             result = executor._execute_case(spec)
@@ -1692,7 +1777,8 @@ class CampaignExecutorTests(unittest.TestCase):
             cfg = self._make_config(
                 responder.host,
                 responder.port,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
             )
             executor = CampaignExecutor(cfg)
             result = executor.run()
@@ -1707,7 +1793,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 19999,
                 methods=("OPTIONS", "INVITE"),
                 max_cases=2,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
                 timeout_seconds=0.2,
             )
             executor = CampaignExecutor(cfg)
@@ -1735,7 +1822,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 responder.port,
                 methods=("OPTIONS", "INVITE", "MESSAGE"),
                 max_cases=3,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
             )
             executor = CampaignExecutor(cfg)
             executor.run()
@@ -1763,7 +1851,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 responder.host,
                 responder.port,
                 methods=("OPTIONS",),
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
                 max_cases=1,
             )
             executor = CampaignExecutor(cfg)
@@ -1773,9 +1862,11 @@ class CampaignExecutorTests(unittest.TestCase):
             _, cases = store.read_all()
 
         cmd = cases[0].reproduction_cmd
-        self.assertIn("fuzzer mutate request", cmd)
+        self.assertIn("uv run fuzzer campaign run", cmd)
+        self.assertIn("--methods OPTIONS", cmd)
         self.assertIn("--profile legacy", cmd)
-        self.assertIn("--seed", cmd)
+        self.assertIn("--seed-start 0", cmd)
+        self.assertIn("--max-cases 1", cmd)
         self.assertIn(responder.host, cmd)
 
     def test_reproduction_cmd_includes_ipsec_mode_for_real_ue_direct(self) -> None:
@@ -1827,7 +1918,9 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertIn("--profile delivery_preserving", cmd)
         self.assertIn("--mt-local-port 15100", cmd)
 
-    def test_reproduction_cmd_honors_explicit_profile_and_strategy_overrides(self) -> None:
+    def test_reproduction_cmd_honors_explicit_profile_and_strategy_overrides(
+        self,
+    ) -> None:
         cfg = self._make_config(
             "127.0.0.1",
             5060,
@@ -1876,7 +1969,9 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertNotIn("--target-host None", cmd)
         self.assertIn("--target-msisdn 111111", cmd)
 
-    def test_mt_template_reproduction_cmd_uses_msisdn_when_target_host_missing(self) -> None:
+    def test_mt_template_reproduction_cmd_uses_msisdn_when_target_host_missing(
+        self,
+    ) -> None:
         cfg = self._make_config(
             None,
             5060,
@@ -1914,7 +2009,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 19998,
                 methods=("OPTIONS",),
                 max_cases=1,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
                 timeout_seconds=0.1,
                 layers=("model",),
                 strategies=("default",),
@@ -1941,7 +2037,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 5060,
                 methods=("OPTIONS",),
                 max_cases=1,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
                 crash_analysis=True,
             )
             crash_analysis_dir = str(Path(out_dir) / "test" / "crash_analysis")
@@ -1963,15 +2060,18 @@ class CampaignExecutorTests(unittest.TestCase):
                 timestamp=1.0,
             )
 
-            with unittest.mock.patch.object(
-                analyzer,
-                "analyze_case_immediately",
-                wraps=analyzer.analyze_case_immediately,
-            ) as analyze_mock, unittest.mock.patch.object(
-                analyzer,
-                "generate_final_report",
-                wraps=analyzer.generate_final_report,
-            ) as report_mock:
+            with (
+                unittest.mock.patch.object(
+                    analyzer,
+                    "analyze_case_immediately",
+                    wraps=analyzer.analyze_case_immediately,
+                ) as analyze_mock,
+                unittest.mock.patch.object(
+                    analyzer,
+                    "generate_final_report",
+                    wraps=analyzer.generate_final_report,
+                ) as report_mock,
+            ):
                 executor = CampaignExecutor(cfg)
                 executor._crash_analyzer = analyzer
                 setattr(
@@ -2061,13 +2161,16 @@ class CampaignExecutorTests(unittest.TestCase):
                 timestamp=1.0,
             )
 
-            with unittest.mock.patch.object(
-                executor._ios_collector,
-                "start",
-            ) as start_mock, unittest.mock.patch.object(
-                executor._ios_collector,
-                "stop",
-            ) as stop_mock:
+            with (
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "start",
+                ) as start_mock,
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "stop",
+                ) as stop_mock,
+            ):
                 setattr(
                     executor,
                     "_execute_case",
@@ -2105,24 +2208,29 @@ class CampaignExecutorTests(unittest.TestCase):
                 timestamp=1.0,
             )
 
-            with unittest.mock.patch.object(
-                executor._ios_collector,
-                "start",
-            ), unittest.mock.patch.object(
-                executor._ios_collector,
-                "stop",
-            ), unittest.mock.patch.object(
-                executor,
-                "_execute_case",
-                return_value=fake_case,
-            ), unittest.mock.patch(
-                "volte_mutation_fuzzer.ios.core.IosConnector.check_device",
-                return_value=IosDeviceInfo(
-                    udid="ABC-123",
-                    device_name="iPhone 12",
-                    product_type="iPhone13,2",
-                    product_version="17.5.1",
-                    build_version="21F90",
+            with (
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "start",
+                ),
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "stop",
+                ),
+                unittest.mock.patch.object(
+                    executor,
+                    "_execute_case",
+                    return_value=fake_case,
+                ),
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.ios.core.IosConnector.check_device",
+                    return_value=IosDeviceInfo(
+                        udid="ABC-123",
+                        device_name="iPhone 12",
+                        product_type="iPhone13,2",
+                        product_version="17.5.1",
+                        build_version="21F90",
+                    ),
                 ),
             ):
                 executor.run()
@@ -2167,32 +2275,39 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=100.2,
         )
 
-        with unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=send_result,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=12.5,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=send_result,
             ),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.ios.core.IosConnector.take_snapshot",
-            return_value=IosSnapshotResult(),
-        ) as snapshot_mock, unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.time",
-            return_value=100.0,
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                    details={},
+                ),
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.ios.core.IosConnector.take_snapshot",
+                return_value=IosSnapshotResult(),
+            ) as snapshot_mock,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.time",
+                return_value=100.0,
+            ),
         ):
             executor._execute_case(spec)
 
         self.assertEqual(snapshot_mock.call_count, 1)
-        self.assertEqual(snapshot_mock.call_args.kwargs["collector"], executor._ios_collector)
+        self.assertEqual(
+            snapshot_mock.call_args.kwargs["collector"], executor._ios_collector
+        )
         self.assertEqual(snapshot_mock.call_args.kwargs["syslog_since"], 100.0)
         self.assertEqual(snapshot_mock.call_args.kwargs["syslog_until"], 100.0)
         self.assertEqual(snapshot_mock.call_args.kwargs["run_diagnostics"], False)
@@ -2236,44 +2351,53 @@ class CampaignExecutorTests(unittest.TestCase):
             error=None,
         )
 
-        with unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
-            return_value=fake_exchange,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="suspicious",
-                reason="warn",
-                response_code=500,
-                elapsed_ms=100.0,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.DialogOrchestrator.execute",
+                return_value=fake_exchange,
             ),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
-            return_value=SimpleNamespace(),
-        ) as adb_snapshot_mock, unittest.mock.patch(
-            "volte_mutation_fuzzer.ios.core.IosConnector.take_snapshot",
-            return_value=IosSnapshotResult(),
-        ) as ios_snapshot_mock, unittest.mock.patch.object(
-            executor._evidence,
-            "collect",
-        ) as collect_mock, unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.time",
-            return_value=100.0,
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="suspicious",
+                    reason="warn",
+                    response_code=500,
+                    elapsed_ms=100.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
+                return_value=SimpleNamespace(),
+            ) as adb_snapshot_mock,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.ios.core.IosConnector.take_snapshot",
+                return_value=IosSnapshotResult(),
+            ) as ios_snapshot_mock,
+            unittest.mock.patch.object(
+                executor._evidence,
+                "collect",
+            ) as collect_mock,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.time",
+                return_value=100.0,
+            ),
         ):
             executor._execute_case(spec)
 
         self.assertEqual(adb_snapshot_mock.call_count, 1)
         self.assertEqual(ios_snapshot_mock.call_count, 1)
         collect_mock.assert_called_once()
-        self.assertEqual(collect_mock.call_args.kwargs["adb_snapshot_dir"], str(
-            executor.campaign_dir / "adb_snapshots" / "case_0"
-        ))
-        self.assertEqual(collect_mock.call_args.kwargs["ios_snapshot_dir"], str(
-            executor.campaign_dir / "ios_snapshots" / "case_0"
-        ))
+        self.assertEqual(
+            collect_mock.call_args.kwargs["adb_snapshot_dir"],
+            str(executor.campaign_dir / "adb_snapshots" / "case_0"),
+        )
+        self.assertEqual(
+            collect_mock.call_args.kwargs["ios_snapshot_dir"],
+            str(executor.campaign_dir / "ios_snapshots" / "case_0"),
+        )
 
     def test_init_real_ue_msisdn_target_does_not_force_default_port(self) -> None:
         cfg = self._make_config(
@@ -2291,7 +2415,9 @@ class CampaignExecutorTests(unittest.TestCase):
 
         self.assertIsNone(executor._target.port)
 
-    def test_native_mt_template_builds_native_target_and_preserves_raw_response(self) -> None:
+    def test_native_mt_template_builds_native_target_and_preserves_raw_response(
+        self,
+    ) -> None:
         cfg = self._make_config(
             "10.20.20.8",
             5060,
@@ -2316,9 +2442,7 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         invite_wire = (
-            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
-            "CSeq: 1 INVITE\r\n"
-            "\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n"
         )
         provisional = SocketObservation(
             source="pcscf-log",
@@ -2348,64 +2472,73 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=1.1,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.build_default_slots",
-            return_value={},
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
-            return_value=invite_wire,
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="wire",
-                wire_text=invite_wire,
-                packet_bytes=None,
-                records=(),
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="stack_failure",
-                reason="adb crash detected",
-                response_code=180,
-                elapsed_ms=12.5,
-                process_alive=True,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.build_default_slots",
+                return_value={},
             ),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
-            return_value=SimpleNamespace(),
-        ) as snapshot_mock, unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.time.time",
-            return_value=1234.5,
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            side_effect=[
-                SendReceiveResult(
-                    target=TargetEndpoint(
-                        host="10.20.20.8",
-                        port=5060,
-                        mode="real-ue-direct",
-                        msisdn="111111",
-                        ipsec_mode="native",
-                        bind_container="pcscf",
-                    ),
-                    artifact_kind="wire",
-                    bytes_sent=100,
-                    outcome="success",
-                    responses=(provisional,),
-                    send_started_at=1.0,
-                    send_completed_at=1.1,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+                return_value=invite_wire,
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="wire",
+                    wire_text=invite_wire,
+                    packet_bytes=None,
+                    records=(),
                 ),
-                cancel_ok,
-            ],
-        ) as send_mock:
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="stack_failure",
+                    reason="adb crash detected",
+                    response_code=180,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
+            ),
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.adb.core.AdbConnector.take_snapshot",
+                return_value=SimpleNamespace(),
+            ) as snapshot_mock,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.time.time",
+                return_value=1234.5,
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=[
+                    SendReceiveResult(
+                        target=TargetEndpoint(
+                            host="10.20.20.8",
+                            port=5060,
+                            mode="real-ue-direct",
+                            msisdn="111111",
+                            ipsec_mode="native",
+                            bind_container="pcscf",
+                        ),
+                        artifact_kind="wire",
+                        bytes_sent=100,
+                        outcome="success",
+                        responses=(provisional,),
+                        send_started_at=1.0,
+                        send_completed_at=1.1,
+                    ),
+                    cancel_ok,
+                ],
+            ) as send_mock,
+        ):
             result = executor._execute_mt_template_case(
                 spec,
                 timestamp=1234.5,
@@ -2415,7 +2548,9 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(result.raw_response, "SIP/2.0 180 Ringing\r\n\r\n")
         self.assertEqual(send_mock.call_count, 2)
         self.assertEqual(snapshot_mock.call_count, 1)
-        self.assertEqual(snapshot_mock.call_args.kwargs["collector"], executor._adb_collector)
+        self.assertEqual(
+            snapshot_mock.call_args.kwargs["collector"], executor._adb_collector
+        )
         self.assertEqual(snapshot_mock.call_args.kwargs["profile"], "full")
         mt_target = send_mock.call_args_list[0].args[1]
         self.assertEqual(mt_target.ipsec_mode, "native")
@@ -2449,9 +2584,7 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         invite_wire = (
-            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
-            "CSeq: 1 INVITE\r\n"
-            "\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n"
         )
         final_response = SocketObservation(
             source="pcscf-log",
@@ -2461,53 +2594,60 @@ class CampaignExecutorTests(unittest.TestCase):
             classification="success",
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.build_default_slots",
-            return_value={},
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
-            return_value=invite_wire,
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="wire",
-                wire_text=invite_wire,
-                packet_bytes=None,
-                records=(),
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=12.5,
-                process_alive=True,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.build_default_slots",
+                return_value={},
             ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            return_value=SendReceiveResult(
-                target=TargetEndpoint(
-                    host="10.20.20.8",
-                    port=5060,
-                    mode="real-ue-direct",
-                    msisdn="111111",
-                    ipsec_mode="native",
-                    bind_container="pcscf",
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+                return_value=invite_wire,
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="wire",
+                    wire_text=invite_wire,
+                    packet_bytes=None,
+                    records=(),
                 ),
-                artifact_kind="wire",
-                bytes_sent=100,
-                outcome="success",
-                responses=(final_response,),
-                send_started_at=1.0,
-                send_completed_at=1.1,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                return_value=SendReceiveResult(
+                    target=TargetEndpoint(
+                        host="10.20.20.8",
+                        port=5060,
+                        mode="real-ue-direct",
+                        msisdn="111111",
+                        ipsec_mode="native",
+                        bind_container="pcscf",
+                    ),
+                    artifact_kind="wire",
+                    bytes_sent=100,
+                    outcome="success",
+                    responses=(final_response,),
+                    send_started_at=1.0,
+                    send_completed_at=1.1,
+                ),
             ),
         ):
             result = executor._execute_mt_template_case(
@@ -2608,9 +2748,7 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         original_wire = (
-            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
-            "CSeq: 1 INVITE\r\n"
-            "\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n"
         )
         mutated_wire = (
             f"INVITE {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\n"
@@ -2647,57 +2785,64 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=1.1,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.build_default_slots",
-            return_value={},
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
-            return_value=original_wire,
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="wire",
-                wire_text=mutated_wire,
-                packet_bytes=None,
-                records=(),
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=180,
-                elapsed_ms=12.5,
-                process_alive=True,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.build_default_slots",
+                return_value={},
             ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            side_effect=[
-                SendReceiveResult(
-                    target=TargetEndpoint(
-                        host="10.20.20.8",
-                        port=5060,
-                        mode="real-ue-direct",
-                        ipsec_mode="null",
-                        bind_container="pcscf",
-                    ),
-                    artifact_kind="wire",
-                    bytes_sent=100,
-                    outcome="success",
-                    responses=(provisional,),
-                    send_started_at=1.0,
-                    send_completed_at=1.1,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+                return_value=original_wire,
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="wire",
+                    wire_text=mutated_wire,
+                    packet_bytes=None,
+                    records=(),
                 ),
-                cancel_ok,
-            ],
-        ) as send_mock:
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=180,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=[
+                    SendReceiveResult(
+                        target=TargetEndpoint(
+                            host="10.20.20.8",
+                            port=5060,
+                            mode="real-ue-direct",
+                            ipsec_mode="null",
+                            bind_container="pcscf",
+                        ),
+                        artifact_kind="wire",
+                        bytes_sent=100,
+                        outcome="success",
+                        responses=(provisional,),
+                        send_started_at=1.0,
+                        send_completed_at=1.1,
+                    ),
+                    cancel_ok,
+                ],
+            ) as send_mock,
+        ):
             executor._execute_mt_template_case(
                 spec,
                 timestamp=1234.5,
@@ -2735,17 +2880,13 @@ class CampaignExecutorTests(unittest.TestCase):
         )
 
         original_wire = (
-            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\n"
-            "CSeq: 1 INVITE\r\n"
-            "\r\n"
+            f"INVITE {REALISTIC_MT_REQUEST_URI} SIP/2.0\r\nCSeq: 1 INVITE\r\n\r\n"
         )
         mutated_bytes = (
-            (
-                f"INVITE {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\n"
-                "CSeq: 9 INVITE\r\n"
-                "\r\n"
-            ).encode("utf-8")
-        )
+            f"INVITE {REALISTIC_MT_MUTATED_REQUEST_URI} SIP/2.0\r\n"
+            "CSeq: 9 INVITE\r\n"
+            "\r\n"
+        ).encode("utf-8")
         provisional = SocketObservation(
             source="pcscf-log",
             status_code=180,
@@ -2776,57 +2917,64 @@ class CampaignExecutorTests(unittest.TestCase):
             send_completed_at=1.1,
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.build_default_slots",
-            return_value={},
-        ), unittest.mock.patch(
-            "volte_mutation_fuzzer.campaign.core.render_mt_invite",
-            return_value=original_wire,
-        ), unittest.mock.patch.object(
-            executor._mutator,
-            "mutate_editable",
-            return_value=SimpleNamespace(
-                final_layer="byte",
-                wire_text=None,
-                packet_bytes=mutated_bytes,
-                records=(),
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=180,
-                elapsed_ms=12.5,
-                process_alive=True,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.build_default_slots",
+                return_value={},
             ),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            side_effect=[
-                SendReceiveResult(
-                    target=TargetEndpoint(
-                        host="10.20.20.8",
-                        port=5060,
-                        mode="real-ue-direct",
-                        ipsec_mode="null",
-                        bind_container="pcscf",
-                    ),
-                    artifact_kind="bytes",
-                    bytes_sent=100,
-                    outcome="success",
-                    responses=(provisional,),
-                    send_started_at=1.0,
-                    send_completed_at=1.1,
+            unittest.mock.patch(
+                "volte_mutation_fuzzer.campaign.core.render_mt_invite",
+                return_value=original_wire,
+            ),
+            unittest.mock.patch.object(
+                executor._mutator,
+                "mutate_editable",
+                return_value=SimpleNamespace(
+                    final_layer="byte",
+                    wire_text=None,
+                    packet_bytes=mutated_bytes,
+                    records=(),
                 ),
-                cancel_ok,
-            ],
-        ) as send_mock:
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=180,
+                    elapsed_ms=12.5,
+                    process_alive=True,
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=[
+                    SendReceiveResult(
+                        target=TargetEndpoint(
+                            host="10.20.20.8",
+                            port=5060,
+                            mode="real-ue-direct",
+                            ipsec_mode="null",
+                            bind_container="pcscf",
+                        ),
+                        artifact_kind="bytes",
+                        bytes_sent=100,
+                        outcome="success",
+                        responses=(provisional,),
+                        send_started_at=1.0,
+                        send_completed_at=1.1,
+                    ),
+                    cancel_ok,
+                ],
+            ) as send_mock,
+        ):
             executor._execute_mt_template_case(
                 spec,
                 timestamp=1234.5,
@@ -2958,12 +3106,14 @@ class SACircuitBreakerTests(unittest.TestCase):
                 adb_enabled=False,
                 pcap_enabled=False,
                 circuit_breaker_threshold=6,
-                results_dir=out_dir, output_name="test",
+                results_dir=out_dir,
+                output_name="test",
             )
             executor = CampaignExecutor(cfg)
 
             # Mock _execute_case to always return timeout
             call_count = [0]
+
             def fake_execute(spec: CaseSpec) -> CaseResult:
                 call_count[0] += 1
                 return self._make_timeout_case(spec.case_id)
@@ -2975,7 +3125,9 @@ class SACircuitBreakerTests(unittest.TestCase):
 
             with unittest.mock.patch(
                 "volte_mutation_fuzzer.campaign.core.check_ipsec_sa_alive",
-                return_value=IPsecSAStatus(alive=False, sa_count=0, detail="no UE SAs found"),
+                return_value=IPsecSAStatus(
+                    alive=False, sa_count=0, detail="no UE SAs found"
+                ),
             ):
                 result = executor.run()
 
@@ -3013,7 +3165,8 @@ class InviteTeardownTests(unittest.TestCase):
             check_process=False,
             adb_enabled=False,
             pcap_enabled=False,
-            results_dir=tmpdir.name, output_name="test",
+            results_dir=tmpdir.name,
+            output_name="test",
         )
         return CampaignExecutor(cfg)
 
@@ -3032,7 +3185,9 @@ class InviteTeardownTests(unittest.TestCase):
             SocketObservation,
         )
 
-        def _classify(code: int) -> Literal[
+        def _classify(
+            code: int,
+        ) -> Literal[
             "provisional",
             "success",
             "client_error",
@@ -3129,6 +3284,7 @@ class InviteTeardownTests(unittest.TestCase):
         )
         self.assertTrue(any("cancel-failed" in e for e in events))
         from volte_mutation_fuzzer.campaign.core import _CANCEL_MAX_RETRIES
+
         self.assertEqual(executor._sender.send_artifact.call_count, _CANCEL_MAX_RETRIES)
 
     def test_retries_cancel_on_exception(self) -> None:
@@ -3208,18 +3364,16 @@ class ReproductionCmdMultiMutationTests(unittest.TestCase):
         cmd = executor._build_reproduction_cmd(self._spec())
         self.assertNotIn("--mutations-per-case", cmd)
         # Sanity: regular flags still present.
-        self.assertIn("uv run fuzzer mutate request OPTIONS", cmd)
+        self.assertIn("uv run fuzzer campaign run", cmd)
+        self.assertIn("--methods OPTIONS", cmd)
         self.assertIn("--strategy null_byte_only", cmd)
-        self.assertIn("--seed 0", cmd)
+        self.assertIn("--seed-start 0", cmd)
 
     def test_multi_mutation_includes_flag(self) -> None:
         executor = self._executor_with_mutations(5)
         cmd = executor._build_reproduction_cmd(self._spec())
         self.assertIn("--mutations-per-case 5", cmd)
-        # Order: flag must sit on the mutate side of the pipe, not the send side.
-        mutate_part, _pipe, send_part = cmd.partition(" | ")
-        self.assertIn("--mutations-per-case 5", mutate_part)
-        self.assertNotIn("--mutations-per-case", send_part)
+        self.assertIn("uv run fuzzer campaign run", cmd)
 
     def test_response_reproduction_also_propagates_flag(self) -> None:
         executor = self._executor_with_mutations(3)
@@ -3354,9 +3508,7 @@ class CampaignConfigMutationsPerCaseTests(unittest.TestCase):
     def test_typical_values_accepted(self) -> None:
         for n in (1, 5, 10, 100):
             with self.subTest(n=n):
-                cfg = CampaignConfig(
-                    target_host="127.0.0.1", mutations_per_case=n
-                )
+                cfg = CampaignConfig(target_host="127.0.0.1", mutations_per_case=n)
                 self.assertEqual(cfg.mutations_per_case, n)
 
 
@@ -3436,29 +3588,34 @@ class PacketFileExecutionTests(unittest.TestCase):
             strategy="identity",
         )
 
-        with unittest.mock.patch.object(
-            executor,
-            "_resolve_ports_live",
-            return_value=(8100, 8101),
-        ), unittest.mock.patch.object(
-            executor._sender,
-            "send_artifact",
-            side_effect=_capture_send_artifact,
-        ), unittest.mock.patch.object(
-            executor._oracle,
-            "evaluate",
-            return_value=SimpleNamespace(
-                verdict="normal",
-                reason="ok",
-                response_code=200,
-                elapsed_ms=10.0,
-                process_alive=True,
-                details={},
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(8100, 8101),
             ),
-        ), unittest.mock.patch.object(
-            executor,
-            "_persist_case_artifacts",
-            side_effect=lambda _spec, case_result, **kwargs: case_result,
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=_capture_send_artifact,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=10.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor,
+                "_persist_case_artifacts",
+                side_effect=lambda _spec, case_result, **kwargs: case_result,
+            ),
         ):
             result = executor._execute_case(spec)
 
@@ -3474,18 +3631,25 @@ class PacketFileExecutionTests(unittest.TestCase):
         raw = b"OPTIONS sip:user@host SIP/2.0\r\n\r\n"
         executor, _ = self._build_executor(raw)
         spec = CaseSpec(
-            case_id=0, seed=0, method="OPTIONS", layer="byte", strategy="identity",
+            case_id=0,
+            seed=0,
+            method="OPTIONS",
+            layer="byte",
+            strategy="identity",
         )
         sentinel = SimpleNamespace(verdict="normal")
 
-        with unittest.mock.patch.object(
-            executor,
-            "_execute_packet_file_case",
-            return_value=sentinel,
-        ) as branch, unittest.mock.patch.object(
-            executor,
-            "_execute_mt_template_case",
-        ) as template_branch:
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_execute_packet_file_case",
+                return_value=sentinel,
+            ) as branch,
+            unittest.mock.patch.object(
+                executor,
+                "_execute_mt_template_case",
+            ) as template_branch,
+        ):
             result = executor._execute_case(spec)
 
         branch.assert_called_once()

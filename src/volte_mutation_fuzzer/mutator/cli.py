@@ -1,6 +1,7 @@
 import json
 import sys
-from typing import Annotated, Any
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal, cast
 
 import typer
 from pydantic import ValidationError
@@ -34,6 +35,8 @@ app = typer.Typer(
 )
 
 _AUTO_LAYER_ORDER = ("model", "wire", "byte")
+MutationLayer = Literal["model", "wire", "byte", "auto"]
+_MUTATION_LAYERS: tuple[str, ...] = ("model", "wire", "byte", "auto")
 
 
 def _parse_packet_json(raw_json: str) -> PacketModel:
@@ -92,13 +95,19 @@ def _build_config(
     seed: int | None,
     max_operations: int = 1,
 ) -> MutationConfig:
+    if layer not in _MUTATION_LAYERS:
+        raise typer.BadParameter(
+            f"must be one of {','.join(_MUTATION_LAYERS)}",
+            param_hint="--layer",
+        )
+    mutation_layer = cast(MutationLayer, layer)
     return MutationConfig(
         profile=profile,
         strategy=strategy,
-        layer=layer,
+        layer=mutation_layer,
         seed=seed,
         max_operations=max_operations,
-    )  # type: ignore[arg-type]
+    )
 
 
 def _resolve_cli_layer(profile: str, strategy: str, layer: str) -> str:
@@ -262,7 +271,9 @@ def _render_result(case: MutatedCase) -> str:
         # Safety net: any stray ``bytes`` left over from ``mode="python"``
         # (e.g. nested in ``records[*].before/after`` Any fields) gets
         # latin-1-decoded so it never aborts the whole output.
-        default=lambda obj: obj.decode("latin-1") if isinstance(obj, (bytes, bytearray)) else repr(obj),
+        default=lambda obj: (
+            obj.decode("latin-1") if isinstance(obj, (bytes, bytearray)) else repr(obj)
+        ),
     )
     if formatted_wire is None:
         return json_block
@@ -398,11 +409,12 @@ def _format_record_side(value: object) -> str:
         ascii_part = _escape_visible(value.decode("latin-1"))
         return f"{hex_part}  ({ascii_part})"
     if isinstance(value, dict):
+        header = cast(Mapping[str, object], value)
         # Header snapshot: {"name": ..., "separator": ..., "value": ...}
-        if "name" in value and ("value" in value or "separator" in value):
-            name = value.get("name", "")
-            separator = value.get("separator", ": ")
-            inner = value.get("value", "")
+        if "name" in header and ("value" in header or "separator" in header):
+            name = header.get("name", "")
+            separator = header.get("separator", ": ")
+            inner = header.get("value", "")
             return _escape_visible(f"{name}{separator}{inner}")
         return _escape_visible(repr(value))
     if isinstance(value, (list, tuple)):
@@ -413,8 +425,14 @@ def _format_record_side(value: object) -> str:
             return _escape_visible(f"{name}: {inner}")
         # Raw byte sequences (e.g. delete_range records ``(0x42, 0x59)``):
         # render as space-separated hex.
-        if value and all(isinstance(part, int) and 0 <= part <= 0xFF for part in value):
-            return " ".join(_format_byte_value(part) for part in value)
+        byte_values: list[int] = []
+        for part in value:
+            if not isinstance(part, int) or not 0 <= part <= 0xFF:
+                byte_values = []
+                break
+            byte_values.append(part)
+        if byte_values:
+            return " ".join(_format_byte_value(part) for part in byte_values)
         return _escape_visible(repr(list(value)))
     if isinstance(value, str):
         return _escape_visible(value)
@@ -463,9 +481,7 @@ _PROFILE_HELP = (
 
 @app.command("packet")
 def packet_command(
-    profile: Annotated[
-        str, typer.Option("--profile", help=_PROFILE_HELP)
-    ] = "legacy",
+    profile: Annotated[str, typer.Option("--profile", help=_PROFILE_HELP)] = "legacy",
     strategy: Annotated[
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
@@ -513,9 +529,7 @@ def packet_command(
 @app.command("request")
 def request_command(
     method: SIPMethod,
-    profile: Annotated[
-        str, typer.Option("--profile", help=_PROFILE_HELP)
-    ] = "legacy",
+    profile: Annotated[str, typer.Option("--profile", help=_PROFILE_HELP)] = "legacy",
     strategy: Annotated[
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
@@ -573,9 +587,7 @@ def response_command(
     context: Annotated[
         str, typer.Option("--context", help="Required DialogContext JSON object.")
     ],
-    profile: Annotated[
-        str, typer.Option("--profile", help=_PROFILE_HELP)
-    ] = "legacy",
+    profile: Annotated[str, typer.Option("--profile", help=_PROFILE_HELP)] = "legacy",
     strategy: Annotated[
         str, typer.Option("--strategy", help=_STRATEGY_HELP)
     ] = "default",
