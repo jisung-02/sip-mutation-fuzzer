@@ -214,6 +214,47 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertEqual(captured["config"].mode, "real-ue-direct")
 
+    def test_run_command_defaults_real_ue_target_and_native_ipsec(self) -> None:
+        captured: dict[str, CampaignConfig] = {}
+
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-default-real-ue-native",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--methods",
+                    "MESSAGE",
+                    "--mt",
+                    "--layer",
+                    "byte",
+                    "--strategy",
+                    "identity",
+                    "--max-cases",
+                    "1",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].target_msisdn, "111111")
+        self.assertEqual(captured["config"].ipsec_mode, "native")
+
     def test_run_command_packet_file_defaults_to_verbatim_contract(self) -> None:
         captured: dict[str, CampaignConfig] = {}
 
@@ -478,25 +519,41 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertIn("target=msisdn:111111", result.output)
         self.assertNotIn("target=msisdn:111111:5060", result.output)
 
-    def test_run_command_real_ue_missing_target_uses_config_validation(self) -> None:
-        result = self.runner.invoke(
-            app,
-            [
-                "campaign",
-                "run",
-                "--mode",
-                "real-ue-direct",
-                "--max-cases",
-                "1",
-            ],
-        )
+    def test_run_command_real_ue_missing_target_uses_default_target(self) -> None:
+        captured: dict[str, CampaignConfig] = {}
 
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("Configuration error:", result.output)
-        self.assertIn(
-            "real-ue-direct mode requires either target_host or target_msisdn",
-            result.output,
-        )
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-default-target",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--mode",
+                    "real-ue-direct",
+                    "--max-cases",
+                    "1",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].target_msisdn, "111111")
+        self.assertEqual(captured["config"].ipsec_mode, "native")
 
     def test_run_command_invalid_host_exits_nonzero(self) -> None:
         result = self.runner.invoke(

@@ -173,6 +173,7 @@ uv run fuzzer mutate request OPTIONS --layer wire | uv run fuzzer send packet --
 - `--target-host` 또는 `--target-msisdn` 중 하나만 사용
 - 시스템 route는 자동 변경하지 않고, **route readiness check만 수행**
 - `--target-msisdn` 경로는 **등록된 UE contact**가 resolver에서 보일 때만 동작
+- `campaign run`에서는 real-UE 기본값으로 `--target-msisdn 111111`과 `--ipsec-mode native`가 자동 적용된다.
 
 직접 UE IMS IP를 알고 있을 때:
 

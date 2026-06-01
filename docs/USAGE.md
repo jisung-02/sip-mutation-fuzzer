@@ -16,12 +16,12 @@ uv sync
 uv run fuzzer campaign run --mode softphone --target-host 127.0.0.1 --max-cases 10
 
 # 실기기 대상 퍼징
-uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
-  --methods INVITE --mt-invite-template a31 --ipsec-mode null --max-cases 5
+uv run fuzzer campaign run \
+  --methods MESSAGE --mt --layer byte --strategy identity --max-cases 5
 
 # 실기기 대상 실제 IPsec 경로 검증
-uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
-  --methods INVITE --mt-invite-template a31 --ipsec-mode native --max-cases 1
+uv run fuzzer campaign run \
+  --methods MESSAGE --mt --layer byte --strategy identity --max-cases 1
 ```
 
 ## 📦 SIP Packet Completeness
@@ -59,7 +59,7 @@ uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
 # 대상 설정
 --target-host <IP>          # 목적지 IP (auto-resolve 가능)
 --target-port <PORT>        # 목적지 포트 (기본: 5060)  
---target-msisdn <MSISDN>    # UE MSISDN. 현재 매핑은 live resolver 기준
+--target-msisdn <MSISDN>    # UE MSISDN (real-ue-direct 기본: 111111)
 --transport UDP|TCP         # 전송 프로토콜 (기본: UDP)
 --mode softphone|real-ue-direct  # 동작 모드 (기본: real-ue-direct)
 
@@ -86,7 +86,7 @@ uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
 # MT Template 설정
 --mt-invite-template <NAME> # MT template (a31, 또는 파일경로)
 --impi <IMPI>               # IMS Private Identity
---ipsec-mode null|bypass|native  # null/bypass 평문 우회, native 실제 IPsec/xfrm
+--ipsec-mode null|bypass|native  # real-ue-direct 기본: native
 
 # 고급 설정
 --preserve-via              # Via 헤더 보존 (template용)  
@@ -108,6 +108,8 @@ uv run fuzzer campaign run --target-msisdn <TARGET_MSISDN> \
 ```
 
 ### IPsec 모드 가이드
+- `real-ue-direct` CLI 기본값은 `--ipsec-mode native`이며, 대상 MSISDN 기본값은 `111111`이다.
+- `--mode softphone`처럼 real-UE가 아닌 경로에서는 IPsec 기본값을 주입하지 않는다.
 - `null`: host spoofing 기반 평문 우회 경로. 외부 pcap/Wireshark에서 평문 SIP가 보일 수 있다.
 - `bypass`: `pcscf` 컨테이너 netns를 통한 평문 우회 경로. 외부 pcap/Wireshark에서 평문 SIP가 보일 수 있다.
 - `native`: 실제 협상된 IMS IPsec/xfrm 세션을 사용한다. 현재 구현 범위는 `real-ue-direct + UDP`이며, MT 경로에서는 `--target-msisdn`이 필요하다.

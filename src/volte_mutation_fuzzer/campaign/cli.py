@@ -219,7 +219,10 @@ def run_command(
         str | None,
         typer.Option(
             "--target-msisdn",
-            help="UE MSISDN for real-ue-direct MT INVITE template mode.",
+            help=(
+                "UE MSISDN for real-ue-direct target resolution. "
+                "Defaults to 111111 in real-ue-direct mode."
+            ),
         ),
     ] = None,
     impi: Annotated[
@@ -254,7 +257,11 @@ def run_command(
         str | None,
         typer.Option(
             "--ipsec-mode",
-            help="IPsec mode: 'null' (host spoofing, requires null encryption), 'bypass' (docker exec, xfrm policy bypass), or 'native' (alias 'ipsec').",
+            help=(
+                "IPsec mode: 'null' (host spoofing, requires null encryption), "
+                "'bypass' (docker exec, xfrm policy bypass), or 'native' "
+                "(alias 'ipsec'). Defaults to native in real-ue-direct mode."
+            ),
         ),
     ] = None,
     preserve_via: Annotated[
@@ -345,7 +352,11 @@ def run_command(
             err=True,
         )
         raise typer.Exit(code=1)
+    target_msisdn_value = target_msisdn
     ipsec_mode_value = cast(IpsecMode | None, ipsec_mode)
+    if mode == "real-ue-direct":
+        target_msisdn_value = target_msisdn_value or "111111"
+        ipsec_mode_value = ipsec_mode_value or "native"
 
     _field_defaults = CampaignConfig.model_fields
     adb_buffers_value: tuple[str, ...] = (
@@ -391,7 +402,7 @@ def run_command(
             ios_run_diagnostics=ios_diagnostics,
             pcap_enabled=pcap,
             pcap_interface=pcap_interface,
-            target_msisdn=target_msisdn,
+            target_msisdn=target_msisdn_value,
             impi=impi,
             mt=mt,
             mt_invite_template=mt_invite_template,

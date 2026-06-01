@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Campaign Command Options</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fa;
+        --panel: #ffffff;
+        --text: #1f2933;
+        --muted: #5f6b7a;
+        --border: #d7dde5;
+        --accent: #0f766e;
+        --accent-soft: #e6f4f1;
+        --warn: #9a5b00;
+        --warn-soft: #fff4d6;
+        --code: #172033;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.58;
+      }
+
+      main {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 40px 0 64px;
+      }
+
+      header {
+        margin-bottom: 28px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2rem, 4vw, 3.2rem);
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin: 34px 0 14px;
+        font-size: 1.35rem;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 24px 0 10px;
+        font-size: 1.05rem;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0 0 14px;
+      }
+
+      .lede {
+        max-width: 820px;
+        color: var(--muted);
+        font-size: 1.05rem;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+        margin: 18px 0;
+      }
+
+      .note {
+        background: var(--accent-soft);
+        border-color: #a7d8d0;
+      }
+
+      .warn {
+        background: var(--warn-soft);
+        border-color: #f0c36d;
+      }
+
+      code {
+        color: var(--code);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+          monospace;
+        font-size: 0.94em;
+      }
+
+      pre {
+        margin: 0;
+        padding: 16px;
+        overflow-x: auto;
+        border-radius: 8px;
+        background: #101827;
+        color: #f8fafc;
+      }
+
+      pre code {
+        color: inherit;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        display: block;
+        overflow-x: auto;
+      }
+
+      thead {
+        background: #eef2f6;
+      }
+
+      th,
+      td {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: top;
+        min-width: 150px;
+      }
+
+      th {
+        font-weight: 700;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      ul,
+      ol {
+        margin: 0 0 14px 22px;
+        padding: 0;
+      }
+
+      li + li {
+        margin-top: 6px;
+      }
+
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="tag">VolteMutationFuzzer</span>
+        <h1>Campaign Command Options</h1>
+        <p class="lede">
+          이 문서는 real-UE 경로에서 짧은 간격으로 SIP <code>MESSAGE</code>를
+          반복 송신하는 campaign 명령의 옵션을 설명한다. 파일 이름과 문서
+          제목은 특정 메서드 이름이 아니라 campaign command options 기준으로
+          정리했다.
+        </p>
+      </header>
+
+      <section class="panel">
+        <h2>기본 명령</h2>
+        <pre><code>uv run fuzzer campaign run --methods MESSAGE --mt --layer byte --strategy identity --max-cases 30 --cooldown 0 --timeout 1 --output message-native-burst</code></pre>
+      </section>
+
+      <section>
+        <h2>확인 기준</h2>
+        <p>
+          옵션 기본값과 불일치 여부는 2026-06-01 기준 아래 소스를 확인해
+          작성했다.
+        </p>
+        <ul>
+          <li><code>uv run fuzzer campaign run --help</code></li>
+          <li><code>src/volte_mutation_fuzzer/campaign/cli.py</code></li>
+          <li><code>src/volte_mutation_fuzzer/campaign/contracts.py</code></li>
+          <li><code>src/volte_mutation_fuzzer/campaign/core.py</code></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>명령 옵션</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>옵션</th>
+              <th>명령 값</th>
+              <th>CLI 기본값</th>
+              <th>실제 효과</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>uv run fuzzer campaign run</code></td>
+              <td>-</td>
+              <td>-</td>
+              <td><code>uv</code> 환경에서 campaign runner를 실행한다.</td>
+            </tr>
+            <tr>
+              <td><code>--mode</code></td>
+              <td>생략</td>
+              <td><code>real-ue-direct</code></td>
+              <td>
+                CLI 기준 기본 실행 경로가 실기기 direct sender다. softphone을
+                대상으로 할 때는 <code>--mode softphone</code>을 명시해야 한다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--target-msisdn</code></td>
+              <td>생략</td>
+              <td><code>111111</code> in <code>real-ue-direct</code></td>
+              <td>
+                대상 UE 식별자다. native IPsec 세션 resolve와 real-UE Contact
+                resolve에 필요하다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--methods</code></td>
+              <td><code>MESSAGE</code></td>
+              <td>전체 SIP method set</td>
+              <td>
+                이 명령에서는 SIP <code>MESSAGE</code> case만 생성한다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--mt</code></td>
+              <td>enabled</td>
+              <td><code>False</code> / <code>--no-mt</code></td>
+              <td>
+                MT 패킷 생성 경로를 사용한다. <code>MESSAGE</code>에서는
+                SMS-over-IMS용 binary <code>application/vnd.3gpp.sms</code>
+                body를 만든다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--ipsec-mode</code></td>
+              <td>생략</td>
+              <td><code>native</code> in <code>real-ue-direct</code></td>
+              <td>
+                실제 협상된 xfrm/IPsec 세션을 사용한다. <code>ipsec</code>
+                alias는 내부에서 <code>native</code>로 정규화된다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--layer</code></td>
+              <td><code>byte</code></td>
+              <td><code>model,wire,byte</code></td>
+              <td>
+                이 명령에서는 binary SMS body를 보존하기 위해 byte layer를
+                명시한다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--strategy</code></td>
+              <td><code>identity</code></td>
+              <td>
+                CLI 입력 기본은 <code>None</code>; legacy profile에서는 최종적으로
+                <code>default,state_breaker</code>
+              </td>
+              <td>
+                변이 없이 baseline payload를 반복 송신한다. fuzzing으로 전환할
+                때는 <code>--strategy default</code>를 사용한다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--max-cases</code></td>
+              <td><code>30</code></td>
+              <td><code>1000</code></td>
+              <td>총 30개 case를 실행한다.</td>
+            </tr>
+            <tr>
+              <td><code>--cooldown</code></td>
+              <td><code>0</code></td>
+              <td><code>0.2</code></td>
+              <td>case 사이 대기 시간을 두지 않는다.</td>
+            </tr>
+            <tr>
+              <td><code>--timeout</code></td>
+              <td><code>1</code></td>
+              <td><code>5.0</code></td>
+              <td>각 case 응답 대기 시간을 1초로 제한한다.</td>
+            </tr>
+            <tr>
+              <td><code>--output</code></td>
+              <td><code>message-native-burst</code></td>
+              <td><code>None</code> / 자동 생성</td>
+              <td>결과 디렉터리 label로 사용한다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>관련 기본값</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>옵션</th>
+              <th>기본값</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>--transport</code></td>
+              <td><code>UDP</code></td>
+              <td>native IPsec MESSAGE burst는 보통 UDP 그대로 둔다.</td>
+            </tr>
+            <tr>
+              <td><code>--target-host</code></td>
+              <td><code>None</code></td>
+              <td><code>--target-msisdn</code>으로 UE IP를 live resolve한다.</td>
+            </tr>
+            <tr>
+              <td><code>--target-port</code></td>
+              <td><code>5060</code></td>
+              <td>
+                real-UE + MSISDN resolve 경로에서는 MT protected port가 live
+                resolve된다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--profile</code></td>
+              <td><code>legacy</code></td>
+              <td>mutation profile 기본값이다.</td>
+            </tr>
+            <tr>
+              <td><code>--mutations-per-case</code></td>
+              <td><code>1</code></td>
+              <td>case 하나당 변이 적용 횟수다.</td>
+            </tr>
+            <tr>
+              <td><code>--seed-start</code></td>
+              <td><code>0</code></td>
+              <td>첫 case seed다.</td>
+            </tr>
+            <tr>
+              <td><code>--from-msisdn</code></td>
+              <td><code>222222</code></td>
+              <td>MT MESSAGE의 SMS originator 기본값으로 쓰인다.</td>
+            </tr>
+            <tr>
+              <td><code>--mt-local-port</code></td>
+              <td><code>15100</code></td>
+              <td>
+                <code>native</code>에서는 authoritative 하지 않고, null/bypass
+                경로의 Via/bind port에 중요하다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--pcap</code></td>
+              <td><code>None</code> 입력 후 real-UE에서 자동 활성</td>
+              <td>real-UE mode에서는 validator가 pcap을 켠다.</td>
+            </tr>
+            <tr>
+              <td><code>--pcap-interface</code></td>
+              <td><code>any</code> 입력 후 real-UE에서 <code>br-volte</code></td>
+              <td>CLI help에는 <code>any</code>가 보이지만 runtime에서 보정된다.</td>
+            </tr>
+            <tr>
+              <td><code>--adb</code></td>
+              <td><code>None</code> 입력 후 real-UE에서 자동 활성</td>
+              <td><code>--ios</code>를 켜고 ADB를 명시하지 않으면 ADB는 꺼진다.</td>
+            </tr>
+            <tr>
+              <td><code>--ios</code></td>
+              <td><code>False</code></td>
+              <td>iPhone syslog/crash report 수집은 명시적으로 켠다.</td>
+            </tr>
+            <tr>
+              <td><code>--oracle-log-grace</code></td>
+              <td>method-aware</td>
+              <td>
+                real-UE 기준 INVITE는 8초, MESSAGE 같은 stateless method는 1초다.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--wait-idle-timeout</code></td>
+              <td><code>10.0</code></td>
+              <td>INVITE call-state idle 대기용이라 MESSAGE burst에는 영향이 작다.</td>
+            </tr>
+            <tr>
+              <td><code>--circuit-breaker</code></td>
+              <td><code>10</code></td>
+              <td>timeout/unknown verdict가 연속 N회 나오면 중단한다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel warn">
+        <h2>확인된 불일치와 주의점</h2>
+        <ol>
+          <li>
+            <strong><code>--mt</code> help 문구가 부정확하다.</strong>
+            CLI help는 "MT-INVITE format for all packets"라고 표시하지만,
+            실제 <code>MESSAGE</code> 경로는 MT-INVITE 템플릿이 아니라
+            binary SMS-over-IMS packet bytes를 생성한다.
+          </li>
+          <li>
+            <strong><code>--target-msisdn</code> help 문구가 좁다.</strong>
+            현재 help는 real-UE target resolution과 기본값 <code>111111</code>을
+            설명하지만, Typer 기본값 칸에는 내부 주입 기본값이 별도로 표시되지는
+            않는다.
+          </li>
+          <li>
+            <strong><code>--pcap-interface</code> 기본값 표시는 runtime과 다르다.</strong>
+            CLI help는 <code>any</code>를 기본값으로 보여주지만,
+            <code>real-ue-direct</code>에서는 config validator가
+            <code>br-volte</code>로 바꾼다.
+          </li>
+          <li>
+            <strong><code>--strategy</code>의 CLI 입력 기본값과 최종 기본값이 다르다.</strong>
+            함수 시그니처 기본값은 <code>None</code>이고, 일반 campaign에서는
+            <code>default</code>로 시작한 뒤 legacy profile이면
+            <code>default,state_breaker</code>로 보정된다. 이 문서의 명령은
+            <code>identity</code>를 명시하므로 이 보정을 타지 않는다.
+          </li>
+          <li>
+            <strong><code>--layer</code>와 실제 MESSAGE 처리 layer가 다를 수 있다.</strong>
+            옵션을 생략하면 case 생성은 <code>model,wire,byte</code>로 잡히지만,
+            MT <code>MESSAGE</code> binary payload는 body 손상을 피하기 위해
+            실행 시 byte mutation path로 강제된다.
+          </li>
+          <li>
+            <strong>CLI 기본 mode와 <code>CampaignConfig</code> 기본 mode가 다르다.</strong>
+            <code>campaign run</code> CLI 기본값은 <code>real-ue-direct</code>지만,
+            Python에서 <code>CampaignConfig()</code>를 직접 만들면 class field
+            기본값은 아직 <code>softphone</code>이다.
+          </li>
+          <li>
+            <strong><code>--ipsec-mode</code> 생략 시 최종값은 상황 의존적이다.</strong>
+            CLI 입력 기본은 <code>None</code>이지만, <code>campaign run</code>의
+            기본 mode가 <code>real-ue-direct</code>이므로 별도 지정이 없으면
+            최종적으로 <code>native</code>가 들어간다. <code>--mode softphone</code>
+            경로에는 이 기본값을 주입하지 않는다.
+          </li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>추천 실행 순서</h2>
+        <ol>
+          <li>
+            먼저 <code>--strategy identity --max-cases 3</code>으로 baseline 응답을
+            확인한다.
+          </li>
+          <li>
+            응답이 안정적이면 <code>--max-cases 30 --cooldown 0</code>으로 단기
+            burst를 돌린다.
+          </li>
+          <li>
+            baseline이 안정적일 때만 <code>--strategy default</code>로 변이
+            fuzzing을 시작한다.
+          </li>
+        </ol>
+      </section>
+
+      <section class="panel note">
+        <h2>결과 확인</h2>
+        <p>
+          실행 후 campaign output 디렉터리의 <code>results.jsonl</code>에서
+          case별 verdict와 observer event를 확인한다.
+        </p>
+        <pre><code>uv run fuzzer campaign report results.jsonl --filter suspicious,crash,stack_failure</code></pre>
+        <p>
+          <code>native</code> 모드는 outer wire에서 평문 SIP가 아니라 ESP로 보일 수
+          있으므로, pcap의 평문 가독성보다 campaign 결과와 observer event를
+          기준으로 본다.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
