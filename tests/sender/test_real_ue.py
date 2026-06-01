@@ -116,6 +116,40 @@ class RealUEDirectHelperTests(unittest.TestCase):
         self.assertEqual(payload, original)
         self.assertEqual(events, ("direct-normalization:bytes-unmodified",))
 
+    def test_prepare_real_ue_direct_payload_rewrites_byte_headers_preserving_binary_body(
+        self,
+    ) -> None:
+        binary_body = b"\x01\x07\x04\x81\x01\x80\xf6\x00"
+        original = (
+            f"MESSAGE {REALISTIC_REQUEST_URI} SIP/2.0\r\n"
+            f"Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:attacker@203.0.113.10:5090>\r\n"
+            f"Content-Length: {len(binary_body)}\r\n\r\n"
+        ).encode("ascii") + binary_body
+
+        payload, events = prepare_real_ue_direct_payload(
+            SendArtifact.from_packet_bytes(original),
+            local_host="127.0.0.1",
+            local_port=43210,
+        )
+        header_part, separator, body = payload.partition(b"\r\n\r\n")
+        rendered_headers = header_part.decode("ascii")
+
+        self.assertEqual(separator, b"\r\n\r\n")
+        self.assertEqual(body, binary_body)
+        self.assertIn(
+            "Via: SIP/2.0/UDP 127.0.0.1:43210;branch=z9hG4bK-1;rport",
+            rendered_headers,
+        )
+        self.assertIn("Contact: <sip:attacker@127.0.0.1:43210>", rendered_headers)
+        self.assertEqual(
+            events,
+            (
+                "direct-normalization:bytes:via",
+                "direct-normalization:bytes:contact",
+            ),
+        )
+
     def test_resolve_protected_ports_prefers_matching_msisdn_from_logs(self) -> None:
         """Multi-UE Security-Client logs are filtered by nearby UE IP context.
 

@@ -36,6 +36,7 @@ from volte_mutation_fuzzer.generator.real_ue_mt_template import (
 from volte_mutation_fuzzer.mutator.contracts import (
     MutationConfig,
     MutatedCase,
+    MutatedWireCase,
     PacketModel,
 )
 from volte_mutation_fuzzer.mutator.profile_catalog import (
@@ -1079,8 +1080,10 @@ class CampaignExecutor:
                 config.target_msisdn, ue_ip=ue_ip,
             )
 
-            # 3. Build wire text
+            # 3. Build baseline payload
             pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
+            wire_text: str | None = None
+            packet_bytes: bytes | None = None
 
             if spec.method == "INVITE":
                 # INVITE uses the proven file-based template
@@ -1099,6 +1102,22 @@ class CampaignExecutor:
                     local_port=config.mt_local_port,
                 )
                 wire_text = render_mt_invite(self._mt_template_text, slots)
+            elif spec.method == "MESSAGE":
+                # SMS-over-IP MESSAGE carries binary RP-DATA, so keep it off the
+                # UTF-8 wire_text path.
+                from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet_bytes
+
+                packet_bytes = build_mt_packet_bytes(
+                    method=spec.method,
+                    impi=impi,
+                    msisdn=config.target_msisdn,
+                    ue_ip=ue_ip,
+                    port_pc=port_pc,
+                    port_ps=port_ps,
+                    seed=spec.seed,
+                    local_port=config.mt_local_port,
+                    from_msisdn=config.from_msisdn,
+                )
             else:
                 # All other methods use the generic 3GPP builder
                 from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
@@ -1120,7 +1139,11 @@ class CampaignExecutor:
             if (
                 self._target.transport.upper() == "UDP"
                 and config.ipsec_mode == "null"
-                and len(wire_text.encode("utf-8")) > _MT_TEMPLATE_FRAG_LIMIT
+                and (
+                    len(packet_bytes)
+                    if packet_bytes is not None
+                    else len((wire_text or "").encode("utf-8"))
+                ) > _MT_TEMPLATE_FRAG_LIMIT
             ):
                 return self._build_case_result(
                     spec,
@@ -1140,27 +1163,42 @@ class CampaignExecutor:
                     case_wall_ms=self._case_wall_ms(case_started_monotonic),
                 )
 
-            # 5. Parse to EditableSIPMessage
-            editable = parse_editable_from_wire(wire_text)
-
-            # 6. Determine effective layer (model → downgrade to wire)
-            effective_layer = spec.layer
-            if effective_layer == "model":
-                effective_layer = "wire"
-
-            # 7. Mutate
-            mutated_wire = self._mutator.mutate_editable(
-                editable,
-                MutationConfig(
-                    seed=spec.seed,
-                    profile=spec.profile,
-                    strategy=spec.strategy,
-                    layer=cast(
-                        Literal["model", "wire", "byte", "auto"], effective_layer
+            if packet_bytes is not None:
+                # 5. Binary MESSAGE can only be mutated through the byte path
+                # without corrupting the RP-DATA body.
+                mutated_wire = self._mutator.mutate_packet_bytes(
+                    packet_bytes,
+                    MutationConfig(
+                        seed=spec.seed,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                        layer="byte",
+                        max_operations=config.mutations_per_case,
                     ),
-                    max_operations=config.mutations_per_case,
-                ),
-            )
+                )
+            else:
+                assert wire_text is not None
+                # 5. Parse to EditableSIPMessage
+                editable = parse_editable_from_wire(wire_text)
+
+                # 6. Determine effective layer (model → downgrade to wire)
+                effective_layer = spec.layer
+                if effective_layer == "model":
+                    effective_layer = "wire"
+
+                # 7. Mutate
+                mutated_wire = self._mutator.mutate_editable(
+                    editable,
+                    MutationConfig(
+                        seed=spec.seed,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                        layer=cast(
+                            Literal["model", "wire", "byte", "auto"], effective_layer
+                        ),
+                        max_operations=config.mutations_per_case,
+                    ),
+                )
 
             # 8. Build SendArtifact
             if mutated_wire.final_layer == "wire" and mutated_wire.wire_text is not None:
@@ -1221,7 +1259,7 @@ class CampaignExecutor:
                 if send_result.sent_bytes is not None
                 else artifact.wire_text or artifact.packet_bytes
             )
-            sent_wire_text = self._artifact_wire_text(artifact) or wire_text
+            sent_wire_text = self._artifact_wire_text(artifact) or wire_text or ""
 
             # 9b. Reliable CANCEL teardown (INVITE only)
             if is_invite:

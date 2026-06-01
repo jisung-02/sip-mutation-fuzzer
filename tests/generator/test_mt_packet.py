@@ -1,4 +1,7 @@
-from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
+from volte_mutation_fuzzer.generator.mt_packet import (
+    build_mt_packet,
+    build_mt_packet_bytes,
+)
 from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 
@@ -6,6 +9,42 @@ def _split_packet(packet: str) -> tuple[str, str]:
     header_part, separator, body_part = packet.partition("\r\n\r\n")
     assert separator == "\r\n\r\n"
     return header_part, body_part
+
+
+def _split_packet_bytes(packet: bytes) -> tuple[str, bytes]:
+    header_part, separator, body_part = packet.partition(b"\r\n\r\n")
+    assert separator == b"\r\n\r\n"
+    return header_part.decode("ascii"), body_part
+
+
+def test_build_mt_packet_bytes_message_uses_binary_sms_rpdata() -> None:
+    packet = build_mt_packet_bytes(
+        method="MESSAGE",
+        impi="001010000123512",
+        msisdn="222222",
+        ue_ip="10.20.20.2",
+        port_pc=63193,
+        port_ps=61008,
+        seed=7,
+        local_port=15100,
+        from_msisdn="10086",
+        env={},
+    )
+
+    headers, body = _split_packet_bytes(packet)
+
+    assert packet.startswith(b"MESSAGE sip:001010000123512@10.20.20.2:63193")
+    assert "From: <sip:smsc.ims.mnc001.mcc001.3gppnetwork.org>" in headers
+    assert "Route: <sip:term@pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>" in headers
+    assert "Request-Disposition: no-fork" in headers
+    assert "Accept-Contact: *;+g.3gpp.smsip" in headers
+    assert not any(line.startswith("Contact:") for line in headers.split("\r\n"))
+    assert "Content-Type: application/vnd.3gpp.sms" in headers
+    assert f"Content-Length: {len(body)}" in headers
+
+    assert body.startswith(b"\x01\x07")
+    assert b"\x04\x05\x81\x01\x80\xf6\x00\x08" in body
+    assert "DL_SMS_TEST".encode("utf-16-be") in body
 
 
 def test_build_mt_packet_message_body_is_seeded_and_deterministic() -> None:

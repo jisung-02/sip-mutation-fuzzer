@@ -296,7 +296,10 @@ def request_command(
 
     # 3GPP MT packet path (all methods)
     if mt and mode == "real-ue-direct":
-        from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
+        from volte_mutation_fuzzer.generator.mt_packet import (
+            build_mt_packet,
+            build_mt_packet_bytes,
+        )
         from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver
 
         if target_msisdn is None:
@@ -322,17 +325,30 @@ def request_command(
         if not resolved_impi:
             raise typer.BadParameter("IMPI could not be resolved. Provide --impi or set VMF_IMPI.")
 
-        wire_text = build_mt_packet(
-            method=method.value,
-            impi=resolved_impi,
-            msisdn=target_msisdn or "",
-            ue_ip=resolved.host,
-            port_pc=port_pc,
-            port_ps=port_ps,
-            seed=0,
-            local_port=mt_local_port,
-        )
-        artifact = SendArtifact.from_wire_text(wire_text)
+        if method == SIPMethod.MESSAGE:
+            packet_bytes = build_mt_packet_bytes(
+                method=method.value,
+                impi=resolved_impi,
+                msisdn=target_msisdn or "",
+                ue_ip=resolved.host,
+                port_pc=port_pc,
+                port_ps=port_ps,
+                seed=0,
+                local_port=mt_local_port,
+            )
+            artifact = SendArtifact.from_packet_bytes(packet_bytes)
+        else:
+            wire_text = build_mt_packet(
+                method=method.value,
+                impi=resolved_impi,
+                msisdn=target_msisdn or "",
+                ue_ip=resolved.host,
+                port_pc=port_pc,
+                port_ps=port_ps,
+                seed=0,
+                local_port=mt_local_port,
+            )
+            artifact = SendArtifact.from_wire_text(wire_text)
         preserve_headers = ipsec_mode not in ("native", "ipsec")
         artifact = artifact.model_copy(
             update={

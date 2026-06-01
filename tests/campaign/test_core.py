@@ -1076,6 +1076,97 @@ class CampaignExecutorTests(unittest.TestCase):
         self.assertEqual(result.summary.total, 4)
         self.assertIsNotNone(result.completed_at)
 
+    def test_mt_message_sends_binary_sms_packet_bytes(self) -> None:
+        cfg = self._make_config(
+            "10.20.20.2",
+            5060,
+            mode="real-ue-direct",
+            target_msisdn="222222",
+            impi="001010000123512",
+            mt=True,
+            methods=("MESSAGE",),
+            layers=("byte",),
+            strategies=("identity",),
+            ipsec_mode="null",
+            max_cases=1,
+        )
+        executor = CampaignExecutor(cfg)
+        captured: dict[str, object] = {}
+
+        def _capture_send_artifact(artifact, target, **kwargs):
+            captured["packet_bytes"] = artifact.packet_bytes
+            captured["wire_text"] = artifact.wire_text
+            captured["preserve_via"] = artifact.preserve_via
+            captured["preserve_contact"] = artifact.preserve_contact
+            return SendReceiveResult(
+                target=target,
+                artifact_kind="bytes",
+                bytes_sent=len(artifact.packet_bytes or b""),
+                outcome="success",
+                responses=(
+                    SocketObservation(
+                        status_code=200,
+                        reason_phrase="OK",
+                        raw_text="SIP/2.0 200 OK\r\n\r\n",
+                        classification="success",
+                    ),
+                ),
+                send_started_at=1.0,
+                send_completed_at=1.1,
+                sent_bytes=artifact.packet_bytes,
+            )
+
+        spec = CaseSpec(
+            case_id=0,
+            seed=7,
+            method="MESSAGE",
+            layer="byte",
+            strategy="identity",
+        )
+
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_resolve_ports_live",
+                return_value=(63193, 61008),
+            ),
+            unittest.mock.patch.object(
+                executor._sender,
+                "send_artifact",
+                side_effect=_capture_send_artifact,
+            ),
+            unittest.mock.patch.object(
+                executor._oracle,
+                "evaluate",
+                return_value=SimpleNamespace(
+                    verdict="normal",
+                    reason="ok",
+                    response_code=200,
+                    elapsed_ms=10.0,
+                    process_alive=True,
+                    details={},
+                ),
+            ),
+            unittest.mock.patch.object(
+                executor,
+                "_persist_case_artifacts",
+                side_effect=lambda _spec, case_result, **kwargs: case_result,
+            ),
+        ):
+            result = executor._execute_case(spec)
+
+        packet_bytes = captured["packet_bytes"]
+        assert isinstance(packet_bytes, bytes)
+        headers, separator, body = packet_bytes.partition(b"\r\n\r\n")
+        self.assertEqual(separator, b"\r\n\r\n")
+        self.assertIsNone(captured["wire_text"])
+        self.assertTrue(captured["preserve_via"])
+        self.assertTrue(captured["preserve_contact"])
+        self.assertIn(b"Content-Type: application/vnd.3gpp.sms", headers)
+        self.assertTrue(body.startswith(b"\x01\x07"))
+        self.assertIn("DL_SMS_TEST".encode("utf-16-be"), body)
+        self.assertEqual(result.verdict, "normal")
+
     def test_run_waits_for_pending_pcap_exports_before_return(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = self._make_config(

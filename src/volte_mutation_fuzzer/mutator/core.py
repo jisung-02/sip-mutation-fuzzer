@@ -418,6 +418,39 @@ class SIPMutator:
             final_layer="byte",
         )
 
+    def mutate_packet_bytes(
+        self,
+        packet_bytes: bytes,
+        config: MutationConfig,
+    ) -> MutatedWireCase:
+        """Mutate a raw SIP byte buffer without UTF-8 round-tripping its body."""
+        effective_config = self._resolve_effective_config(config, "byte")
+        self._validate_supported_strategy(effective_config.strategy, "byte")
+
+        editable_bytes = EditablePacketBytes(data=packet_bytes)
+        if effective_config.strategy == "identity":
+            return MutatedWireCase(
+                packet_bytes=self._finalize_packet_bytes(editable_bytes),
+                records=(),
+                seed=effective_config.seed,
+                profile=effective_config.profile,
+                strategy=effective_config.strategy,
+                final_layer="byte",
+            )
+
+        mutated_bytes, records = self._apply_byte_operations(
+            editable_bytes,
+            effective_config,
+        )
+        return MutatedWireCase(
+            packet_bytes=self._finalize_packet_bytes(mutated_bytes),
+            records=tuple(records),
+            seed=effective_config.seed,
+            profile=effective_config.profile,
+            strategy=effective_config.strategy,
+            final_layer="byte",
+        )
+
     def _apply_wire_operations(
         self,
         message: EditableSIPMessage,

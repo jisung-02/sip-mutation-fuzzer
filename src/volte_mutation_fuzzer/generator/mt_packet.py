@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import random
+from datetime import datetime, timezone
 from typing import Final
 
 from volte_mutation_fuzzer.sip.bodies import (
@@ -81,12 +82,78 @@ _SMS_TEXT_ALPHABET: Final[str] = (
 )
 _SMS_DEFAULT_SMSC: Final[str] = "821000000000"
 _SMS_DEFAULT_SCTS_HEX: Final[str] = "62403151423300"
+_SMS_DEFAULT_TEXT: Final[str] = "DL_SMS_TEST"
+_SMS_DEFAULT_TIMESTAMP: Final[datetime] = datetime(2026, 4, 13, 15, 24, 33, tzinfo=timezone.utc)
 
 
 def _encode_tbcd(digits: str) -> str:
     """Encode decimal digits as TBCD (nibble-swapped, F-padded to even length)."""
     padded = digits + ("F" if len(digits) % 2 else "")
     return "".join(padded[i + 1] + padded[i] for i in range(0, len(padded), 2))
+
+
+def _swap_nibbles(value: str) -> bytes:
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) % 2 == 1:
+        digits += "F"
+    out = bytearray()
+    for idx in range(0, len(digits), 2):
+        out.append(int(digits[idx + 1] + digits[idx], 16))
+    return bytes(out)
+
+
+def _encode_sms_address_field(number: str) -> bytes:
+    raw = str(number).strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    toa = 0x91 if raw.startswith("+") else 0x81
+    return bytes([len(digits), toa]) + _swap_nibbles(digits)
+
+
+def _encode_sms_timestamp(now: datetime) -> bytes:
+    values = [
+        now.year % 100,
+        now.month,
+        now.day,
+        now.hour,
+        now.minute,
+        now.second,
+        0,
+    ]
+    encoded = bytearray()
+    for value in values:
+        encoded.extend(_swap_nibbles(f"{value:02d}"))
+    return bytes(encoded)
+
+
+def _build_binary_sms_body(
+    *,
+    originator: str,
+    text: str,
+    rp_ref: int,
+    timestamp: datetime = _SMS_DEFAULT_TIMESTAMP,
+) -> bytes:
+    """Build binary RP-DATA + SMS-DELIVER TPDU for SMS over IMS MESSAGE."""
+    oa = _encode_sms_address_field(originator)
+    user_data = text.encode("utf-16-be", "replace")
+
+    tpdu = bytearray()
+    tpdu.append(0x04)
+    tpdu.extend(oa)
+    tpdu.append(0x00)
+    tpdu.append(0x08)
+    tpdu.extend(_encode_sms_timestamp(timestamp))
+    tpdu.append(len(user_data))
+    tpdu.extend(user_data)
+
+    rp = bytearray()
+    rp.append(0x01)
+    rp.append(rp_ref & 0xFF)
+    rp.extend([len(oa) - 1, oa[1]])
+    rp.extend(oa[2:])
+    rp.append(0x00)
+    rp.append(len(tpdu))
+    rp.extend(tpdu)
+    return bytes(rp)
 
 
 def _build_default_sms_body(seed: int, from_msisdn: str) -> str:
@@ -430,3 +497,75 @@ def build_mt_packet(
     if body_text:
         return header_part + _CRLF + _CRLF + body_text
     return header_part + _CRLF + _CRLF
+
+
+def build_mt_packet_bytes(
+    *,
+    method: str,
+    impi: str,
+    msisdn: str,
+    ue_ip: str,
+    port_pc: int,
+    port_ps: int,
+    seed: int = 0,
+    local_port: int = 15100,
+    body: str | None = None,
+    from_msisdn: str | None = None,
+    event_package: str | None = None,
+    info_package: str | None = None,
+    env: dict[str, str] | None = None,
+) -> bytes:
+    """Build an MT SIP packet as bytes, preserving binary SMS payloads."""
+    if method.upper() != "MESSAGE":
+        return build_mt_packet(
+            method=method,
+            impi=impi,
+            msisdn=msisdn,
+            ue_ip=ue_ip,
+            port_pc=port_pc,
+            port_ps=port_ps,
+            seed=seed,
+            local_port=local_port,
+            body=body,
+            from_msisdn=from_msisdn,
+            event_package=event_package,
+            info_package=info_package,
+            env=env,
+        ).encode("utf-8")
+
+    source = env if env is not None else dict(os.environ)
+    ims_domain = source.get("VMF_IMS_DOMAIN", "ims.mnc001.mcc001.3gppnetwork.org")
+    pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21")
+    effective_from = from_msisdn or source.get("VMF_FROM_MSISDN", "222222")
+    sms_text = body if body is not None else source.get("VMF_SMS_TEXT", _SMS_DEFAULT_TEXT)
+    x_msg_id = source.get("VMF_X_MSG_ID", "sms_client")
+
+    rng = random.Random(seed)
+    branch = f"z9hG4bK{rng.getrandbits(128):032x}"
+    tag = f"{rng.getrandbits(160):040x}"
+    call_id = f"{rng.getrandbits(64):016x}-{rng.randint(10, 99)}@{pcscf_ip}"
+    sms_body = _build_binary_sms_body(
+        originator=effective_from,
+        text=sms_text,
+        rp_ref=seed & 0xFF,
+    )
+
+    headers = [
+        f"MESSAGE sip:{impi}@{ue_ip}:{port_pc} SIP/2.0",
+        f"Via: SIP/2.0/UDP {pcscf_ip}:{local_port};branch={branch}",
+        f"To: <sip:{impi}@{ims_domain}>",
+        f"From: <sip:smsc.{ims_domain}>;tag={tag}",
+        "CSeq: 10 MESSAGE",
+        f"Call-ID: {call_id}",
+        "Max-Forwards: 70",
+        f"Content-Length: {len(sms_body)}",
+        "User-Agent: sms_client",
+        f"Route: <sip:term@pcscf.{ims_domain};lr>",
+        "Content-Type: application/vnd.3gpp.sms",
+        "Request-Disposition: no-fork",
+        "Accept-Contact: *;+g.3gpp.smsip",
+        f"X-MSG-ID: {x_msg_id}",
+        "",
+        "",
+    ]
+    return _CRLF.join(headers).encode("ascii") + sms_body

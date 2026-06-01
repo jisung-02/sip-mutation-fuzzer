@@ -1115,6 +1115,84 @@ def normalize_direct_wire_text(
     return rendered.encode("utf-8"), tuple(events)
 
 
+def normalize_direct_packet_bytes(
+    packet_bytes: bytes,
+    *,
+    local_host: str,
+    local_port: int,
+    rewrite_via: bool = True,
+    rewrite_contact: bool = True,
+    rewrite_request_uri: str | None = None,
+) -> tuple[bytes, tuple[str, ...]]:
+    if not packet_bytes:
+        return b"", ("direct-normalization:bytes-unmodified",)
+
+    separator = f"{_CRLF}{_CRLF}".encode("ascii")
+    header_bytes, found_separator, body = packet_bytes.partition(separator)
+    if not found_separator:
+        return packet_bytes, ("direct-normalization:bytes-unmodified",)
+
+    try:
+        header_text = header_bytes.decode("ascii")
+    except UnicodeDecodeError:
+        return packet_bytes, ("direct-normalization:bytes-unmodified",)
+
+    lines = header_text.split(_CRLF)
+    if not lines:
+        return packet_bytes, ("direct-normalization:bytes-unmodified",)
+
+    first_line = lines[0]
+    request_uri_rewritten = False
+    if rewrite_request_uri is not None:
+        _rl_match = re.match(r'^(\S+)\s+\S+\s+(SIP/\S+)\s*$', first_line)
+        if _rl_match:
+            first_line = f"{_rl_match.group(1)} {rewrite_request_uri} {_rl_match.group(2)}"
+            request_uri_rewritten = first_line != lines[0]
+
+    updated_lines = [first_line]
+    via_rewritten = False
+    contact_rewritten = False
+    for line in lines[1:]:
+        if not via_rewritten and line.casefold().startswith("via:"):
+            if rewrite_via:
+                rewritten_line, changed = _rewrite_via_header_line(
+                    line,
+                    local_host=local_host,
+                    local_port=local_port,
+                )
+                updated_lines.append(rewritten_line)
+                via_rewritten = changed
+            else:
+                updated_lines.append(line)
+            continue
+        if not contact_rewritten and line.casefold().startswith("contact:"):
+            if rewrite_contact:
+                rewritten_line, changed = _rewrite_contact_header_line(
+                    line,
+                    local_host=local_host,
+                    local_port=local_port,
+                )
+                updated_lines.append(rewritten_line)
+                contact_rewritten = changed
+            else:
+                updated_lines.append(line)
+            continue
+        updated_lines.append(line)
+
+    events: list[str] = []
+    if request_uri_rewritten:
+        events.append("direct-normalization:bytes:request-uri")
+    if via_rewritten:
+        events.append("direct-normalization:bytes:via")
+    if contact_rewritten:
+        events.append("direct-normalization:bytes:contact")
+    if not events:
+        return packet_bytes, ("direct-normalization:bytes-unmodified",)
+
+    rendered_headers = _CRLF.join(updated_lines).encode("ascii")
+    return rendered_headers + found_separator + body, tuple(events)
+
+
 def prepare_real_ue_direct_payload(
     artifact: SendArtifact,
     *,
@@ -1140,6 +1218,15 @@ def prepare_real_ue_direct_payload(
             rewrite_request_uri=rewrite_request_uri,
         )
     assert artifact.packet_bytes is not None
+    if rewrite_via or rewrite_contact or rewrite_request_uri is not None:
+        return normalize_direct_packet_bytes(
+            artifact.packet_bytes,
+            local_host=local_host,
+            local_port=local_port,
+            rewrite_via=rewrite_via,
+            rewrite_contact=rewrite_contact,
+            rewrite_request_uri=rewrite_request_uri,
+        )
     return artifact.packet_bytes, ("direct-normalization:bytes-unmodified",)
 
 
