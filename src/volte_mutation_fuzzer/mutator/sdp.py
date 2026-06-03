@@ -76,23 +76,6 @@ _BOUNDARY_BANDWIDTHS: Final[tuple[int, ...]] = (
     9999999999,
 )
 
-VARIANTS: Final[tuple[str, ...]] = (
-    "media_port",
-    "media_transport",
-    "connection_addr",
-    "rtpmap_codec",
-    "bandwidth",
-)
-
-STRUCT_VARIANTS: Final[tuple[str, ...]] = (
-    "extra_media",
-    "extra_attribute",
-    "missing_session_name",
-    "missing_origin",
-    "version_corrupt",
-    "direction_conflict",
-)
-
 BYTE_EDIT_VARIANTS: Final[tuple[str, ...]] = (
     "trim_last",
     "trim_first",
@@ -184,9 +167,7 @@ def _line_indices(lines: list[SDPLine], type_letter: str) -> list[int]:
 def _attr_indices_with_prefix(lines: list[SDPLine], prefix: str) -> list[int]:
     """Return indices of ``a=<prefix>:...`` lines."""
     return [
-        i
-        for i, (k, v) in enumerate(lines)
-        if k == "a" and v.startswith(f"{prefix}:")
+        i for i, (k, v) in enumerate(lines) if k == "a" and v.startswith(f"{prefix}:")
     ]
 
 
@@ -261,9 +242,7 @@ def apply_sdp_boundary(
     raise ValueError(f"unknown sdp boundary variant: {variant!r}")
 
 
-def _mutate_media_port(
-    lines: list[SDPLine], rng: random.Random
-) -> SDPMutationResult:
+def _mutate_media_port(lines: list[SDPLine], rng: random.Random) -> SDPMutationResult:
     indices = _line_indices(lines, "m")
     if not indices:
         raise ValueError("sdp body has no m= line for media_port variant")
@@ -333,9 +312,7 @@ def _mutate_connection_addr(
     )
 
 
-def _mutate_rtpmap_codec(
-    lines: list[SDPLine], rng: random.Random
-) -> SDPMutationResult:
+def _mutate_rtpmap_codec(lines: list[SDPLine], rng: random.Random) -> SDPMutationResult:
     indices = _attr_indices_with_prefix(lines, "rtpmap")
     if not indices:
         raise ValueError("sdp body has no a=rtpmap line for rtpmap_codec variant")
@@ -369,9 +346,7 @@ def _mutate_rtpmap_codec(
     )
 
 
-def _mutate_bandwidth(
-    lines: list[SDPLine], rng: random.Random
-) -> SDPMutationResult:
+def _mutate_bandwidth(lines: list[SDPLine], rng: random.Random) -> SDPMutationResult:
     indices = _line_indices(lines, "b")
     if not indices:
         raise ValueError("sdp body has no b= line for bandwidth variant")
@@ -428,9 +403,7 @@ def apply_sdp_struct(
         # direction next to an existing one, or add two direction attrs.
         viable.append("direction_conflict")
         if not viable:
-            raise ValueError(
-                "sdp body has no fuzzable structure for sdp_struct_only"
-            )
+            raise ValueError("sdp body has no fuzzable structure for sdp_struct_only")
         variant = viable[rng.randrange(len(viable))]
 
     if variant == "extra_media":
@@ -448,9 +421,7 @@ def apply_sdp_struct(
     raise ValueError(f"unknown sdp struct variant: {variant!r}")
 
 
-def _struct_extra_media(
-    lines: list[SDPLine], rng: random.Random
-) -> SDPMutationResult:
+def _struct_extra_media(lines: list[SDPLine], rng: random.Random) -> SDPMutationResult:
     """Insert a second ``m=audio <port> RTP/AVP 0`` line after the c= line
     (or after the existing m= line if no c= follows it), exercising
     SDP parsers that assume only one media stream.
@@ -462,9 +433,7 @@ def _struct_extra_media(
     base_value = lines[base_idx][1]
     base_parts = base_value.split()
     if len(base_parts) < 2:
-        raise ValueError(
-            f"malformed m-line at index {base_idx}: {base_value!r}"
-        )
+        raise ValueError(f"malformed m-line at index {base_idx}: {base_value!r}")
     try:
         base_port = int(base_parts[1])
     except ValueError:
@@ -530,9 +499,7 @@ def _struct_missing_session_name(
     """Remove the (mandatory) ``s=`` line."""
     indices = _line_indices(lines, "s")
     if not indices:
-        raise ValueError(
-            "sdp body has no s= line for missing_session_name variant"
-        )
+        raise ValueError("sdp body has no s= line for missing_session_name variant")
     idx = indices[rng.randrange(len(indices))]
     before_value = lines[idx][1]
     del lines[idx]
@@ -551,9 +518,7 @@ def _struct_missing_origin(
     """Remove the (mandatory) ``o=`` line."""
     indices = _line_indices(lines, "o")
     if not indices:
-        raise ValueError(
-            "sdp body has no o= line for missing_origin variant"
-        )
+        raise ValueError("sdp body has no o= line for missing_origin variant")
     idx = indices[rng.randrange(len(indices))]
     before_value = lines[idx][1]
     del lines[idx]
@@ -572,14 +537,10 @@ def _struct_version_corrupt(
     """Replace ``v=0`` with ``v=99`` / ``v=`` / ``v=A``."""
     indices = _line_indices(lines, "v")
     if not indices:
-        raise ValueError(
-            "sdp body has no v= line for version_corrupt variant"
-        )
+        raise ValueError("sdp body has no v= line for version_corrupt variant")
     idx = indices[rng.randrange(len(indices))]
     before_value = lines[idx][1]
-    new_value = _VERSION_CORRUPT_VALUES[
-        rng.randrange(len(_VERSION_CORRUPT_VALUES))
-    ]
+    new_value = _VERSION_CORRUPT_VALUES[rng.randrange(len(_VERSION_CORRUPT_VALUES))]
     lines[idx] = ("v", new_value)
     return SDPMutationResult(
         path=f"body:sdp:struct.version_corrupt[{idx}]",
@@ -698,9 +659,7 @@ def apply_sdp_byte_edit(
         new_body = body[: pos + 1] + body[pos] + body[pos + 1 :]
     elif variant == "swap_adjacent":
         pos = rng.randrange(length - 1)
-        new_body = (
-            body[:pos] + body[pos + 1] + body[pos] + body[pos + 2 :]
-        )
+        new_body = body[:pos] + body[pos + 1] + body[pos] + body[pos + 2 :]
     elif variant == "insert_byte":
         pos = rng.randrange(length + 1)
         new_body = body[:pos] + chr(rng.randrange(33, 127)) + body[pos:]
@@ -712,9 +671,7 @@ def apply_sdp_byte_edit(
     # match the boundary/struct path conventions so report rendering can
     # treat them uniformly.
     before_byte = body[pos] if pos < length else ""
-    after_byte = (
-        new_body[pos] if pos < len(new_body) else ""
-    )
+    after_byte = new_body[pos] if pos < len(new_body) else ""
     result = SDPMutationResult(
         path=f"body:sdp:byte_edit.{variant}[{pos}]",
         operator="sdp_byte_edit",

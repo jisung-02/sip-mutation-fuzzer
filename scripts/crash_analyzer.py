@@ -19,8 +19,6 @@ from pydantic import ValidationError
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.contracts import CaseResult
 
-CrashAnalyzer = CampaignCrashAnalyzer
-
 
 def _iter_new_case_results(
     jsonl_path: Path,
