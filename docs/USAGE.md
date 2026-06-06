@@ -157,6 +157,38 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
 
 Pixel 9 / Galaxy A17 슬롯(`111111`)에서 Pixel이 실제 대상일 때는 먼저 `--strategy identity --max-cases 1`로 baseline 180/200 응답을 확인한 뒤 `pixel_ims`를 적용한다. 과거 Pixel 캠페인에서는 native IPsec observer의 CRLF keepalive 오인과 ADB `GRIL-AudioMetricExt` / `ConnectivityMonitorStateMachine` 로그 노이즈가 timeout 또는 `stack_failure`를 흐린 사례가 있었으므로, `stack_failure`는 `observer_events`, SIP 응답, case별 ADB anomaly를 같이 보고 해석한다.
 
+장기 실행은 결과 디렉터리와 별도 로그 파일을 같이 남긴다. Android 단말이 여러 대 연결될 수 있으면 `--adb-serial`을 명시한다.
+
+```bash
+mkdir -p results
+RUN_ID="pixel-ims-longrun-$(date +%Y%m%d-%H%M%S)"
+nohup uv run fuzzer campaign run \
+  --mode real-ue-direct \
+  --target-msisdn 111111 \
+  --methods INVITE \
+  --pixel \
+  --profile pixel_ims \
+  --layer wire,byte \
+  --strategy default \
+  --mt-invite-template a31 \
+  --ipsec-mode native \
+  --mutations-per-case 2 \
+  --max-cases 1000 \
+  --timeout 5 \
+  --cooldown 0.5 \
+  --oracle-log-grace 8 \
+  --wait-idle-timeout 10 \
+  --pcap \
+  --pcap-interface br-volte \
+  --adb \
+  --adb-serial <ANDROID_SERIAL> \
+  --output "$RUN_ID" \
+  > "results/${RUN_ID}.log" 2>&1 &
+echo $! > "results/${RUN_ID}.pid"
+```
+
+오버헤드보다 케이스 수가 더 중요하면 같은 명령에서 `--no-pcap --no-adb --oracle-log-grace 0`을 붙인 별도 run으로 분리한다. 증거 수집형 run과 고속 run을 섞지 않는다.
+
 ## 🎯 주요 시나리오
 
 ### 1. 빠른 기능 테스트

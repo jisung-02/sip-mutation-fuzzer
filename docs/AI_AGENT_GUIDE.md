@@ -269,6 +269,38 @@ Pixel 캠페인 판독 시 주의:
 - 과거 Pixel SDP/byte_edit 캠페인에서는 `GRIL-AudioMetricExt` 와 `ConnectivityMonitorStateMachine` 로그가 call setup 때 반복되어 ADB `stack_failure` false positive 를 만들었다. 현재 detector 는 이 노이즈를 억제하지만, `stack_failure`는 case별 ADB anomaly와 SIP/observer evidence를 같이 읽는다.
 - native IPsec observer 는 CRLF keepalive/empty datagram 을 SIP 응답으로 세지 않는다. 잔여 timeout 은 `observer_events`에 keepalive filter, tuple, correlation 이벤트가 있는지 먼저 본다.
 
+장기 실행 예시는 결과 디렉터리 이름과 stdout/stderr 로그를 분리해서 남긴다. Android 단말이 여러 대 연결될 수 있으면 `--adb-serial`을 반드시 채운다.
+
+```bash
+mkdir -p results
+RUN_ID="pixel-ims-longrun-$(date +%Y%m%d-%H%M%S)"
+nohup uv run fuzzer campaign run \
+  --mode real-ue-direct \
+  --target-msisdn 111111 \
+  --methods INVITE \
+  --pixel \
+  --profile pixel_ims \
+  --layer wire,byte \
+  --strategy default \
+  --mt-invite-template a31 \
+  --ipsec-mode native \
+  --mutations-per-case 2 \
+  --max-cases 1000 \
+  --timeout 5 \
+  --cooldown 0.5 \
+  --oracle-log-grace 8 \
+  --wait-idle-timeout 10 \
+  --pcap \
+  --pcap-interface br-volte \
+  --adb \
+  --adb-serial <ANDROID_SERIAL> \
+  --output "$RUN_ID" \
+  > "results/${RUN_ID}.log" 2>&1 &
+echo $! > "results/${RUN_ID}.pid"
+```
+
+고속 run 은 증거 수집형 run 과 분리하고, 같은 명령에 `--no-pcap --no-adb --oracle-log-grace 0`을 붙여 오버헤드를 줄인다.
+
 ### multi-round mutation (--mutations-per-case)
 
 ```bash
