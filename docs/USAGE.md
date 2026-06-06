@@ -65,12 +65,14 @@ uv run fuzzer campaign run \
 
 # 퍼징 설정
 --methods <LIST>            # SIP 메서드 (OPTIONS,INVITE,MESSAGE,...)
---profile <LIST>            # 변이 프로필 목록 (legacy,delivery_preserving,ims_specific,parser_breaker; 쉼표 구분)
+--profile <LIST>            # 변이 프로필 목록 (legacy,delivery_preserving,ims_specific,parser_breaker,pixel_ims; 쉼표 구분)
 --layer model,wire,byte     # 변이 레이어 선택
 --strategy <LIST>           # 변이 전략 (identity,default,state_breaker,safe,
                             # header_targeted,header_whitespace_noise,
                             # final_crlf_loss,duplicate_content_length_conflict,
-                            # tail_chop_1,tail_garbage,alias_port_desync)
+                            # tail_chop_1,tail_garbage,alias_port_desync,
+                            # pixel_sdp_media_negotiation,pixel_session_timer_skew,
+                            # pixel_p_header_pressure)
 --max-cases <N>             # 최대 케이스 수 (기본: 1000)
 --timeout <SEC>             # 소켓 timeout (기본: 5.0)
 --seed-start <N>            # 시작 시드값 (재현용)
@@ -128,6 +130,7 @@ uv run fuzzer campaign run \
 | `delivery_preserving` | 전달 가능성을 최대한 유지하면서 약한 변이를 적용한다. 라우팅/전달 경로를 크게 흔들지 않는 분석용이다. |
 | `ims_specific` | IMS/3GPP 헤더, alias, routing 정보를 의식한 프로필이다. 실제 UE와 IMS 헤더 구조를 함께 볼 때 유용하다. |
 | `parser_breaker` | CRLF, length, tail truncation 같은 파서 경계 조건을 노리는 프로필이다. |
+| `pixel_ims` | Pixel-class UE 대상에서 `--pixel` 전달 경로와 함께 쓰는 프로필이다. SDP media negotiation, session timer, IMS P-header, Contact alias, Pixel-relevant byte target 을 집중 변조한다. |
 
 예시는 아래와 같다.
 
@@ -142,6 +145,11 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn <TARGET_MSISDN>
 uv run fuzzer campaign run --target-host 127.0.0.1 \
   --methods INVITE --profile parser_breaker --layer wire,byte \
   --strategy default --max-cases 20
+
+# Pixel IMS 집중: `--pixel` sender rewrite 와 함께 사용
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
+  --methods INVITE --pixel --profile pixel_ims --layer wire,byte \
+  --strategy default --ipsec-mode native --max-cases 50
 ```
 
 ## 🎯 주요 시나리오

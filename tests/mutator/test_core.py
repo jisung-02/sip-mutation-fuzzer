@@ -19,18 +19,15 @@ from volte_mutation_fuzzer.mutator.editable import (
     EditableStartLine,
     parse_editable_from_wire,
 )
+from volte_mutation_fuzzer.mutator.profile_catalog import PIXEL_IMS_HEADER_NAMES
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.requests import SIPRequestDefinition
 from volte_mutation_fuzzer.sip.responses import SIPResponseDefinition
 
 REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
-REALISTIC_MUTATED_CALL_ID = (
-    "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
-)
-REALISTIC_CONTEXT_CALL_ID = (
-    "d93f7c440f8b11ef@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
-)
+REALISTIC_MUTATED_CALL_ID = "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_CONTEXT_CALL_ID = "d93f7c440f8b11ef@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
 REALISTIC_LOCAL_TAG = "9fxced76sl"
 REALISTIC_CONTEXT_LOCAL_TAG = "a73kszlfl"
 REALISTIC_REMOTE_TAG = "873294202"
@@ -80,6 +77,43 @@ class SIPMutatorTestCase(unittest.TestCase):
         )
         return packet.model_copy(update={"contact": [aliased_contact]})
 
+    def build_pixel_invite_message(self) -> EditableSIPMessage:
+        body = (
+            "v=0\r\n"
+            "o=rue 3251 3251 IN IP4 172.22.0.16\r\n"
+            "s=-\r\n"
+            "c=IN IP4 172.22.0.16\r\n"
+            "t=0 0\r\n"
+            "m=audio 49196 RTP/AVP 107 106 105 104 101 102\r\n"
+            "b=AS:41\r\n"
+            "a=rtpmap:107 AMR/8000\r\n"
+            "a=fmtp:107 mode-set=0,1,2,3,4,5,6,7;mode-change-capability=2\r\n"
+            "a=rtpmap:101 telephone-event/8000\r\n"
+            "a=fmtp:101 0-15\r\n"
+            "a=rtcp:49197\r\n"
+            "a=ptime:20\r\n"
+            "a=maxptime:240\r\n"
+            "a=sendrecv\r\n"
+        )
+        wire = (
+            "INVITE sip:001010000123511@10.20.20.8:61008 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 172.22.0.21:15100;branch=z9hG4bK-pixel\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            "P-Asserted-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=0010100000000001\r\n"
+            "P-Charging-Vector: icid-value=pixel-fuzz-1;orig-ioi=ims.mnc001.mcc001.3gppnetwork.org\r\n"
+            "Session-Expires: 1800;refresher=uac\r\n"
+            "Min-SE: 90\r\n"
+            "Supported: timer,100rel\r\n"
+            "Require: timer\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(body.encode('utf-8'))}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+        return parse_editable_from_wire(wire)
+
     def build_context(self) -> DialogContext:
         return DialogContext(
             call_id=REALISTIC_CONTEXT_CALL_ID,
@@ -112,6 +146,16 @@ class SIPMutatorTestCase(unittest.TestCase):
         self.assertIsNotNone(match, msg=f"expected alias in value: {value}")
         assert match is not None
         return match.groupdict()
+
+    def assert_content_length_matches_body(self, wire_text: str | None) -> None:
+        self.assertIsNotNone(wire_text)
+        assert wire_text is not None
+        header_text, _, body = wire_text.partition("\r\n\r\n")
+        self.assertTrue(body, msg="expected SIP body")
+        match = re.search(r"(?im)^Content-Length:\s*(\d+)$", header_text)
+        self.assertIsNotNone(match, msg=wire_text)
+        assert match is not None
+        self.assertEqual(int(match.group(1)), len(body.encode("utf-8")))
 
     def assert_record_matches_packet_values(
         self, original_packet, mutated_packet, record
@@ -617,13 +661,186 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         self.assertEqual(len(case.records), 1)
         self.assertIsNotNone(case.packet_bytes)
 
-        generic_ranges = mutator._collect_header_byte_ranges(message.render().encode("utf-8"))
+        generic_ranges = mutator._collect_header_byte_ranges(
+            message.render().encode("utf-8")
+        )
         record = case.records[0]
         self.assertRegex(record.target.path, r"^byte\[\d+\]$")
         byte_index = int(record.target.path[5:-1])
         self.assertTrue(
-            any(start <= byte_index < end for _header_name, start, end in generic_ranges)
+            any(
+                start <= byte_index < end for _header_name, start, end in generic_ranges
+            )
         )
+
+    def test_pixel_ims_profile_advertises_pixel_strategies(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            profile_supports_strategy,
+            resolve_effective_strategy,
+        )
+
+        for strategy in (
+            "pixel_sdp_media_negotiation",
+            "pixel_session_timer_skew",
+            "pixel_p_header_pressure",
+        ):
+            with self.subTest(strategy=strategy):
+                self.assertTrue(
+                    profile_supports_strategy("pixel_ims", "wire", strategy)
+                )
+        self.assertTrue(
+            profile_supports_strategy("pixel_ims", "byte", "header_targeted")
+        )
+        self.assertFalse(profile_supports_strategy("pixel_ims", "model", "default"))
+        self.assertIn("p-access-network-info", PIXEL_IMS_HEADER_NAMES)
+
+        first = resolve_effective_strategy("pixel_ims", "wire", "default", 7)
+        second = resolve_effective_strategy("pixel_ims", "wire", "default", 7)
+        self.assertEqual(first, second)
+        self.assertIn(
+            first,
+            {
+                "pixel_sdp_media_negotiation",
+                "pixel_session_timer_skew",
+                "pixel_p_header_pressure",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+                "alias_port_desync",
+                "safe",
+                "header_whitespace_noise",
+            },
+        )
+
+    def test_pixel_sdp_media_negotiation_mutates_sdp_and_updates_content_length(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_sdp_media_negotiation",
+                seed=11,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_sdp_media_negotiation")
+        self.assertEqual(case.records[0].operator, "pixel_sdp_media_negotiation")
+        self.assertRegex(case.records[0].target.path, r"^body:sdp:")
+        self.assert_content_length_matches_body(case.wire_text)
+
+    def test_pixel_session_timer_skew_mutates_timer_headers(self) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_session_timer_skew",
+                seed=12,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_session_timer_skew")
+        self.assertEqual(case.records[0].operator, "pixel_session_timer_skew")
+        self.assertRegex(case.records[0].target.path, r"^header")
+
+    def test_pixel_p_header_pressure_mutates_p_headers(self) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_p_header_pressure",
+                seed=13,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_p_header_pressure")
+        self.assertEqual(case.records[0].operator, "pixel_p_header_pressure")
+        before_name, _before_value = case.records[0].before
+        self.assertIn(before_name.casefold(), PIXEL_IMS_HEADER_NAMES)
+
+    def test_pixel_ims_default_wire_skips_missing_prerequisites(self) -> None:
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = SIPMutator().mutate_editable(
+            message,
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="default",
+                seed=1,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertIn(case.strategy, {"safe", "header_whitespace_noise"})
+        self.assertEqual(case.final_layer, "wire")
+
+    def test_pixel_ims_default_wire_skips_sdp_without_media_targets(self) -> None:
+        body = "v=0\r\ns=-\r\n"
+        message = parse_editable_from_wire(
+            "INVITE sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(body.encode('utf-8'))}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+
+        case = SIPMutator().mutate_editable(
+            message,
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="default",
+                seed=2,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertNotEqual(case.strategy, "pixel_sdp_media_negotiation")
+        self.assertEqual(case.final_layer, "wire")
+
+    def test_pixel_ims_byte_targeting_prefers_pixel_headers(self) -> None:
+        mutator = SIPMutator()
+        message = self.build_pixel_invite_message()
+
+        ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "pixel_ims",
+        )
+
+        self.assertTrue(ranges)
+        self.assertTrue(
+            all(
+                name.casefold() in PIXEL_IMS_HEADER_NAMES
+                for name, _start, _end in ranges
+            )
+        )
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                profile="pixel_ims",
+                layer="byte",
+                strategy="default",
+                seed=14,
+            ),
+        )
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "header_targeted")
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(any(start <= byte_index < end for _name, start, end in ranges))
         self.assertNotEqual(case.packet_bytes, message.render().encode("utf-8"))
 
     def test_same_seed_produces_same_wire_mutation(self) -> None:
@@ -1023,9 +1240,7 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         )
 
         self.assertTrue(wire_targets)
-        self.assertTrue(
-            any(target.path == "header:Contact" for target in wire_targets)
-        )
+        self.assertTrue(any(target.path == "header:Contact" for target in wire_targets))
         self.assertTrue(
             any(target.path == "header:Record-Route" for target in wire_targets)
         )
@@ -1289,9 +1504,7 @@ class SIPMutatorMultiMutationTests(SIPMutatorTestCase):
             profile="delivery_preserving",
             strategy="null_byte_only",
         )
-        config_explicit_one = config_default.model_copy(
-            update={"max_operations": 1}
-        )
+        config_explicit_one = config_default.model_copy(update={"max_operations": 1})
 
         case_default = mutator.mutate(packet, config_default)
         case_explicit = mutator.mutate(packet, config_explicit_one)
@@ -1315,9 +1528,7 @@ class SIPMutatorEdgeBoundaryTests(SIPMutatorTestCase):
         "space_before_colon",
     }
 
-    def _collect_variants(
-        self, n_seeds: int = 400
-    ) -> dict[str, tuple[str, str]]:
+    def _collect_variants(self, n_seeds: int = 400) -> dict[str, tuple[str, str]]:
         mutator = SIPMutator()
         packet = self.build_request()
         seen: dict[str, tuple[str, str]] = {}

@@ -99,7 +99,9 @@ class SIPMutatorCLITests(unittest.TestCase):
             payload["original_packet"]["max_forwards"],
         )
 
-    def test_request_command_auto_selects_wire_layer_for_parser_breaker_default(self) -> None:
+    def test_request_command_auto_selects_wire_layer_for_parser_breaker_default(
+        self,
+    ) -> None:
         result = self.runner.invoke(
             self.app,
             [
@@ -121,7 +123,9 @@ class SIPMutatorCLITests(unittest.TestCase):
             {"final_crlf_loss", "duplicate_content_length_conflict", "edge_boundary"},
         )
 
-    def test_request_command_auto_selects_byte_layer_for_explicit_byte_strategy(self) -> None:
+    def test_request_command_auto_selects_byte_layer_for_explicit_byte_strategy(
+        self,
+    ) -> None:
         result = self.runner.invoke(
             self.app,
             [
@@ -144,6 +148,25 @@ class SIPMutatorCLITests(unittest.TestCase):
         # Both wire- and byte-layer mutations now publish the on-the-wire
         # bytes under the unified ``raw_wire_text`` key.
         self.assertIn("raw_wire_text", payload)
+
+    def test_request_command_accepts_pixel_ims_profile_default(self) -> None:
+        result = self.runner.invoke(
+            self.app,
+            [
+                "request",
+                "OPTIONS",
+                "--profile",
+                "pixel_ims",
+                "--seed",
+                "1",
+            ],
+        )
+
+        payload = self.parse_output(result)
+
+        self.assertEqual(payload["profile"], "pixel_ims")
+        self.assertEqual(payload["final_layer"], "wire")
+        self.assertIn(payload["strategy"], {"safe", "header_whitespace_noise"})
 
     def test_response_command_generates_and_mutates_response_packet(self) -> None:
         result = self.runner.invoke(
@@ -205,7 +228,9 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertTrue(payload["raw_wire_text"].endswith("\r\n"))
         self.assertFalse(payload["raw_wire_text"].endswith("\r\n\r\n"))
 
-    def test_packet_command_warns_with_packet_flag_name_for_targeted_multi_mutation(self) -> None:
+    def test_packet_command_warns_with_packet_flag_name_for_targeted_multi_mutation(
+        self,
+    ) -> None:
         baseline_json = self.generate_request_baseline_json("OPTIONS")
 
         result = self.runner.invoke(
@@ -232,7 +257,9 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("warning: --max-operations=3 ignored", result.output)
         self.assertNotIn("--mutations-per-case=3 ignored", result.output)
 
-    def test_request_command_does_not_warn_when_invalid_target_combo_fails_early(self) -> None:
+    def test_request_command_does_not_warn_when_invalid_target_combo_fails_early(
+        self,
+    ) -> None:
         result = self.runner.invoke(
             self.app,
             [
@@ -274,6 +301,8 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("final_crlf_loss", result.output)
         self.assertIn("tail_chop_1", result.output)
         self.assertIn("alias_port_desync", result.output)
+        self.assertIn("pixel_sdp_media_negotiation", result.output)
+        self.assertIn("pixel_ims", result.output)
 
     def test_commands_reject_invalid_profile_without_traceback(self) -> None:
         packet_input = self.generate_request_baseline_json("OPTIONS")

@@ -471,11 +471,11 @@ def _escape_visible(text: str) -> str:
 _STRATEGY_HELP = (
     "Mutation strategy name. Examples: default, safe, header_targeted, "
     "final_crlf_loss, duplicate_content_length_conflict, tail_chop_1, "
-    "tail_garbage, alias_port_desync."
+    "tail_garbage, alias_port_desync, pixel_sdp_media_negotiation."
 )
 _PROFILE_HELP = (
     "Mutation profile name. Examples: legacy, delivery_preserving, "
-    "ims_specific, parser_breaker."
+    "ims_specific, parser_breaker, pixel_ims."
 )
 
 

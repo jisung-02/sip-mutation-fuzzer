@@ -355,6 +355,60 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertEqual(captured["config"].profiles, ("parser_breaker",))
         self.assertEqual(captured["config"].strategies, ("default",))
 
+    def test_run_command_accepts_pixel_ims_profile(self) -> None:
+        captured: dict[str, CampaignConfig] = {}
+
+        def _build_executor(config: CampaignConfig) -> Mock:
+            captured["config"] = config
+            executor = Mock()
+            executor.run.return_value = CampaignResult(
+                campaign_id="cli-pixel-ims",
+                started_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:01Z",
+                status="completed",
+                config=config,
+                summary=CampaignSummary(total=1),
+            )
+            return executor
+
+        with patch(
+            "volte_mutation_fuzzer.campaign.cli.CampaignExecutor",
+            side_effect=_build_executor,
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "campaign",
+                    "run",
+                    "--mode",
+                    "real-ue-direct",
+                    "--target-msisdn",
+                    "111111",
+                    "--methods",
+                    "INVITE",
+                    "--pixel",
+                    "--profile",
+                    "pixel_ims",
+                    "--layer",
+                    "wire",
+                    "--max-cases",
+                    "1",
+                    "--timeout",
+                    "0.1",
+                    "--cooldown",
+                    "0",
+                    "--no-process-check",
+                    "--output",
+                    "test_run",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["config"].mode, "real-ue-direct")
+        self.assertTrue(captured["config"].pixel_mode)
+        self.assertEqual(captured["config"].profiles, ("pixel_ims",))
+        self.assertEqual(captured["config"].strategies, ("default",))
+
     def test_run_command_rejects_unknown_profile(self) -> None:
         result = self.runner.invoke(
             app,

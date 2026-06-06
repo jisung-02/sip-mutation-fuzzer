@@ -8,6 +8,7 @@ MutationProfile = Literal[
     "delivery_preserving",
     "ims_specific",
     "parser_breaker",
+    "pixel_ims",
 ]
 
 SUPPORTED_MUTATION_PROFILES: tuple[str, ...] = get_args(MutationProfile)
@@ -30,6 +31,9 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "sdp_boundary_only",
             "sdp_struct_only",
             "sdp_byte_edit",
+            "pixel_sdp_media_negotiation",
+            "pixel_session_timer_skew",
+            "pixel_p_header_pressure",
         }
     ),
     "byte": frozenset(
@@ -52,22 +56,69 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
     },
     "delivery_preserving": {
         "model": frozenset({"default"}),
-        "wire": frozenset({"default", "identity", "safe", "header_whitespace_noise", "null_byte_only", "boundary_only", "byte_edit_only", "edge_boundary", "sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}),
+        "wire": frozenset(
+            {
+                "default",
+                "identity",
+                "safe",
+                "header_whitespace_noise",
+                "null_byte_only",
+                "boundary_only",
+                "byte_edit_only",
+                "edge_boundary",
+                "sdp_boundary_only",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+            }
+        ),
         "byte": frozenset({"default", "identity", "safe", "header_targeted"}),
     },
     "ims_specific": {
         "model": frozenset(),
         "wire": frozenset(
-            {"default", "identity", "safe", "alias_port_desync", "sdp_boundary_only", "sdp_struct_only", "sdp_byte_edit"}
+            {
+                "default",
+                "identity",
+                "safe",
+                "alias_port_desync",
+                "sdp_boundary_only",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+            }
         ),
         "byte": frozenset({"default", "identity", "header_targeted"}),
     },
     "parser_breaker": {
         "model": frozenset(),
         "wire": frozenset(
-            {"default", "identity", "final_crlf_loss", "duplicate_content_length_conflict", "edge_boundary"}
+            {
+                "default",
+                "identity",
+                "final_crlf_loss",
+                "duplicate_content_length_conflict",
+                "edge_boundary",
+            }
         ),
         "byte": frozenset({"default", "identity", "tail_chop_1", "tail_garbage"}),
+    },
+    "pixel_ims": {
+        "model": frozenset(),
+        "wire": frozenset(
+            {
+                "default",
+                "identity",
+                "safe",
+                "header_whitespace_noise",
+                "alias_port_desync",
+                "sdp_boundary_only",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+                "pixel_sdp_media_negotiation",
+                "pixel_session_timer_skew",
+                "pixel_p_header_pressure",
+            }
+        ),
+        "byte": frozenset({"default", "identity", "header_targeted"}),
     },
 }
 
@@ -99,8 +150,25 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "byte": ("header_targeted",),
     },
     "parser_breaker": {
-        "wire": ("final_crlf_loss", "duplicate_content_length_conflict", "edge_boundary"),
+        "wire": (
+            "final_crlf_loss",
+            "duplicate_content_length_conflict",
+            "edge_boundary",
+        ),
         "byte": ("tail_chop_1", "tail_garbage"),
+    },
+    "pixel_ims": {
+        "wire": (
+            "pixel_sdp_media_negotiation",
+            "pixel_session_timer_skew",
+            "pixel_p_header_pressure",
+            "sdp_struct_only",
+            "sdp_byte_edit",
+            "alias_port_desync",
+            "safe",
+            "header_whitespace_noise",
+        ),
+        "byte": ("header_targeted",),
     },
 }
 
@@ -119,6 +187,22 @@ IMS_PROFILE_HEADER_NAMES: frozenset[str] = frozenset(
         "p-charging-function-addresses",
         "session-expires",
         "min-se",
+    }
+)
+
+PIXEL_IMS_HEADER_NAMES: frozenset[str] = frozenset(
+    {
+        "contact",
+        "p-asserted-identity",
+        "p-preferred-identity",
+        "p-access-network-info",
+        "p-visited-network-id",
+        "p-charging-vector",
+        "session-expires",
+        "min-se",
+        "supported",
+        "require",
+        "content-type",
     }
 )
 
@@ -147,7 +231,9 @@ def validate_profile_strategy(profile: str, layer: str, strategy: str) -> None:
     if strategy not in supported:
         raise ValueError(f"unsupported mutation strategy for {layer}: {strategy}")
     if not profile_supports_strategy(normalized_profile, layer, strategy):
-        raise ValueError(f"profile '{normalized_profile}' does not support {layer}/{strategy}")
+        raise ValueError(
+            f"profile '{normalized_profile}' does not support {layer}/{strategy}"
+        )
 
 
 def resolve_effective_strategy(
@@ -179,6 +265,7 @@ def resolve_effective_strategy(
 __all__ = [
     "IMS_PROFILE_HEADER_NAMES",
     "MutationProfile",
+    "PIXEL_IMS_HEADER_NAMES",
     "PROFILE_ALLOWED_STRATEGIES",
     "PROFILE_DEFAULT_STRATEGY_POOLS",
     "SUPPORTED_MUTATION_PROFILES",
