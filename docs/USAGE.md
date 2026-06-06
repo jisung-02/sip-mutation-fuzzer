@@ -72,7 +72,8 @@ uv run fuzzer campaign run \
                             # final_crlf_loss,duplicate_content_length_conflict,
                             # tail_chop_1,tail_garbage,alias_port_desync,
                             # pixel_sdp_media_negotiation,pixel_session_timer_skew,
-                            # pixel_p_header_pressure)
+                            # pixel_p_header_pressure,
+                            # pixel_capability_header_pressure)
 --max-cases <N>             # 최대 케이스 수 (기본: 1000)
 --timeout <SEC>             # 소켓 timeout (기본: 5.0)
 --seed-start <N>            # 시작 시드값 (재현용)
@@ -130,7 +131,9 @@ uv run fuzzer campaign run \
 | `delivery_preserving` | 전달 가능성을 최대한 유지하면서 약한 변이를 적용한다. 라우팅/전달 경로를 크게 흔들지 않는 분석용이다. |
 | `ims_specific` | IMS/3GPP 헤더, alias, routing 정보를 의식한 프로필이다. 실제 UE와 IMS 헤더 구조를 함께 볼 때 유용하다. |
 | `parser_breaker` | CRLF, length, tail truncation 같은 파서 경계 조건을 노리는 프로필이다. |
-| `pixel_ims` | Pixel-class UE 대상에서 `--pixel` 전달 경로와 함께 쓰는 프로필이다. SDP media negotiation, session timer, IMS P-header, Contact alias, Pixel-relevant byte target 을 집중 변조한다. |
+| `pixel_ims` | Pixel-class UE 대상에서 `--pixel` 전달 경로와 함께 쓰는 프로필이다. SDP media/QoS/AMR negotiation, session timer, IMS P-header, feature-tag/capability header, Contact alias, Pixel-relevant byte target 을 집중 변조한다. |
+
+Pixel 전용 strategy(`pixel_*`)는 `pixel_ims` 프로필에서만 허용된다. `legacy`, `delivery_preserving`, `ims_specific`, `parser_breaker`의 기존 default 풀은 Pixel 프로필 추가와 무관하게 유지된다.
 
 예시는 아래와 같다.
 
@@ -151,6 +154,8 @@ uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
   --methods INVITE --pixel --profile pixel_ims --layer wire,byte \
   --strategy default --ipsec-mode native --max-cases 50
 ```
+
+Pixel 9 / Galaxy A17 슬롯(`111111`)에서 Pixel이 실제 대상일 때는 먼저 `--strategy identity --max-cases 1`로 baseline 180/200 응답을 확인한 뒤 `pixel_ims`를 적용한다. 과거 Pixel 캠페인에서는 native IPsec observer의 CRLF keepalive 오인과 ADB `GRIL-AudioMetricExt` / `ConnectivityMonitorStateMachine` 로그 노이즈가 timeout 또는 `stack_failure`를 흐린 사례가 있었으므로, `stack_failure`는 `observer_events`, SIP 응답, case별 ADB anomaly를 같이 보고 해석한다.
 
 ## 🎯 주요 시나리오
 

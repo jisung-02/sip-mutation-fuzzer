@@ -166,7 +166,14 @@ class SIPMutatorCLITests(unittest.TestCase):
 
         self.assertEqual(payload["profile"], "pixel_ims")
         self.assertEqual(payload["final_layer"], "wire")
-        self.assertIn(payload["strategy"], {"safe", "header_whitespace_noise"})
+        self.assertIn(
+            payload["strategy"],
+            {
+                "safe",
+                "header_whitespace_noise",
+                "pixel_capability_header_pressure",
+            },
+        )
 
     def test_response_command_generates_and_mutates_response_packet(self) -> None:
         result = self.runner.invoke(
@@ -302,6 +309,7 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("tail_chop_1", result.output)
         self.assertIn("alias_port_desync", result.output)
         self.assertIn("pixel_sdp_media_negotiation", result.output)
+        self.assertIn("pixel_capability_header_pressure", result.output)
         self.assertIn("pixel_ims", result.output)
 
     def test_commands_reject_invalid_profile_without_traceback(self) -> None:

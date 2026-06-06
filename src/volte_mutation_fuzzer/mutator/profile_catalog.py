@@ -34,6 +34,7 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "pixel_sdp_media_negotiation",
             "pixel_session_timer_skew",
             "pixel_p_header_pressure",
+            "pixel_capability_header_pressure",
         }
     ),
     "byte": frozenset(
@@ -48,10 +49,23 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
     ),
 }
 
+PIXEL_IMS_WIRE_STRATEGIES: frozenset[str] = frozenset(
+    {
+        "pixel_sdp_media_negotiation",
+        "pixel_session_timer_skew",
+        "pixel_p_header_pressure",
+        "pixel_capability_header_pressure",
+    }
+)
+
+LEGACY_WIRE_STRATEGIES: frozenset[str] = (
+    SUPPORTED_STRATEGIES_BY_LAYER["wire"] - PIXEL_IMS_WIRE_STRATEGIES
+)
+
 PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
     "legacy": {
         "model": SUPPORTED_STRATEGIES_BY_LAYER["model"],
-        "wire": SUPPORTED_STRATEGIES_BY_LAYER["wire"],
+        "wire": LEGACY_WIRE_STRATEGIES,
         "byte": SUPPORTED_STRATEGIES_BY_LAYER["byte"],
     },
     "delivery_preserving": {
@@ -116,6 +130,7 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
                 "pixel_sdp_media_negotiation",
                 "pixel_session_timer_skew",
                 "pixel_p_header_pressure",
+                "pixel_capability_header_pressure",
             }
         ),
         "byte": frozenset({"default", "identity", "header_targeted"}),
@@ -162,6 +177,7 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
             "pixel_sdp_media_negotiation",
             "pixel_session_timer_skew",
             "pixel_p_header_pressure",
+            "pixel_capability_header_pressure",
             "sdp_struct_only",
             "sdp_byte_edit",
             "alias_port_desync",
@@ -193,9 +209,15 @@ IMS_PROFILE_HEADER_NAMES: frozenset[str] = frozenset(
 PIXEL_IMS_HEADER_NAMES: frozenset[str] = frozenset(
     {
         "contact",
+        "accept",
+        "accept-contact",
+        "allow",
+        "allow-events",
         "p-asserted-identity",
         "p-preferred-identity",
         "p-access-network-info",
+        "p-preferred-service",
+        "p-early-media",
         "p-visited-network-id",
         "p-charging-vector",
         "session-expires",

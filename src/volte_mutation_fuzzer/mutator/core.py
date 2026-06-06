@@ -641,6 +641,21 @@ class SIPMutator:
                 editable_message,
                 {name for name in PIXEL_IMS_HEADER_NAMES if name.startswith("p-")},
             )
+        if strategy == "pixel_capability_header_pressure" and layer == "wire":
+            return editable_message is not None and self._has_any_header(
+                editable_message,
+                {
+                    "contact",
+                    "accept",
+                    "accept-contact",
+                    "allow",
+                    "allow-events",
+                    "supported",
+                    "require",
+                    "p-preferred-service",
+                    "p-early-media",
+                },
+            )
         if layer == "wire" and strategy in {
             "sdp_boundary_only",
             "sdp_struct_only",
@@ -680,6 +695,7 @@ class SIPMutator:
             (key == "m" and len(value.split()) >= 4)
             or (key == "a" and value.startswith(("rtpmap:", "fmtp:", "rtcp:")))
             or (key == "a" and value.startswith(("ptime:", "maxptime:")))
+            or (key == "a" and value.startswith(("curr:qos", "des:qos", "conf:qos")))
             for key, value in sdp_lines
         )
 
@@ -1080,6 +1096,7 @@ class SIPMutator:
                 "pixel_sdp_media_negotiation",
                 "pixel_session_timer_skew",
                 "pixel_p_header_pressure",
+                "pixel_capability_header_pressure",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1577,6 +1594,8 @@ class SIPMutator:
             return self._apply_pixel_session_timer_skew(editable_message, rng)
         if strategy == "pixel_p_header_pressure":
             return self._apply_pixel_p_header_pressure(editable_message, rng)
+        if strategy == "pixel_capability_header_pressure":
+            return self._apply_pixel_capability_header_pressure(editable_message, rng)
         return None
 
     def _apply_null_byte_only(
@@ -2117,6 +2136,7 @@ class SIPMutator:
             viable.append("rtpmap_clock")
         if any(key == "a" and value.startswith("fmtp:") for key, value in sdp_lines):
             viable.append("fmtp_mode_set")
+            viable.append("fmtp_amr_param")
         if any(key == "a" and value.startswith("rtcp:") for key, value in sdp_lines):
             viable.append("rtcp_port")
         if any(
@@ -2124,6 +2144,11 @@ class SIPMutator:
             for key, value in sdp_lines
         ):
             viable.append("packetization_time")
+        if any(
+            key == "a" and value.startswith(("curr:qos", "des:qos", "conf:qos"))
+            for key, value in sdp_lines
+        ):
+            viable.append("qos_precondition")
         if not viable:
             raise ValueError("SDP body has no Pixel media negotiation target")
 
@@ -2134,8 +2159,12 @@ class SIPMutator:
             result = self._mutate_pixel_sdp_rtpmap_clock(sdp_lines, rng)
         elif variant == "fmtp_mode_set":
             result = self._mutate_pixel_sdp_fmtp_mode_set(sdp_lines, rng)
+        elif variant == "fmtp_amr_param":
+            result = self._mutate_pixel_sdp_amr_fmtp_param(sdp_lines, rng)
         elif variant == "rtcp_port":
             result = self._mutate_pixel_sdp_rtcp_port(sdp_lines, rng)
+        elif variant == "qos_precondition":
+            result = self._mutate_pixel_sdp_qos_precondition(sdp_lines, rng)
         else:
             result = self._mutate_pixel_sdp_packetization_time(sdp_lines, rng)
 
@@ -2243,6 +2272,53 @@ class SIPMutator:
             "variant": "fmtp_mode_set",
         }
 
+    def _mutate_pixel_sdp_amr_fmtp_param(
+        self,
+        sdp_lines: list[tuple[str, str]],
+        rng: random.Random,
+    ) -> dict[str, str]:
+        candidates = [
+            index
+            for index, (key, value) in enumerate(sdp_lines)
+            if key == "a" and value.startswith("fmtp:")
+        ]
+        index = candidates[rng.randrange(len(candidates))]
+        before_value = sdp_lines[index][1]
+        replacements = (
+            "octet-align=2",
+            "mode-change-capability=-1",
+            "mode-change-period=0",
+            "mode-change-neighbor=2",
+            "crc=2",
+            "robust-sorting=2",
+            "interleaving=4294967295",
+            "max-red=-1",
+        )
+        replacement = replacements[rng.randrange(len(replacements))]
+        param_name, _, _param_value = replacement.partition("=")
+        head, separator, params = before_value.partition(" ")
+        if not separator:
+            after_value = f"{before_value} {replacement}"
+        else:
+            segments = params.split(";") if params else []
+            replaced = False
+            for segment_index, segment in enumerate(segments):
+                if segment.strip().startswith(f"{param_name}="):
+                    segments[segment_index] = replacement
+                    replaced = True
+                    break
+            if not replaced:
+                segments.append(replacement)
+            after_value = f"{head} {';'.join(segments)}"
+
+        sdp_lines[index] = ("a", after_value)
+        return {
+            "path": f"body:sdp:fmtp[{index}].amr_param",
+            "before": f"a={before_value}",
+            "after": f"a={after_value}",
+            "variant": "fmtp_amr_param",
+        }
+
     def _mutate_pixel_sdp_rtcp_port(
         self,
         sdp_lines: list[tuple[str, str]],
@@ -2289,6 +2365,37 @@ class SIPMutator:
             "before": f"a={before_value}",
             "after": f"a={after_value}",
             "variant": "packetization_time",
+        }
+
+    def _mutate_pixel_sdp_qos_precondition(
+        self,
+        sdp_lines: list[tuple[str, str]],
+        rng: random.Random,
+    ) -> dict[str, str]:
+        candidates = [
+            index
+            for index, (key, value) in enumerate(sdp_lines)
+            if key == "a" and value.startswith(("curr:qos", "des:qos", "conf:qos"))
+        ]
+        index = candidates[rng.randrange(len(candidates))]
+        before_value = sdp_lines[index][1]
+        qos_variants = (
+            "curr:qos local sendrecv",
+            "curr:qos remote recv",
+            "curr:qos e2e unknown",
+            "des:qos mandatory local none",
+            "des:qos optional e2e sendrecv",
+            "des:qos mandatory remote sendrecv extra",
+            "conf:qos local recv",
+            "conf:qos remote invalid",
+        )
+        after_value = qos_variants[rng.randrange(len(qos_variants))]
+        sdp_lines[index] = ("a", after_value)
+        return {
+            "path": f"body:sdp:qos[{index}]",
+            "before": f"a={before_value}",
+            "after": f"a={after_value}",
+            "variant": "qos_precondition",
         }
 
     def _apply_pixel_session_timer_skew(
@@ -2388,6 +2495,117 @@ class SIPMutator:
         return mutated_message, self._record_mutation(
             target=MutationTarget(layer="wire", path=f"header[{index}]"),
             operator="pixel_p_header_pressure",
+            before=(header.name, header.value),
+            after=(header.name, mutated_value),
+            note=f"header={header_key}",
+        )
+
+    def _apply_pixel_capability_header_pressure(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        capability_names = {
+            "contact",
+            "accept",
+            "accept-contact",
+            "allow",
+            "allow-events",
+            "supported",
+            "require",
+            "p-preferred-service",
+            "p-early-media",
+        }
+        candidates = [
+            (index, header)
+            for index, header in enumerate(editable_message.headers)
+            if self._header_name_key(header.name) in capability_names
+        ]
+        if not candidates:
+            raise ValueError(
+                "pixel_capability_header_pressure requires a capability header"
+            )
+
+        index, header = candidates[rng.randrange(len(candidates))]
+        header_key = self._header_name_key(header.name)
+        token = f"{rng.getrandbits(32):08x}"
+        if header_key == "contact":
+            if ">" in header.value:
+                uri_part, suffix = header.value.split(">", 1)
+                mutated_value = (
+                    f"{uri_part}>"
+                    f"{suffix};audio;audio;video;+g.3gpp.mid-call;"
+                    f'+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";'
+                    f"pixel-cap={token}"
+                )
+            else:
+                mutated_value = f"{header.value};pixel-cap={token}"
+        elif header_key == "accept-contact":
+            values = (
+                f'*;+g.3gpp.icsi-ref="";explicit;require;pixel-cap={token}',
+                '*;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";'
+                '+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"',
+                f"*;video;audio;+g.3gpp.mid-call;pixel-cap={token}",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "supported":
+            values = (
+                "100rel,precondition,precondition,timer,sec-agree",
+                "timer,,100rel,precondition",
+                f"100rel,timer,pixel-token-{token}",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "require":
+            values = (
+                "precondition,100rel,timer",
+                "timer,precondition,unknown-pixel-token",
+                "timer,,",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "allow":
+            values = (
+                "INVITE,INVITE,PRACK,UPDATE,",
+                "ACK,BYE,CANCEL,UNKNOWNPIXEL",
+                "INVITE MESSAGE REFER UPDATE INFO PRACK",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "allow-events":
+            values = (
+                "refer,refer,presence",
+                f"presence;pixel-cap={token}",
+                "",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "accept":
+            values = (
+                "application/sdp,,application/3gpp-ims+xml",
+                "application/sdp;text=plain",
+                f"application/pixel-{token},application/sdp",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "p-preferred-service":
+            values = (
+                "urn:urn-7:3gpp-service.ims.icsi.mmtel;audio",
+                "urn:urn-7:3gpp-service.ims.icsi.",
+                f"urn:urn-7:3gpp-service.ims.icsi.mmtel.{token}",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        else:
+            values = (
+                "supported,supported",
+                "gated,unsupported",
+                f"supported;pixel-cap={token}",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+
+        headers = list(editable_message.headers)
+        headers[index] = header.model_copy(update={"value": mutated_value})
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path=f"header[{index}]"),
+            operator="pixel_capability_header_pressure",
             before=(header.name, header.value),
             after=(header.name, mutated_value),
             note=f"header={header_key}",

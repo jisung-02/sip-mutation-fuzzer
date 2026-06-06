@@ -90,6 +90,10 @@ class SIPMutatorTestCase(unittest.TestCase):
             "a=fmtp:107 mode-set=0,1,2,3,4,5,6,7;mode-change-capability=2\r\n"
             "a=rtpmap:101 telephone-event/8000\r\n"
             "a=fmtp:101 0-15\r\n"
+            "a=curr:qos local none\r\n"
+            "a=curr:qos remote none\r\n"
+            "a=des:qos mandatory local sendrecv\r\n"
+            "a=des:qos optional remote sendrecv\r\n"
             "a=rtcp:49197\r\n"
             "a=ptime:20\r\n"
             "a=maxptime:240\r\n"
@@ -100,13 +104,18 @@ class SIPMutatorTestCase(unittest.TestCase):
             "Via: SIP/2.0/UDP 172.22.0.21:15100;branch=z9hG4bK-pixel\r\n"
             "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
             "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            'Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"\r\n'
             "P-Asserted-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
             "P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=0010100000000001\r\n"
+            "P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel\r\n"
+            "P-Early-Media: supported\r\n"
             "P-Charging-Vector: icid-value=pixel-fuzz-1;orig-ioi=ims.mnc001.mcc001.3gppnetwork.org\r\n"
             "Session-Expires: 1800;refresher=uac\r\n"
             "Min-SE: 90\r\n"
             "Supported: timer,100rel\r\n"
             "Require: timer\r\n"
+            "Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK,NOTIFY,MESSAGE,REFER\r\n"
+            "Accept: application/sdp,application/3gpp-ims+xml\r\n"
             "Content-Type: application/sdp\r\n"
             f"Content-Length: {len(body.encode('utf-8'))}\r\n"
             "\r\n"
@@ -683,11 +692,13 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
             "pixel_sdp_media_negotiation",
             "pixel_session_timer_skew",
             "pixel_p_header_pressure",
+            "pixel_capability_header_pressure",
         ):
             with self.subTest(strategy=strategy):
                 self.assertTrue(
                     profile_supports_strategy("pixel_ims", "wire", strategy)
                 )
+                self.assertFalse(profile_supports_strategy("legacy", "wire", strategy))
         self.assertTrue(
             profile_supports_strategy("pixel_ims", "byte", "header_targeted")
         )
@@ -703,6 +714,7 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
                 "pixel_sdp_media_negotiation",
                 "pixel_session_timer_skew",
                 "pixel_p_header_pressure",
+                "pixel_capability_header_pressure",
                 "sdp_struct_only",
                 "sdp_byte_edit",
                 "alias_port_desync",
@@ -762,6 +774,66 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         self.assertEqual(case.records[0].operator, "pixel_p_header_pressure")
         before_name, _before_value = case.records[0].before
         self.assertIn(before_name.casefold(), PIXEL_IMS_HEADER_NAMES)
+
+    def test_pixel_capability_header_pressure_mutates_capability_headers(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_capability_header_pressure",
+                seed=17,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_capability_header_pressure")
+        self.assertEqual(case.records[0].operator, "pixel_capability_header_pressure")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), PIXEL_IMS_HEADER_NAMES)
+        self.assertNotEqual(before_value, after_value)
+
+    def test_pixel_sdp_media_negotiation_can_mutate_qos_preconditions(self) -> None:
+        for seed in range(80):
+            case = SIPMutator().mutate_editable(
+                self.build_pixel_invite_message(),
+                MutationConfig(
+                    profile="pixel_ims",
+                    layer="wire",
+                    strategy="pixel_sdp_media_negotiation",
+                    seed=seed,
+                ),
+            )
+            if case.records[0].note == "variant=qos_precondition":
+                self.assertRegex(str(case.records[0].before), r"a=(curr|des):qos")
+                self.assertRegex(str(case.records[0].after), r"a=(curr|des|conf):qos")
+                self.assert_content_length_matches_body(case.wire_text)
+                return
+        self.fail("pixel_sdp_media_negotiation did not select qos_precondition")
+
+    def test_pixel_sdp_media_negotiation_can_mutate_amr_fmtp_params(self) -> None:
+        for seed in range(80):
+            case = SIPMutator().mutate_editable(
+                self.build_pixel_invite_message(),
+                MutationConfig(
+                    profile="pixel_ims",
+                    layer="wire",
+                    strategy="pixel_sdp_media_negotiation",
+                    seed=seed,
+                ),
+            )
+            if case.records[0].note == "variant=fmtp_amr_param":
+                self.assertRegex(
+                    str(case.records[0].after),
+                    r"(octet-align|mode-change-capability|mode-change-period|"
+                    r"mode-change-neighbor|crc|robust-sorting|interleaving|max-red)=",
+                )
+                self.assert_content_length_matches_body(case.wire_text)
+                return
+        self.fail("pixel_sdp_media_negotiation did not select fmtp_amr_param")
 
     def test_pixel_ims_default_wire_skips_missing_prerequisites(self) -> None:
         message = parse_editable_from_wire(

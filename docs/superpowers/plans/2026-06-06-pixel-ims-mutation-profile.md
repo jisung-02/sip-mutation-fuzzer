@@ -75,7 +75,7 @@ Expected: FAIL because `pixel_ims` and `PIXEL_IMS_HEADER_NAMES` do not exist.
 
 Update `MutationProfile`, `SUPPORTED_STRATEGIES_BY_LAYER["wire"]`, `PROFILE_ALLOWED_STRATEGIES`, `PROFILE_DEFAULT_STRATEGY_POOLS`, and `__all__`. Add `PIXEL_IMS_HEADER_NAMES`.
 
-Update `SIPMutator._validate_supported_strategy()` to allow the three new wire strategy names.
+Update `SIPMutator._validate_supported_strategy()` to allow the Pixel wire strategy names.
 
 - [ ] **Step 4: Run tests**
 
@@ -129,13 +129,14 @@ Expected: FAIL because strategy handlers do not exist.
 
 - [ ] **Step 3: Implement strategy handlers**
 
-Add `_apply_pixel_sdp_media_negotiation()`, `_apply_pixel_session_timer_skew()`, and `_apply_pixel_p_header_pressure()` in `SIPMutator`. Wire them into `_apply_deterministic_wire_strategy()`.
+Add `_apply_pixel_sdp_media_negotiation()`, `_apply_pixel_session_timer_skew()`, `_apply_pixel_p_header_pressure()`, and `_apply_pixel_capability_header_pressure()` in `SIPMutator`. Wire them into `_apply_deterministic_wire_strategy()`.
 
 Implementation rules:
 
-- `pixel_sdp_media_negotiation` requires SDP content and updates `Content-Length`.
+- `pixel_sdp_media_negotiation` requires SDP content and updates `Content-Length`; it includes payload/rtpmap/fmtp/rtcp/ptime targets plus QoS precondition and AMR fmtp parameter variants.
 - `pixel_session_timer_skew` mutates existing `Session-Expires`, `Min-SE`, `Supported`, or `Require` headers; raises if no timer-relevant header exists.
 - `pixel_p_header_pressure` mutates headers in `PIXEL_IMS_HEADER_NAMES` whose names start with `p-`; raises if absent.
+- `pixel_capability_header_pressure` mutates feature-tag/capability headers such as `Contact`, `Accept-Contact`, `Supported`, `Require`, `Allow`, `Accept`, `P-Preferred-Service`, and `P-Early-Media`.
 
 - [ ] **Step 4: Run tests**
 

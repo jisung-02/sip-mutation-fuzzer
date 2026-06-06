@@ -22,11 +22,12 @@ The profile supports `wire` and `byte`, not `model`, because the current Pixel r
 
 ### Wire Strategies
 
-Add three concrete wire strategies:
+Add four concrete wire strategies:
 
-- `pixel_sdp_media_negotiation`: mutate SDP media parser inputs while keeping SIP framing valid. Targets `m=audio`, payload type lists, `a=rtpmap`, `a=fmtp`, `a=rtcp`, `a=ptime`, and `a=maxptime`.
+- `pixel_sdp_media_negotiation`: mutate SDP media parser inputs while keeping SIP framing valid. Targets `m=audio`, payload type lists, `a=rtpmap`, AMR `a=fmtp` parameters, `a=curr/des/conf:qos` preconditions, `a=rtcp`, `a=ptime`, and `a=maxptime`.
 - `pixel_session_timer_skew`: mutate `Session-Expires`, `Min-SE`, and `Supported`/`Require` timer combinations. This targets call/session state handling without changing transport routing.
 - `pixel_p_header_pressure`: mutate IMS identity/access/charging P-headers in place, especially `P-Access-Network-Info`, `P-Asserted-Identity`, and `P-Charging-Vector`.
+- `pixel_capability_header_pressure`: mutate Android/IMS feature-tag and capability negotiation headers in place: `Contact` feature tags, `Accept-Contact`, `Supported`, `Require`, `Allow`, `Accept`, `P-Preferred-Service`, and `P-Early-Media`.
 
 Keep existing `alias_port_desync` and SDP strategies available, but do not make alias desync dominate the default pool. Pixel delivery already depends on sender Request-URI rewriting, so Contact alias corruption is useful but should not be the primary signal.
 
@@ -35,9 +36,15 @@ Keep existing `alias_port_desync` and SDP strategies available, but do not make 
 For `pixel_ims` + byte `header_targeted`, narrow byte flips to Pixel-relevant headers first:
 
 - `contact`
+- `accept`
+- `accept-contact`
+- `allow`
+- `allow-events`
 - `p-asserted-identity`
 - `p-preferred-identity`
 - `p-access-network-info`
+- `p-preferred-service`
+- `p-early-media`
 - `p-visited-network-id`
 - `p-charging-vector`
 - `session-expires`
@@ -52,7 +59,7 @@ If none exist, fall back to the existing IMS header range behavior, then generic
 
 `pixel_ims` defaults:
 
-- `wire`: `pixel_sdp_media_negotiation`, `pixel_session_timer_skew`, `pixel_p_header_pressure`, `sdp_struct_only`, `sdp_byte_edit`, `alias_port_desync`, `safe`, `header_whitespace_noise`
+- `wire`: `pixel_sdp_media_negotiation`, `pixel_session_timer_skew`, `pixel_p_header_pressure`, `pixel_capability_header_pressure`, `sdp_struct_only`, `sdp_byte_edit`, `alias_port_desync`, `safe`, `header_whitespace_noise`
 - `byte`: `header_targeted`
 
 The default resolver must skip strategies whose prerequisites are absent, as it already does for SDP body and Contact alias strategies. `safe` and `header_whitespace_noise` are final body-agnostic fallbacks for packets that have no SDP, timer, P-header, or Contact alias surface.
@@ -72,6 +79,7 @@ Add focused unit tests for:
 - `pixel_sdp_media_negotiation` mutates only SDP/media content and updates `Content-Length`.
 - `pixel_session_timer_skew` mutates timer headers or adds a timer pressure header when supported timer headers exist.
 - `pixel_p_header_pressure` mutates P-headers in place.
+- `pixel_capability_header_pressure` mutates feature-tag/capability headers in place.
 - `pixel_ims` byte targeting stays inside Pixel-relevant headers when available.
 - CLI/campaign accepts `--profile pixel_ims` and reports it in output.
 
