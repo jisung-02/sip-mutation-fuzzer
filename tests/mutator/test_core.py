@@ -974,6 +974,7 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
             "iphone_sdp_media_negotiation",
             "iphone_security_agreement_pressure",
             "iphone_identity_privacy_pressure",
+            "iphone_option_tag_negotiation",
         ):
             with self.subTest(strategy=strategy):
                 self.assertTrue(
@@ -999,6 +1000,7 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
                 "iphone_sdp_media_negotiation",
                 "iphone_security_agreement_pressure",
                 "iphone_identity_privacy_pressure",
+                "iphone_option_tag_negotiation",
                 "sdp_struct_only",
                 "sdp_byte_edit",
                 "safe",
@@ -1052,6 +1054,83 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         _after_name, after_value = case.records[0].after
         self.assertIn(before_name.casefold(), IPHONE_IMS_HEADER_NAMES)
         self.assertNotEqual(before_value, after_value)
+
+    def test_iphone_security_agreement_pressure_can_mutate_security_parameter(
+        self,
+    ) -> None:
+        for seed in range(160):
+            case = SIPMutator().mutate_editable(
+                self.build_iphone_invite_message(),
+                MutationConfig(
+                    profile="iphone_ims",
+                    layer="wire",
+                    strategy="iphone_security_agreement_pressure",
+                    seed=seed,
+                ),
+            )
+            if ".param." not in case.records[0].target.path:
+                continue
+
+            self.assertEqual(case.strategy, "iphone_security_agreement_pressure")
+            self.assertRegex(
+                case.records[0].target.path,
+                r"^header\[\d+\]\.param\."
+                r"(q|prot|mod|spi-c|spi-s|port-c|port-s|alg|ealg)$",
+            )
+            self.assertRegex(
+                case.records[0].note or "",
+                r"variant=security_param\."
+                r"(q|prot|mod|spi-c|spi-s|port-c|port-s|alg|ealg)",
+            )
+            before_name, before_value = case.records[0].before
+            _after_name, after_value = case.records[0].after
+            self.assertEqual(before_name.casefold(), "security-verify")
+            self.assertIn("ipsec-3gpp", before_value)
+            self.assertIn("ipsec-3gpp", after_value)
+            self.assertNotEqual(before_value, after_value)
+            return
+        self.fail("iphone_security_agreement_pressure did not mutate a parameter")
+
+    def test_iphone_security_agreement_parameter_mutation_is_not_noop(self) -> None:
+        for seed in range(80):
+            case = SIPMutator().mutate_editable(
+                self.build_iphone_invite_message(),
+                MutationConfig(
+                    profile="iphone_ims",
+                    layer="wire",
+                    strategy="iphone_security_agreement_pressure",
+                    seed=seed,
+                ),
+            )
+
+            before_name, before_value = case.records[0].before
+            _after_name, after_value = case.records[0].after
+            self.assertEqual(before_name.casefold(), "security-verify")
+            self.assertNotEqual(before_value, after_value, msg=f"seed={seed}")
+
+    def test_iphone_option_tag_negotiation_mutates_option_tag_headers(self) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_option_tag_negotiation",
+                seed=25,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_option_tag_negotiation")
+        self.assertEqual(case.records[0].operator, "iphone_option_tag_negotiation")
+        self.assertRegex(case.records[0].target.path, r"^header\[\d+\]\.option_tag")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), {"supported", "require", "proxy-require"})
+        self.assertNotEqual(before_value, after_value)
+        self.assertRegex(
+            case.records[0].note or "",
+            r"variant=option_tag\.(sec_agree|precondition|reliability|timer)",
+        )
 
     def test_iphone_identity_privacy_pressure_mutates_identity_headers(self) -> None:
         from volte_mutation_fuzzer.mutator.profile_catalog import (

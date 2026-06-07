@@ -192,7 +192,14 @@ class SIPMutatorCLITests(unittest.TestCase):
 
         self.assertEqual(payload["profile"], "iphone_ims")
         self.assertEqual(payload["final_layer"], "wire")
-        self.assertIn(payload["strategy"], {"safe", "header_whitespace_noise"})
+        self.assertIn(
+            payload["strategy"],
+            {
+                "iphone_option_tag_negotiation",
+                "safe",
+                "header_whitespace_noise",
+            },
+        )
 
     def test_response_command_generates_and_mutates_response_packet(self) -> None:
         result = self.runner.invoke(
@@ -330,6 +337,7 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("pixel_sdp_media_negotiation", result.output)
         self.assertIn("pixel_capability_header_pressure", result.output)
         self.assertIn("iphone_security_agreement_pressure", result.output)
+        self.assertIn("iphone_option_tag_negotiation", result.output)
         self.assertIn("iphone_ims", result.output)
         self.assertIn("pixel_ims", result.output)
 

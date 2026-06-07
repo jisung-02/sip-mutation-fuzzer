@@ -153,6 +153,22 @@ _IPHONE_SECURITY_AGREEMENT_HEADER_NAMES: frozenset[str] = frozenset(
     }
 )
 
+_IPHONE_SECURITY_PARAMETER_MUTATIONS: dict[str, tuple[str, ...]] = {
+    "q": ("0", "0.000", "1.0", "1.000", "1.5", "-0.1"),
+    "prot": ("esp", "ESP", "ah", "esp-ipv6", ""),
+    "mod": ("trans", "tunnel", "TRANSPORT", ""),
+    "spi-c": ("0", "1", "12070439", "200418294", "2147483648", "4294967295"),
+    "spi-s": ("0", "1", "12070439", "200418294", "2147483648", "4294967295"),
+    "port-c": ("0", "1", "61008", "63193", "65535", "65536"),
+    "port-s": ("0", "1", "61008", "63193", "65535", "65536"),
+    "alg": ("hmac-md5-96", "hmac-sha-1-96", "hmac-sha-256-128", "none", ""),
+    "ealg": ("null", "aes-cbc", "des-ede3-cbc", "aes-gcm", ""),
+}
+
+_IPHONE_OPTION_TAG_HEADER_NAMES: frozenset[str] = frozenset(
+    {"supported", "require", "proxy-require"}
+)
+
 _IPHONE_IDENTITY_PRIVACY_HEADER_NAMES: frozenset[str] = frozenset(
     {
         "p-called-party-id",
@@ -696,6 +712,11 @@ class SIPMutator:
                 editable_message,
                 _IPHONE_IDENTITY_PRIVACY_HEADER_NAMES,
             )
+        if strategy == "iphone_option_tag_negotiation" and layer == "wire":
+            return editable_message is not None and self._has_any_header(
+                editable_message,
+                _IPHONE_OPTION_TAG_HEADER_NAMES,
+            )
         if layer == "wire" and strategy in {
             "sdp_boundary_only",
             "sdp_struct_only",
@@ -1153,6 +1174,7 @@ class SIPMutator:
                 "iphone_sdp_media_negotiation",
                 "iphone_security_agreement_pressure",
                 "iphone_identity_privacy_pressure",
+                "iphone_option_tag_negotiation",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1663,6 +1685,8 @@ class SIPMutator:
             )
         if strategy == "iphone_identity_privacy_pressure":
             return self._apply_iphone_identity_privacy_pressure(editable_message, rng)
+        if strategy == "iphone_option_tag_negotiation":
+            return self._apply_iphone_option_tag_negotiation(editable_message, rng)
         return None
 
     def _apply_null_byte_only(
@@ -2721,27 +2745,24 @@ class SIPMutator:
                 "iphone_security_agreement_pressure requires sec-agree headers"
             )
 
+        security_candidates = [
+            candidate
+            for candidate in candidates
+            if self._header_name_key(candidate[1].name).startswith("security-")
+        ]
+        if security_candidates:
+            candidates = security_candidates
+
         index, header = candidates[rng.randrange(len(candidates))]
         header_key = self._header_name_key(header.name)
         token = f"{rng.getrandbits(32):08x}"
         if header_key.startswith("security-"):
-            port_values = ("0", "1", "61008", "63193", "65535", "65536")
-            spi_values = ("0", "1", "12070439", "200418294", "4294967295")
-            mutated_values = (
-                "ipsec-3gpp;q=0;prot=esp;mod=trans;"
-                f"spi-c={spi_values[rng.randrange(len(spi_values))]};"
-                f"spi-s={spi_values[rng.randrange(len(spi_values))]};"
-                f"port-c={port_values[rng.randrange(len(port_values))]};"
-                f"port-s={port_values[rng.randrange(len(port_values))]};"
-                "alg=hmac-md5-96;ealg=null",
-                f"{header.value},ipsec-3gpp;q=1.0;prot=esp;mod=tunnel;"
-                f"spi-c={token};spi-s={token[::-1]};port-c=63193;port-s=63193;"
-                "alg=hmac-sha-1-96;ealg=aes-cbc",
-                "ipsec-3gpp;q=1.5;prot=esp;mod=trans;"
-                "spi-c=2147483648;spi-s=-1;port-c=65536;port-s=0;"
-                "alg=hmac-sha-256-128;ealg=aes-gcm",
+            mutated_value, parameter_name = self._mutate_iphone_security_parameter(
+                header.value,
+                rng,
             )
-            mutated_value = mutated_values[rng.randrange(len(mutated_values))]
+            target_path = f"header[{index}].param.{parameter_name}"
+            note = f"variant=security_param.{parameter_name};header={header_key}"
         elif header_key == "supported":
             values = (
                 "100rel,precondition,timer,sec-agree,sec-agree",
@@ -2749,6 +2770,8 @@ class SIPMutator:
                 f"100rel,precondition,iphone-sec-{token}",
             )
             mutated_value = values[rng.randrange(len(values))]
+            target_path = f"header[{index}]"
+            note = f"header={header_key}"
         elif header_key == "require":
             values = (
                 "precondition,sec-agree,sec-agree",
@@ -2756,6 +2779,8 @@ class SIPMutator:
                 f"precondition,iphone-sec-{token}",
             )
             mutated_value = values[rng.randrange(len(values))]
+            target_path = f"header[{index}]"
+            note = f"header={header_key}"
         else:
             values = (
                 "sec-agree,sec-agree",
@@ -2763,6 +2788,8 @@ class SIPMutator:
                 f"iphone-sec-{token}",
             )
             mutated_value = values[rng.randrange(len(values))]
+            target_path = f"header[{index}]"
+            note = f"header={header_key}"
 
         headers = list(editable_message.headers)
         headers[index] = header.model_copy(update={"value": mutated_value})
@@ -2770,11 +2797,113 @@ class SIPMutator:
             update={"headers": tuple(headers)}
         )
         return mutated_message, self._record_mutation(
-            target=MutationTarget(layer="wire", path=f"header[{index}]"),
+            target=MutationTarget(layer="wire", path=target_path),
             operator="iphone_security_agreement_pressure",
             before=(header.name, header.value),
             after=(header.name, mutated_value),
-            note=f"header={header_key}",
+            note=note,
+        )
+
+    def _mutate_iphone_security_parameter(
+        self,
+        value: str,
+        rng: random.Random,
+    ) -> tuple[str, str]:
+        mechanisms = value.split(",")
+        candidates: list[tuple[int, int, str, str]] = []
+        for mechanism_index, mechanism in enumerate(mechanisms):
+            for segment_index, segment in enumerate(mechanism.split(";")):
+                parameter_name, separator, parameter_value = segment.strip().partition(
+                    "="
+                )
+                if not separator:
+                    continue
+                parameter_key = parameter_name.casefold()
+                if parameter_key in _IPHONE_SECURITY_PARAMETER_MUTATIONS:
+                    candidates.append(
+                        (
+                            mechanism_index,
+                            segment_index,
+                            parameter_key,
+                            parameter_value,
+                        )
+                    )
+
+        if not candidates:
+            raise ValueError("security header has no mutable sec-agree parameter")
+
+        mechanism_index, segment_index, parameter_name, old_value = candidates[
+            rng.randrange(len(candidates))
+        ]
+        replacement_values = tuple(
+            value
+            for value in _IPHONE_SECURITY_PARAMETER_MUTATIONS[parameter_name]
+            if value != old_value
+        )
+        if not replacement_values:
+            replacement_values = (f"{old_value}-mut",)
+        replacement_value = replacement_values[rng.randrange(len(replacement_values))]
+        mechanism_segments = mechanisms[mechanism_index].split(";")
+        old_segment = mechanism_segments[segment_index]
+        leading_ws = old_segment[: len(old_segment) - len(old_segment.lstrip())]
+        mechanism_segments[segment_index] = (
+            f"{leading_ws}{parameter_name}={replacement_value}"
+        )
+        mechanisms[mechanism_index] = ";".join(mechanism_segments)
+        return ",".join(mechanisms), parameter_name
+
+    def _apply_iphone_option_tag_negotiation(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        candidates = [
+            (index, header)
+            for index, header in enumerate(editable_message.headers)
+            if self._header_name_key(header.name) in _IPHONE_OPTION_TAG_HEADER_NAMES
+        ]
+        if not candidates:
+            raise ValueError(
+                "iphone_option_tag_negotiation requires Supported/Require headers"
+            )
+
+        index, header = candidates[rng.randrange(len(candidates))]
+        header_key = self._header_name_key(header.name)
+        token = f"{rng.getrandbits(32):08x}"
+        if header_key == "supported":
+            variants = (
+                ("sec_agree", "100rel,precondition,timer,sec-agree,sec-agree"),
+                ("precondition", "precondition,,100rel,timer"),
+                ("reliability", "100rel,100rel,precondition,sec-agree"),
+                ("timer", f"timer,sec-agree,iphone-opt-{token}"),
+            )
+        elif header_key == "require":
+            variants = (
+                ("sec_agree", "sec-agree,precondition,sec-agree"),
+                ("precondition", "precondition,100rel,sec-agree"),
+                ("reliability", "100rel,sec-agree,precondition"),
+                ("timer", f"timer,sec-agree,iphone-opt-{token}"),
+            )
+        else:
+            variants = (
+                ("sec_agree", "sec-agree,sec-agree"),
+                ("precondition", "privacy,precondition,sec-agree"),
+                ("reliability", "100rel,sec-agree"),
+                ("timer", f"sec-agree,timer,iphone-proxy-{token}"),
+            )
+        variant_name, mutated_value = variants[rng.randrange(len(variants))]
+
+        headers = list(editable_message.headers)
+        headers[index] = header.model_copy(update={"value": mutated_value})
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path=f"header[{index}].option_tag"),
+            operator="iphone_option_tag_negotiation",
+            before=(header.name, header.value),
+            after=(header.name, mutated_value),
+            note=f"variant=option_tag.{variant_name};header={header_key}",
         )
 
     def _apply_iphone_identity_privacy_pressure(
