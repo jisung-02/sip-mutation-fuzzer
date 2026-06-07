@@ -408,9 +408,9 @@ class CampaignExecutor:
         self._ios_collector: Any | None = None
         self._ios_udid: str | None = config.ios_udid
         self._ios_device_info: Any | None = None
-        # Crash-file names present on the device before fuzzing started; the
-        # finalize pull diffs against this so only genuinely-new crashes surface.
-        self._ios_baseline_crash_names: set[str] = set()
+        # UTC start of the run; the finalize crash pull keeps only crashes whose
+        # timestamp falls in [start, now], so no pre-fuzz crash store is hoarded.
+        self._ios_run_start: datetime | None = None
         _docker_mode = config.mode == "real-ue-direct"
         if oracle is not None:
             self._oracle = oracle
@@ -617,6 +617,7 @@ class CampaignExecutor:
             self._adb_collector.start()
         if self._ios_collector is not None:
             self._ensure_ios_device_info()
+            self._ios_run_start = datetime.now(timezone.utc)
             self._ios_collector.start()
         self._capture_ios_baseline()
         consecutive_failures = 0
@@ -2145,42 +2146,15 @@ class CampaignExecutor:
         except Exception as exc:
             logger.warning("failed to capture ios baseline: %s", exc)
 
-        # Snapshot the pre-fuzz crash store once so the finalize pull can report
-        # only crashes that appeared during the run.
-        try:
-            from volte_mutation_fuzzer.ios.core import IosConnector
-            from volte_mutation_fuzzer.ios.crash_report import iter_crash_files
-
-            baseline_dir = self._campaign_dir / "ios_baseline"
-            crash_index_path = baseline_dir / "crash_index.json"
-            if crash_index_path.exists():
-                data = json.loads(crash_index_path.read_text(encoding="utf-8"))
-                self._ios_baseline_crash_names = set(data.get("crash_files", []))
-                return
-
-            baseline_crashes = baseline_dir / "crashes"
-            IosConnector(udid=self._ios_udid).pull_crashes(str(baseline_crashes))
-            names = sorted(p.name for p in iter_crash_files(baseline_crashes))
-            self._ios_baseline_crash_names = set(names)
-            crash_index_path.write_text(
-                json.dumps(
-                    {
-                        "captured_at": datetime.now(timezone.utc).isoformat(),
-                        "crash_files": names,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            logger.warning("failed to capture ios baseline crashes: %s", exc)
-
     def _capture_ios_new_crashes(self) -> None:
-        """Pull the crash store once and keep only crashes new since baseline."""
+        """Keep only crashes whose timestamp falls within this run's window.
+
+        Pulls the device crash store once, keeps reports timestamped between the
+        run start and now, and deletes the rest — so no pre-fuzz crash history is
+        hoarded and ``ios_crashes/`` holds only crashes from this campaign.
+        """
         config = self._config
-        if not config.ios_enabled:
+        if not config.ios_enabled or self._ios_run_start is None:
             return
         try:
             from volte_mutation_fuzzer.ios.core import IosConnector
@@ -2192,14 +2166,21 @@ class CampaignExecutor:
             crashes_dir = self._campaign_dir / "ios_crashes"
             IosConnector(udid=self._ios_udid).pull_crashes(str(crashes_dir))
 
-            baseline = self._ios_baseline_crash_names
-            records = describe_new_crashes(crashes_dir, baseline_names=baseline)
-            new_names = {r.name for r in records}
+            start = self._ios_run_start
+            end = datetime.now(timezone.utc)
+            records = describe_new_crashes(crashes_dir)
+            in_window = [
+                r
+                for r in records
+                if r.timestamp is not None and start <= r.timestamp <= end
+            ]
+            undated = sum(1 for r in records if r.timestamp is None)
+            keep = {r.name for r in in_window}
 
-            # Drop the baseline (pre-existing) reports so ios_crashes/ holds only
-            # crashes that appeared during the run.
+            # Drop everything outside the run window (pre-existing crashes and
+            # undateable reports), leaving only this run's crashes on disk.
             for path in iter_crash_files(crashes_dir):
-                if path.name not in new_names:
+                if path.name not in keep:
                     try:
                         path.unlink()
                     except OSError:
@@ -2208,9 +2189,11 @@ class CampaignExecutor:
             (crashes_dir / "new_crashes.json").write_text(
                 json.dumps(
                     {
-                        "baseline_count": len(baseline),
-                        "new_count": len(records),
-                        "new_crashes": [r.to_dict() for r in records],
+                        "run_start": start.isoformat(),
+                        "run_end": end.isoformat(),
+                        "new_count": len(in_window),
+                        "undated_skipped": undated,
+                        "new_crashes": [r.to_dict() for r in in_window],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -2219,9 +2202,9 @@ class CampaignExecutor:
                 encoding="utf-8",
             )
             logger.info(
-                "ios new crashes since baseline: %d (baseline had %d)",
-                len(records),
-                len(baseline),
+                "ios crashes in run window: %d (%d undated skipped)",
+                len(in_window),
+                undated,
             )
         except Exception as exc:
             logger.warning("failed to capture ios new crashes: %s", exc)
