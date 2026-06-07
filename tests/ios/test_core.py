@@ -335,20 +335,19 @@ class IosSyslogCollectorHealthTests(unittest.TestCase):
         out = collector.slice(since_ts=15.0, until_ts=25.0)
         self.assertEqual([x.line for x in out], ["b"])
 
-    def test_output_file_streams_lines_live(self) -> None:
-        # Mirrors the ADB logcat_full capture: every accepted line is appended to
-        # output_file as it is read, and the handle survives until stop().
+    def test_output_file_streams_full_log_live(self) -> None:
+        # Mirrors the ADB logcat_full capture: every line (all processes) is
+        # appended to output_file as it is read, and the handle survives stop().
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "nested" / "syslog_full.txt"
             collector = IosSyslogCollector(
-                IosCollectorConfig(filter_processes=("CommCenter",)),
                 reconnect_delay=0.0,
                 max_reconnect_attempts=0,
                 output_file=out,
             )
             lines = [
-                "Apr 15 10:32:17 iPhone CommCenter[1] <Notice>: kept line",
-                "Apr 15 10:32:18 iPhone SpringBoard[2] <Notice>: filtered out",
+                "Apr 15 10:32:17 iPhone CommCenter[1] <Notice>: telephony line",
+                "Apr 15 10:32:18 iPhone MobileMail[2] <Notice>: unrelated line",
             ]
             with patch(
                 "volte_mutation_fuzzer.ios.core.subprocess.Popen",
@@ -356,15 +355,17 @@ class IosSyslogCollectorHealthTests(unittest.TestCase):
             ):
                 collector.start()
                 for _ in range(50):
-                    if out.exists() and "kept line" in out.read_text(encoding="utf-8"):
+                    if out.exists() and "unrelated line" in out.read_text(
+                        encoding="utf-8"
+                    ):
                         break
                     time.sleep(0.02)
                 collector.stop()
 
             body = out.read_text(encoding="utf-8")
-            self.assertIn("kept line", body)
-            # process filter applies to the live dump too
-            self.assertNotIn("filtered out", body)
+            # full syslog: no process filtering — both lines present
+            self.assertIn("telephony line", body)
+            self.assertIn("unrelated line", body)
 
     def test_healthy_when_running(self) -> None:
         collector = IosSyslogCollector()
@@ -377,36 +378,13 @@ class IosSyslogCollectorHealthTests(unittest.TestCase):
         collector._dead = True
         self.assertFalse(collector.is_healthy)
 
-    def test_start_invokes_idevicesyslog_with_process_filters(self) -> None:
+    def test_start_captures_all_processes_no_filter(self) -> None:
+        # Even with filter_processes set, idevicesyslog runs without -p so the
+        # full device syslog (and crash patterns from any process) is captured.
         collector = IosSyslogCollector(
             IosCollectorConfig(
                 udid="ABC-123", filter_processes=("CommCenter", "SpringBoard")
             )
-        )
-        instance = _DummyPopen(lines=[])
-        with patch(
-            "volte_mutation_fuzzer.ios.core.subprocess.Popen",
-            return_value=instance,
-        ) as popen_mock:
-            collector.start()
-            collector.stop()
-        first_call = popen_mock.call_args_list[0]
-        self.assertEqual(
-            first_call.args[0],
-            [
-                "idevicesyslog",
-                "-u",
-                "ABC-123",
-                "-p",
-                "CommCenter",
-                "-p",
-                "SpringBoard",
-            ],
-        )
-
-    def test_start_omits_process_filters_when_empty(self) -> None:
-        collector = IosSyslogCollector(
-            IosCollectorConfig(udid="ABC-123", filter_processes=())
         )
         instance = _DummyPopen(lines=[])
         with patch(
@@ -420,7 +398,9 @@ class IosSyslogCollectorHealthTests(unittest.TestCase):
             ["idevicesyslog", "-u", "ABC-123"],
         )
 
-    def test_reader_loop_drops_unfiltered_processes(self) -> None:
+    def test_reader_loop_keeps_all_processes(self) -> None:
+        # Crash patterns must be catchable from any process (e.g. SIGABRT from a
+        # non-telephony process), so nothing is dropped at capture time.
         collector = IosSyslogCollector(
             IosCollectorConfig(filter_processes=("CommCenter",)),
             max_reconnect_attempts=1,
@@ -445,8 +425,7 @@ class IosSyslogCollectorHealthTests(unittest.TestCase):
             collector._reader_loop(first_proc)
 
         stored = collector.slice(since_ts=0.0, until_ts=time_future())
-        self.assertEqual(len(stored), 1)
-        self.assertEqual(stored[0].process, "CommCenter")
+        self.assertEqual([x.process for x in stored], ["MobileMail", "CommCenter"])
 
     def test_reader_loop_parses_and_stores(self) -> None:
         first_proc = _DummyPopen(

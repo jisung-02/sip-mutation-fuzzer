@@ -24,12 +24,16 @@ _TELEPHONY_ASSERTION_PROCESSES = frozenset(
 )
 
 
-# idevicesyslog line format:
-#   Apr 15 10:32:17 iPhone CommCenter[127] <Notice>: [IMS] Registration started
-#   Apr 15 10:32:17 iPhone kernel(...)[0] <Error>: foo
+# idevicesyslog line formats (both seen in the wild):
+#   with hostname:    Apr 15 10:32:17 iPhone CommCenter[127] <Notice>: [IMS] Reg
+#   without hostname: Jun  7 03:46:41 CommCenter(libARIServer.dylib)[101] <Notice>: ari
+# The hostname field is optional, and the process token may carry a
+# "(libFoo.dylib)" / "(AppleARMPlatform)" suffix that must be stripped so the
+# bare process name ("CommCenter") matches the process filter.
 _SYSLOG_LINE = re.compile(
-    r"^(?P<device_ts>\w{3}\s+\d+\s+\d+:\d+:\d+)\s+\S+\s+"
-    r"(?P<process>\S+?)(?:\[\d+\])?\s+"
+    r"^(?P<device_ts>\w{3}\s+\d+\s+\d+:\d+:\d+)\s+"
+    r"(?:\S+\s+)??"  # optional hostname (lazy so it yields to the process token)
+    r"(?P<process>[\w.-]+)(?:\([^)]*\))?\[(?P<pid>\d+)\]\s+"
     r"(?:<(?P<level>\w+)>:?)?\s*"
     r"(?P<message>.*)$"
 )
@@ -286,17 +290,15 @@ class IosSyslogCollector:
         self._output_fp: Any | None = None
 
     def _cmd(self) -> list[str]:
+        # No "-p" process filter: capture the entire device syslog. The crash /
+        # IMS anomaly patterns must see every process (kernel panic, jetsam from
+        # the kernel, ReportCrash, etc.) — pre-filtering to a few telephony
+        # processes starved them. filter_processes is still used downstream to
+        # carve out per-process convenience views in take_snapshot().
         base = ["idevicesyslog"]
         if self._config.udid:
             base.extend(["-u", self._config.udid])
-        for process in self._config.filter_processes:
-            base.extend(["-p", process])
         return base
-
-    def _accepts_process(self, process: str) -> bool:
-        if not self._config.filter_processes:
-            return True
-        return process in self._config.filter_processes
 
     def start(self) -> None:
         self.stop()
@@ -370,8 +372,9 @@ class IosSyslogCollector:
                         line = raw.rstrip("\n")
                         parsed = _parse_syslog_line(line, time.time())
                         got_data = True
-                        if not self._accepts_process(parsed.process):
-                            continue
+                        # Keep every line: the buffer feeds the anomaly detector
+                        # (which must see all processes) and the per-case slices,
+                        # and the output_file is the full device syslog.
                         with self._lock:
                             self._lines.append(parsed)
                             if self._output_fp is not None:
