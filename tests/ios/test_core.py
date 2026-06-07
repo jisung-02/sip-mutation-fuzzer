@@ -1,6 +1,8 @@
 import json
+import time
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from volte_mutation_fuzzer.ios.contracts import (
@@ -297,6 +299,32 @@ def test_take_snapshot_writes_syslog_and_pulls_crashes(tmp_path: Path) -> None:
     assert any(e["pattern_name"] == "incoming_call_ui" for e in events)
 
 
+def test_take_snapshot_skips_crash_pull_when_disabled(tmp_path: Path) -> None:
+    collector = IosSyslogCollector()
+    collector.push_for_test(
+        IosSyslogLine(host_ts=100.0, process="CommCenter", line="x")
+    )
+
+    calls: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd[0])
+        return _DummyCompletedProcess(stdout="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        snapshot = IosConnector().take_snapshot(
+            str(tmp_path / "ios"),
+            collector=collector,
+            syslog_since=99.0,
+            syslog_until=150.0,
+            pull_crashes=False,
+        )
+
+    assert "idevicecrashreport" not in calls
+    assert snapshot.crashes_dir is None
+    assert snapshot.new_crash_files == ()
+
+
 class IosSyslogCollectorHealthTests(unittest.TestCase):
     def test_slice_filters_by_host_ts(self) -> None:
         collector = IosSyslogCollector()
@@ -306,6 +334,37 @@ class IosSyslogCollectorHealthTests(unittest.TestCase):
 
         out = collector.slice(since_ts=15.0, until_ts=25.0)
         self.assertEqual([x.line for x in out], ["b"])
+
+    def test_output_file_streams_lines_live(self) -> None:
+        # Mirrors the ADB logcat_full capture: every accepted line is appended to
+        # output_file as it is read, and the handle survives until stop().
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "nested" / "syslog_full.txt"
+            collector = IosSyslogCollector(
+                IosCollectorConfig(filter_processes=("CommCenter",)),
+                reconnect_delay=0.0,
+                max_reconnect_attempts=0,
+                output_file=out,
+            )
+            lines = [
+                "Apr 15 10:32:17 iPhone CommCenter[1] <Notice>: kept line",
+                "Apr 15 10:32:18 iPhone SpringBoard[2] <Notice>: filtered out",
+            ]
+            with patch(
+                "volte_mutation_fuzzer.ios.core.subprocess.Popen",
+                return_value=_DummyPopen(lines=lines),
+            ):
+                collector.start()
+                for _ in range(50):
+                    if out.exists() and "kept line" in out.read_text(encoding="utf-8"):
+                        break
+                    time.sleep(0.02)
+                collector.stop()
+
+            body = out.read_text(encoding="utf-8")
+            self.assertIn("kept line", body)
+            # process filter applies to the live dump too
+            self.assertNotIn("filtered out", body)
 
     def test_healthy_when_running(self) -> None:
         collector = IosSyslogCollector()

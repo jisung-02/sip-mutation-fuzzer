@@ -408,6 +408,9 @@ class CampaignExecutor:
         self._ios_collector: Any | None = None
         self._ios_udid: str | None = config.ios_udid
         self._ios_device_info: Any | None = None
+        # Crash-file names present on the device before fuzzing started; the
+        # finalize pull diffs against this so only genuinely-new crashes surface.
+        self._ios_baseline_crash_names: set[str] = set()
         _docker_mode = config.mode == "real-ue-direct"
         if oracle is not None:
             self._oracle = oracle
@@ -451,7 +454,12 @@ class CampaignExecutor:
                     udid=self._ios_udid,
                     filter_processes=config.ios_filter_processes,
                 )
-                ios_collector = IosSyslogCollector(ios_cfg)
+                # Stream the full-period syslog to the campaign-dir top level,
+                # mirroring the ADB collector's logcat_full.txt.
+                ios_collector = IosSyslogCollector(
+                    ios_cfg,
+                    output_file=self._campaign_dir / "syslog_full.txt",
+                )
                 ios_detector = IosAnomalyDetector()
                 ios_oracle = IosOracle(ios_collector, ios_detector)
                 self._ios_collector = ios_collector
@@ -747,6 +755,10 @@ class CampaignExecutor:
             if self._adb_collector is not None:
                 self._adb_collector.stop()
             if self._ios_collector is not None:
+                # Collect new crashes before the device connection is torn down.
+                # The full-period syslog is streamed live to syslog_full.txt and
+                # is closed by stop().
+                self._capture_ios_new_crashes()
                 self._ios_collector.stop()
 
             # Generate final crash analysis report
@@ -2133,6 +2145,87 @@ class CampaignExecutor:
         except Exception as exc:
             logger.warning("failed to capture ios baseline: %s", exc)
 
+        # Snapshot the pre-fuzz crash store once so the finalize pull can report
+        # only crashes that appeared during the run.
+        try:
+            from volte_mutation_fuzzer.ios.core import IosConnector
+            from volte_mutation_fuzzer.ios.crash_report import iter_crash_files
+
+            baseline_dir = self._campaign_dir / "ios_baseline"
+            crash_index_path = baseline_dir / "crash_index.json"
+            if crash_index_path.exists():
+                data = json.loads(crash_index_path.read_text(encoding="utf-8"))
+                self._ios_baseline_crash_names = set(data.get("crash_files", []))
+                return
+
+            baseline_crashes = baseline_dir / "crashes"
+            IosConnector(udid=self._ios_udid).pull_crashes(str(baseline_crashes))
+            names = sorted(p.name for p in iter_crash_files(baseline_crashes))
+            self._ios_baseline_crash_names = set(names)
+            crash_index_path.write_text(
+                json.dumps(
+                    {
+                        "captured_at": datetime.now(timezone.utc).isoformat(),
+                        "crash_files": names,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("failed to capture ios baseline crashes: %s", exc)
+
+    def _capture_ios_new_crashes(self) -> None:
+        """Pull the crash store once and keep only crashes new since baseline."""
+        config = self._config
+        if not config.ios_enabled:
+            return
+        try:
+            from volte_mutation_fuzzer.ios.core import IosConnector
+            from volte_mutation_fuzzer.ios.crash_report import (
+                describe_new_crashes,
+                iter_crash_files,
+            )
+
+            crashes_dir = self._campaign_dir / "ios_crashes"
+            IosConnector(udid=self._ios_udid).pull_crashes(str(crashes_dir))
+
+            baseline = self._ios_baseline_crash_names
+            records = describe_new_crashes(crashes_dir, baseline_names=baseline)
+            new_names = {r.name for r in records}
+
+            # Drop the baseline (pre-existing) reports so ios_crashes/ holds only
+            # crashes that appeared during the run.
+            for path in iter_crash_files(crashes_dir):
+                if path.name not in new_names:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+
+            (crashes_dir / "new_crashes.json").write_text(
+                json.dumps(
+                    {
+                        "baseline_count": len(baseline),
+                        "new_count": len(records),
+                        "new_crashes": [r.to_dict() for r in records],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            logger.info(
+                "ios new crashes since baseline: %d (baseline had %d)",
+                len(records),
+                len(baseline),
+            )
+        except Exception as exc:
+            logger.warning("failed to capture ios new crashes: %s", exc)
+
     def _capture_ios_snapshot(
         self,
         spec: CaseSpec,
@@ -2160,6 +2253,10 @@ class CampaignExecutor:
                 syslog_until=snapshot_until,
                 detector=IosAnomalyDetector(),
                 run_diagnostics=config.ios_run_diagnostics,
+                # Crashes are pulled once at finalize and diffed against the
+                # baseline; re-dumping the whole device store per case is the bug
+                # this avoids.
+                pull_crashes=False,
             )
             return ios_snapshot_dir
         except Exception as exc:

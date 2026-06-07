@@ -6,7 +6,7 @@ import time
 from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from volte_mutation_fuzzer.adb.contracts import AnomalySeverity
 from volte_mutation_fuzzer.ios.contracts import (
@@ -187,6 +187,7 @@ class IosConnector:
         syslog_until: float,
         detector: "IosAnomalyDetector | None" = None,
         run_diagnostics: bool = False,
+        pull_crashes: bool = True,
     ) -> IosSnapshotResult:
         base_dir = Path(output_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -211,9 +212,20 @@ class IosConnector:
         commcenter_path = _filter_write("syslog_commcenter.txt", {"CommCenter"})
         springboard_path = _filter_write("syslog_springboard.txt", {"SpringBoard"})
 
-        crashes_dir = base_dir / "crashes"
-        new_crashes, crash_errors = self.pull_crashes(str(crashes_dir))
-        errors.extend(crash_errors)
+        # Per-case crash pulling is off by the campaign because
+        # ``idevicecrashreport`` re-dumps the *entire* device crash store every
+        # call (it cannot pull incrementally), which buried each case under
+        # hundreds of months-old reports. The campaign instead diffs a single
+        # baseline pull against a finalize pull. Verdicts come from the live
+        # syslog anomaly detector, not these files, so skipping per-case pulls
+        # costs no detection.
+        crashes_dir: str | None = None
+        new_crashes: tuple[str, ...] = ()
+        if pull_crashes:
+            crashes_path = base_dir / "crashes"
+            new_crashes, crash_errors = self.pull_crashes(str(crashes_path))
+            errors.extend(crash_errors)
+            crashes_dir = str(crashes_path)
 
         diagnostics_path: str | None = None
         if run_diagnostics:
@@ -238,7 +250,7 @@ class IosConnector:
             syslog_path=str(syslog_path),
             syslog_commcenter_path=commcenter_path,
             syslog_springboard_path=springboard_path,
-            crashes_dir=str(crashes_dir),
+            crashes_dir=crashes_dir,
             new_crash_files=new_crashes,
             diagnostics_path=diagnostics_path,
             anomalies_path=anomalies_path,
@@ -254,6 +266,7 @@ class IosSyslogCollector:
         max_reconnect_attempts: int = 5,
         reconnect_delay: float = 5.0,
         max_lines: int = 200_000,
+        output_file: Path | None = None,
     ) -> None:
         self._config = config or IosCollectorConfig()
         self._proc: subprocess.Popen[str] | None = None
@@ -265,6 +278,12 @@ class IosSyslogCollector:
         self._reconnect_delay = reconnect_delay
         self._dead = False
         self._reconnect_count = 0
+        # Optional persistent dump: every streamed line is also appended here as
+        # it arrives (line-buffered), mirroring the ADB collector's logcat_full
+        # capture. Unlike a finalize-time buffer dump this survives a mid-run
+        # crash and is not bounded by the in-memory ring.
+        self._output_path = output_file
+        self._output_fp: Any | None = None
 
     def _cmd(self) -> list[str]:
         base = ["idevicesyslog"]
@@ -281,6 +300,17 @@ class IosSyslogCollector:
 
     def start(self) -> None:
         self.stop()
+        if self._output_path is not None:
+            self._output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Line-buffered text mode: every "\n" is flushed so the file is safe
+            # to tail mid-campaign and is not truncated if the run is killed.
+            self._output_fp = open(
+                self._output_path,
+                "w",
+                buffering=1,
+                encoding="utf-8",
+                errors="replace",
+            )
         try:
             proc = subprocess.Popen(
                 self._cmd(),
@@ -318,6 +348,13 @@ class IosSyslogCollector:
         self._thread = None
         with self._lock:
             self._dead = False
+            if self._output_fp is not None:
+                try:
+                    self._output_fp.flush()
+                    self._output_fp.close()
+                except Exception:
+                    pass
+                self._output_fp = None
 
     def _reader_loop(self, proc: object) -> None:
         current = cast(_PopenLike, proc)
@@ -337,6 +374,11 @@ class IosSyslogCollector:
                             continue
                         with self._lock:
                             self._lines.append(parsed)
+                            if self._output_fp is not None:
+                                try:
+                                    self._output_fp.write(parsed.line + "\n")
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
 

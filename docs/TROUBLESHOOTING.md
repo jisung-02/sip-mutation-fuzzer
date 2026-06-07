@@ -181,6 +181,41 @@ docker logs pcscf --since 2m | grep 'Term UE connection'
 docker exec pcscf ip xfrm state | grep -A3 '10.20.20.8'
 ```
 
+### iPhone IMS 안 올라옴 (셀 attach 는 됐는데 IMS PDN/SIP 없음)
+
+**증상**: open5gs/srsenb 에는 붙는데(MME `Attach complete`, SMF `APN[internet]` 할당) IMS 가 안 잡힘.
+P-CSCF 에 xfrm SA 0개, `kamctl ul show` 비어있음, REGISTER 로그 없음. iPhone syslog 에도
+`ims`/`volte`/`sip`/`register`/`pdn` 활동이 전혀 안 보임.
+
+**원인**: iPhone 이 **VoLTE 를 켜지 않아 IMS APN PDN 자체를 시도하지 않음**. 테스트 SIM 의
+캐리어 번들이 `com.apple.CarrierLab` (generic) 인 경우 VoLTE 가 기본 비활성이라 단말이
+IMS 로 안 올라온다. EPS(데이터) attach 와 IMS 등록은 별개 PDN 이라 데이터만 붙고 IMS 는
+빠질 수 있다.
+
+**해결책**: iPhone 에서 VoLTE 강제 활성화 (2026-06-07 SIM 111111 in iPhone 16e 로 검증됨).
+```
+설정 → 셀룰러 → 셀룰러 데이터 옵션 → 음성 및 데이터 → VoLTE 켜기
+```
+토글이 안 보이면 CarrierLab 번들이 막는 것 — 비행기모드 토글 또는 재부팅 후 재시도.
+자동 PLMN 선택이 외부 RF 에 밀리면 manual PLMN select 로 `00101` 선택.
+
+**확인**:
+```bash
+# IMS APN PDN 올라왔는지 (10.20.20.x = IMS 풀)
+docker logs smf --since 5m 2>&1 | grep -iE 'APN\[ims\]|10.20.20'
+# SIP 수신 + 라이브 IP 확인
+docker logs pcscf --since 5m 2>&1 | grep -iE 'register|subscribe|10.20.20'
+```
+
+**주의 — IMS PDN 플래핑/stale SA**: VoLTE 막 켠 직후 단말이 IMS PDN 을 반복 재수립하며
+매번 새 IP 를 받는다 (`10.20.20.2` → `10.20.20.3` → ...). 옛 IP 의 xfrm SA 가 stale 로
+남아 P-CSCF NATPING 이 408(Fail Counter 증가) 을 찍는다. **라이브 UE 는 NATPING OPTIONS 에
+200 으로 응답하는 IP** 다. 퍼징 전 아래로 라이브 IP 를 확정한 뒤(또는 세션이 안정될 때까지
+대기한 뒤) 돌린다. stale SA 가 resolver 를 오염시키면 408 timeout 만 난다.
+```bash
+docker logs pcscf --since 2m 2>&1 | grep -iE 'OPTIONS.*10.20.20.*(200|408)'
+```
+
 ### Docker 환경 재시작
 ```bash
 # 1. 컨테이너 재시작
