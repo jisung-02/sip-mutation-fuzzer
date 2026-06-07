@@ -24,6 +24,10 @@ ObservationClass = Literal[
     "client_error",
     "server_error",
     "global_error",
+    # The peer sent us a valid SIP *request* (not a response) — e.g. the UE's
+    # SMS-over-IMS delivery report (RP-ACK MESSAGE to the SMSC) in reply to a
+    # fuzzed MESSAGE. A well-formed request is normal UE behaviour, not garbage.
+    "request",
     "invalid",
 ]
 DeliveryOutcome = Literal[
@@ -33,6 +37,9 @@ DeliveryOutcome = Literal[
     "timeout",
     "send_error",
     "invalid_response",
+    # Peer replied with a valid SIP request (e.g. SMS delivery report). Treated
+    # as normal by the oracle — distinct from unparseable garbage.
+    "request_received",
 ]
 
 

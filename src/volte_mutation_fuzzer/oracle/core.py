@@ -98,6 +98,18 @@ class SocketOracle:
                 elapsed_ms=elapsed,
             )
 
+        if outcome == "request_received":
+            # The peer replied with a valid SIP *request*, not a response — e.g.
+            # the UE's SMS-over-IMS delivery report (RP-ACK MESSAGE to the SMSC)
+            # after a fuzzed MESSAGE. That is normal UE behaviour, so it must not
+            # be flagged suspicious. Only genuinely unparseable garbage is.
+            return OracleVerdict(
+                verdict="normal",
+                reason="peer sent a valid SIP request (e.g. SMS delivery report)",
+                elapsed_ms=elapsed,
+                details={"raw": final.raw_text if final else ""},
+            )
+
         if outcome == "invalid_response":
             return OracleVerdict(
                 verdict="suspicious",

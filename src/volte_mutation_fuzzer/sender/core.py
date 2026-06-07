@@ -37,6 +37,12 @@ _DEFAULT_PCSCF_IP: Final[str] = "172.22.0.21"
 _STATUS_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^SIP/2\.0\s+(\d{3})\s*(.*)$"
 )
+# SIP request line: "METHOD Request-URI SIP/2.0". The peer (UE) can legitimately
+# send us a request rather than a response — e.g. the SMS-over-IMS delivery
+# report (RP-ACK MESSAGE to the SMSC). That is valid SIP, not garbage.
+_REQUEST_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^([A-Za-z]+)\s+\S+\s+SIP/2\.0\s*$"
+)
 _MAX_UDP_RESPONSES: Final[int] = 8
 _TCP_READ_SIZE: Final[int] = 65535
 _CRLF = "\r\n"
@@ -77,6 +83,7 @@ def parse_sip_response(
     reason_phrase: str | None = None
     classification: ObservationClass = "invalid"
 
+    is_request = bool(lines) and _REQUEST_LINE_PATTERN.match(lines[0]) is not None
     if lines and (match := _STATUS_LINE_PATTERN.match(lines[0])):
         status_code = int(match.group(1))
         reason_phrase = match.group(2).strip() or None
@@ -92,6 +99,22 @@ def parse_sip_response(
             name, value = line.split(":", 1)
             headers[name.strip().casefold()] = value.strip()
 
+        if header_end < len(lines) - 1:
+            body = _CRLF.join(lines[header_end + 1 :])
+    elif is_request:
+        # Valid SIP request from the peer (e.g. UE's SMS delivery report). Parse
+        # headers/body like a response so the observation is complete; the
+        # absence of a status_code distinguishes it as a request.
+        classification = "request"
+        header_end = len(lines)
+        for index, line in enumerate(lines[1:], start=1):
+            if line == "":
+                header_end = index
+                break
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            headers[name.strip().casefold()] = value.strip()
         if header_end < len(lines) - 1:
             body = _CRLF.join(lines[header_end + 1 :])
 
@@ -808,6 +831,8 @@ class SIPSenderReactor:
             return "success"
         if selected.classification == "provisional":
             return "provisional"
+        if selected.classification == "request":
+            return "request_received"
         if selected.classification == "invalid":
             return "invalid_response"
         return "error"

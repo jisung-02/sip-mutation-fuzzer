@@ -10,7 +10,7 @@ from volte_mutation_fuzzer.sender.contracts import (
     SocketObservation,
     TargetEndpoint,
 )
-from volte_mutation_fuzzer.sender.core import SIPSenderReactor
+from volte_mutation_fuzzer.sender.core import SIPSenderReactor, parse_sip_response
 from volte_mutation_fuzzer.sender.real_ue import RouteCheckResult
 from volte_mutation_fuzzer.sip.common import SIPMethod
 from tests.sender._server import TCPResponder, UDPResponder
@@ -19,6 +19,29 @@ IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
 PCSCF_HOST = f"pcscf.{IMS_DOMAIN}"
 REALISTIC_REQUEST_URI = "sip:111111@10.20.20.8:8100"
 REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+
+
+class ParseSipResponseTests(unittest.TestCase):
+    def test_status_response_classified_by_code(self) -> None:
+        obs = parse_sip_response(b"SIP/2.0 200 OK\r\n\r\n", ("10.0.0.1", 5060))
+        self.assertEqual(obs.status_code, 200)
+        self.assertEqual(obs.classification, "success")
+
+    def test_inbound_request_classified_as_request_not_invalid(self) -> None:
+        # UE's SMS delivery report (RP-ACK MESSAGE) — a valid SIP request, not
+        # a response. Must be "request", not "invalid" (which became suspicious).
+        raw = (
+            b"MESSAGE sip:smsc.ims.mnc001.mcc001.3gppnetwork.org SIP/2.0\r\n"
+            b"CSeq: 22 MESSAGE\r\n"
+            b"Content-Type: application/vnd.3gpp.sms\r\n\r\n"
+        )
+        obs = parse_sip_response(raw, ("10.20.20.3", 49868))
+        self.assertEqual(obs.classification, "request")
+        self.assertIsNone(obs.status_code)
+
+    def test_garbage_still_invalid(self) -> None:
+        obs = parse_sip_response(b"\x00\x01 not sip at all\r\n", ("10.0.0.1", 5060))
+        self.assertEqual(obs.classification, "invalid")
 
 
 class SIPSenderReactorTests(unittest.TestCase):

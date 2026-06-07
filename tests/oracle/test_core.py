@@ -90,6 +90,13 @@ class SocketOracleTests(unittest.TestCase):
         verdict = self.oracle.judge(result, self.ctx)
         self.assertEqual(verdict.verdict, "suspicious")
 
+    def test_request_received_returns_normal(self) -> None:
+        # UE replying with a valid SIP request (e.g. SMS delivery report) is
+        # normal, not the suspicious "unparseable" false positive.
+        result = _make_result("request_received")
+        verdict = self.oracle.judge(result, self.ctx)
+        self.assertEqual(verdict.verdict, "normal")
+
     def test_200_ok_returns_normal(self) -> None:
         result = _make_result("success", status_code=200)
         verdict = self.oracle.judge(result, self.ctx)
