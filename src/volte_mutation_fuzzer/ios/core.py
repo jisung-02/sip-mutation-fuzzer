@@ -16,7 +16,7 @@ from volte_mutation_fuzzer.ios.contracts import (
     IosSnapshotResult,
     IosSyslogLine,
 )
-from volte_mutation_fuzzer.ios.patterns import IOS_ANOMALY_PATTERNS
+from volte_mutation_fuzzer.ios.patterns import IOS_ANOMALY_PATTERNS, IOS_NOISE_PATTERNS
 from volte_mutation_fuzzer.adb.patterns import AnomalyPattern
 
 _TELEPHONY_ASSERTION_PROCESSES = frozenset(
@@ -462,8 +462,12 @@ class IosAnomalyDetector:
         self,
         patterns: tuple[AnomalyPattern, ...] | None = None,
         max_events: int = 10_000,
+        noise_patterns: tuple[re.Pattern[str], ...] | None = None,
     ) -> None:
         self._patterns = patterns or IOS_ANOMALY_PATTERNS
+        self._noise_patterns = (
+            IOS_NOISE_PATTERNS if noise_patterns is None else noise_patterns
+        )
         self._events: deque[IosAnomalyEvent] = deque(maxlen=max_events)
         self._lock = threading.Lock()
         self._total_lines_scanned = 0
@@ -482,6 +486,8 @@ class IosAnomalyDetector:
 
     def feed_line(self, entry: IosSyslogLine) -> IosAnomalyEvent | None:
         self._total_lines_scanned += 1
+        if any(noise.search(entry.line) for noise in self._noise_patterns):
+            return None
         for pattern in self._patterns:
             if pattern.compiled.search(entry.line):
                 event = IosAnomalyEvent(

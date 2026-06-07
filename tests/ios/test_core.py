@@ -507,6 +507,25 @@ class IosAnomalyDetectorTests(unittest.TestCase):
         assert event is not None
         self.assertEqual(event.pattern_name, "EXC_CRASH_SIGABRT")
 
+    def test_suppresses_ari_tid_noise(self) -> None:
+        # CommCenter ARI "tid is not found under gid" is fixed-period background
+        # noise (would otherwise trip commcenter_error_burst on every run).
+        detector = IosAnomalyDetector()
+        noise = self._line(
+            "CommCenter(libARI.dylib)[101] <Error>: ari: (<private>:983) "
+            "tid (1) is not found under gid(2) mid (0x5c) with defined sz(7)"
+        )
+        self.assertIsNone(detector.feed_line(noise))
+
+    def test_real_crash_still_detected_alongside_noise_filter(self) -> None:
+        # The noise filter must not swallow genuine crashes.
+        detector = IosAnomalyDetector()
+        event = detector.feed_line(
+            self._line("CommCenter[101] <Error>: EXC_BAD_ACCESS at 0x10")
+        )
+        assert event is not None
+        self.assertEqual(event.pattern_name, "EXC_BAD_ACCESS")
+
     def test_detects_reportcrash_writing_ips(self) -> None:
         detector = IosAnomalyDetector()
         event = detector.feed_line(

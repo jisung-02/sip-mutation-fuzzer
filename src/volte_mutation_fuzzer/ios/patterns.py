@@ -1,4 +1,18 @@
+import re
+
 from volte_mutation_fuzzer.adb.patterns import AnomalyPattern
+
+# Lines matching any of these are routine iOS background noise and are dropped
+# before anomaly matching — they are never a fuzzing signal but trip the broader
+# patterns (e.g. commcenter_error_burst). iOS syslog has no clean per-line "tag"
+# like logcat, so suppression is by message content.
+IOS_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # CommCenter ARI radio-interface table lookup miss. Fires on a fixed ~5 s
+    # period independent of traffic (confirmed 2026-06-07: 5.0 s cadence vs a
+    # 0.67 s case rate over 300 cases -> uncorrelated), single identical message
+    # repeating. Pure internal housekeeping, not a reaction to fuzzed SIP.
+    re.compile(r"ari:.*\btid \(\d+\) is not found under gid"),
+)
 
 IOS_ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
     AnomalyPattern(
