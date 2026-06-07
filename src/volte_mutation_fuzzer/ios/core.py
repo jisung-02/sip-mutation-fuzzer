@@ -83,6 +83,12 @@ class IosConnector:
                 udid=self._udid or "unknown", error="no device connected"
             )
 
+        if self._udid is None and len(udids) > 1:
+            return IosDeviceInfo(
+                udid="unknown",
+                error="multiple devices connected; pass --ios-udid",
+            )
+
         target = self._udid or udids[0]
         if self._udid and self._udid not in udids:
             return IosDeviceInfo(udid=target, error="requested udid not connected")
@@ -93,7 +99,7 @@ class IosConnector:
             nonlocal first_error
             try:
                 result = subprocess.run(
-                    self._cmd("ideviceinfo", "-k", key),
+                    ["ideviceinfo", "-u", target, "-k", key],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -165,9 +171,7 @@ class IosConnector:
         except Exception as exc:
             return None, f"idevicediagnostics failed: {exc}"
         if result.returncode != 0:
-            message = (
-                result.stderr.strip() or result.stdout.strip() or "non-zero exit"
-            )
+            message = result.stderr.strip() or result.stdout.strip() or "non-zero exit"
             return None, f"idevicediagnostics failed: {message}"
         if not result.stdout:
             return None, "idevicediagnostics returned empty output"
@@ -386,11 +390,7 @@ class IosSyslogCollector:
 
     def slice(self, since_ts: float, until_ts: float) -> list[IosSyslogLine]:
         with self._lock:
-            return [
-                x
-                for x in self._lines
-                if since_ts < x.host_ts <= until_ts
-            ]
+            return [x for x in self._lines if since_ts < x.host_ts <= until_ts]
 
     def push_for_test(self, line: IosSyslogLine) -> None:
         """Test-only hook to inject lines without subprocess."""

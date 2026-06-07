@@ -2253,6 +2253,10 @@ class CampaignExecutorTests(unittest.TestCase):
             )
 
             with (
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.ios.core.IosConnector.check_device",
+                    return_value=IosDeviceInfo(udid="AUTO-123"),
+                ),
                 unittest.mock.patch.object(
                     executor._ios_collector,
                     "start",
@@ -2271,6 +2275,120 @@ class CampaignExecutorTests(unittest.TestCase):
 
             start_mock.assert_called_once()
             stop_mock.assert_called_once()
+
+    def test_run_auto_resolves_single_ios_udid_before_starting_collector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                cooldown_seconds=0.0,
+                results_dir=tmpdir,
+                output_name="test",
+                ios_enabled=True,
+                ios_udid=None,
+                adb_enabled=False,
+            )
+            executor = CampaignExecutor(cfg)
+            fake_case = CaseResult(
+                case_id=0,
+                seed=0,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+                verdict="normal",
+                reason="ok",
+                elapsed_ms=10.0,
+                reproduction_cmd="uv run fuzzer ...",
+                timestamp=1.0,
+            )
+
+            with (
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.ios.core.IosConnector.check_device",
+                    return_value=IosDeviceInfo(
+                        udid="AUTO-123",
+                        device_name="iPhone 16e",
+                    ),
+                ),
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "start",
+                ) as start_mock,
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "stop",
+                ),
+                unittest.mock.patch.object(
+                    executor,
+                    "_execute_case",
+                    return_value=fake_case,
+                ),
+            ):
+                executor.run()
+
+            start_mock.assert_called_once()
+            self.assertEqual(executor._ios_collector._config.udid, "AUTO-123")
+
+    def test_run_keeps_ios_udid_when_device_metadata_query_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = self._make_config(
+                "127.0.0.1",
+                5060,
+                methods=("OPTIONS",),
+                max_cases=1,
+                cooldown_seconds=0.0,
+                results_dir=tmpdir,
+                output_name="test",
+                ios_enabled=True,
+                ios_udid=None,
+                adb_enabled=False,
+            )
+            executor = CampaignExecutor(cfg)
+            fake_case = CaseResult(
+                case_id=0,
+                seed=0,
+                method="OPTIONS",
+                layer="model",
+                strategy="default",
+                verdict="normal",
+                reason="ok",
+                elapsed_ms=10.0,
+                reproduction_cmd="uv run fuzzer ...",
+                timestamp=1.0,
+            )
+
+            with (
+                unittest.mock.patch(
+                    "volte_mutation_fuzzer.ios.core.IosConnector.check_device",
+                    return_value=IosDeviceInfo(
+                        udid="AUTO-123",
+                        error="ideviceinfo ProductType failed: lockdown",
+                    ),
+                ),
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "start",
+                ) as start_mock,
+                unittest.mock.patch.object(
+                    executor._ios_collector,
+                    "stop",
+                ),
+                unittest.mock.patch.object(
+                    executor,
+                    "_execute_case",
+                    return_value=fake_case,
+                ),
+            ):
+                executor.run()
+
+            start_mock.assert_called_once()
+            self.assertEqual(executor._ios_collector._config.udid, "AUTO-123")
+            baseline_path = Path(tmpdir) / "test" / "ios_baseline" / "device_info.json"
+            body = json.loads(baseline_path.read_text(encoding="utf-8"))
+            self.assertEqual(body["udid"], "AUTO-123")
+            self.assertIn("ideviceinfo ProductType failed", body["error"])
 
     def test_run_writes_ios_baseline_when_ios_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

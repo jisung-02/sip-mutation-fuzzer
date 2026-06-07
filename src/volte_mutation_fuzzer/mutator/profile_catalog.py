@@ -9,6 +9,7 @@ MutationProfile = Literal[
     "ims_specific",
     "parser_breaker",
     "pixel_ims",
+    "iphone_ims",
 ]
 
 SUPPORTED_MUTATION_PROFILES: tuple[str, ...] = get_args(MutationProfile)
@@ -35,6 +36,9 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "pixel_session_timer_skew",
             "pixel_p_header_pressure",
             "pixel_capability_header_pressure",
+            "iphone_sdp_media_negotiation",
+            "iphone_security_agreement_pressure",
+            "iphone_identity_privacy_pressure",
         }
     ),
     "byte": frozenset(
@@ -58,8 +62,18 @@ PIXEL_IMS_WIRE_STRATEGIES: frozenset[str] = frozenset(
     }
 )
 
+IPHONE_IMS_WIRE_STRATEGIES: frozenset[str] = frozenset(
+    {
+        "iphone_sdp_media_negotiation",
+        "iphone_security_agreement_pressure",
+        "iphone_identity_privacy_pressure",
+    }
+)
+
 LEGACY_WIRE_STRATEGIES: frozenset[str] = (
-    SUPPORTED_STRATEGIES_BY_LAYER["wire"] - PIXEL_IMS_WIRE_STRATEGIES
+    SUPPORTED_STRATEGIES_BY_LAYER["wire"]
+    - PIXEL_IMS_WIRE_STRATEGIES
+    - IPHONE_IMS_WIRE_STRATEGIES
 )
 
 PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
@@ -135,6 +149,23 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
         ),
         "byte": frozenset({"default", "identity", "header_targeted"}),
     },
+    "iphone_ims": {
+        "model": frozenset(),
+        "wire": frozenset(
+            {
+                "default",
+                "identity",
+                "safe",
+                "header_whitespace_noise",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+                "iphone_sdp_media_negotiation",
+                "iphone_security_agreement_pressure",
+                "iphone_identity_privacy_pressure",
+            }
+        ),
+        "byte": frozenset({"default", "identity", "header_targeted"}),
+    },
 }
 
 PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -186,6 +217,18 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         "byte": ("header_targeted",),
     },
+    "iphone_ims": {
+        "wire": (
+            "iphone_sdp_media_negotiation",
+            "iphone_security_agreement_pressure",
+            "iphone_identity_privacy_pressure",
+            "sdp_struct_only",
+            "sdp_byte_edit",
+            "safe",
+            "header_whitespace_noise",
+        ),
+        "byte": ("header_targeted",),
+    },
 }
 
 IMS_PROFILE_HEADER_NAMES: frozenset[str] = frozenset(
@@ -225,6 +268,30 @@ PIXEL_IMS_HEADER_NAMES: frozenset[str] = frozenset(
         "supported",
         "require",
         "content-type",
+    }
+)
+
+IPHONE_IMS_HEADER_NAMES: frozenset[str] = frozenset(
+    {
+        "contact",
+        "accept",
+        "accept-contact",
+        "allow",
+        "content-type",
+        "p-called-party-id",
+        "p-asserted-identity",
+        "p-preferred-identity",
+        "p-access-network-info",
+        "p-preferred-service",
+        "p-visited-network-id",
+        "p-charging-vector",
+        "privacy",
+        "security-client",
+        "security-server",
+        "security-verify",
+        "proxy-require",
+        "require",
+        "supported",
     }
 )
 
@@ -285,7 +352,9 @@ def resolve_effective_strategy(
 
 
 __all__ = [
+    "IPHONE_IMS_HEADER_NAMES",
     "IMS_PROFILE_HEADER_NAMES",
+    "IPHONE_IMS_WIRE_STRATEGIES",
     "MutationProfile",
     "PIXEL_IMS_HEADER_NAMES",
     "PROFILE_ALLOWED_STRATEGIES",

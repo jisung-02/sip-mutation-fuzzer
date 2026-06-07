@@ -175,6 +175,25 @@ class SIPMutatorCLITests(unittest.TestCase):
             },
         )
 
+    def test_request_command_accepts_iphone_ims_profile_default(self) -> None:
+        result = self.runner.invoke(
+            self.app,
+            [
+                "request",
+                "OPTIONS",
+                "--profile",
+                "iphone_ims",
+                "--seed",
+                "1",
+            ],
+        )
+
+        payload = self.parse_output(result)
+
+        self.assertEqual(payload["profile"], "iphone_ims")
+        self.assertEqual(payload["final_layer"], "wire")
+        self.assertIn(payload["strategy"], {"safe", "header_whitespace_noise"})
+
     def test_response_command_generates_and_mutates_response_packet(self) -> None:
         result = self.runner.invoke(
             self.app,
@@ -310,6 +329,8 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("alias_port_desync", result.output)
         self.assertIn("pixel_sdp_media_negotiation", result.output)
         self.assertIn("pixel_capability_header_pressure", result.output)
+        self.assertIn("iphone_security_agreement_pressure", result.output)
+        self.assertIn("iphone_ims", result.output)
         self.assertIn("pixel_ims", result.output)
 
     def test_commands_reject_invalid_profile_without_traceback(self) -> None:

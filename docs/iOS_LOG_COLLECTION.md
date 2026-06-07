@@ -508,7 +508,7 @@ if config.ios_enabled:
 
 ```
 --ios-enabled                      iPhone 로그 수집 활성화
---ios-udid <UDID>                  대상 디바이스 UDID (미지정 시 자동)
+--ios-udid <UDID>                  대상 디바이스 UDID (USB iPhone 1대면 생략)
 --ios-diagnostics                  케이스별 idevicediagnostics 실행 (기본 off)
 --ios-crash-clear-on-pull          .ips pull 후 디바이스 쪽 삭제 (기본 on)
 ```

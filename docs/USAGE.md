@@ -65,7 +65,7 @@ uv run fuzzer campaign run \
 
 # 퍼징 설정
 --methods <LIST>            # SIP 메서드 (OPTIONS,INVITE,MESSAGE,...)
---profile <LIST>            # 변이 프로필 목록 (legacy,delivery_preserving,ims_specific,parser_breaker,pixel_ims; 쉼표 구분)
+--profile <LIST>            # 변이 프로필 목록 (legacy,delivery_preserving,ims_specific,parser_breaker,pixel_ims,iphone_ims; 쉼표 구분)
 --layer model,wire,byte     # 변이 레이어 선택
 --strategy <LIST>           # 변이 전략 (identity,default,state_breaker,safe,
                             # header_targeted,header_whitespace_noise,
@@ -132,8 +132,9 @@ uv run fuzzer campaign run \
 | `ims_specific` | IMS/3GPP 헤더, alias, routing 정보를 의식한 프로필이다. 실제 UE와 IMS 헤더 구조를 함께 볼 때 유용하다. |
 | `parser_breaker` | CRLF, length, tail truncation 같은 파서 경계 조건을 노리는 프로필이다. |
 | `pixel_ims` | Pixel-class UE 대상에서 `--pixel` 전달 경로와 함께 쓰는 프로필이다. SDP media/QoS/AMR negotiation, session timer, IMS P-header, feature-tag/capability header, Contact alias, Pixel-relevant byte target 을 집중 변조한다. |
+| `iphone_ims` | iPhone/CommCenter IMS 경로에서 `--ios` 로그 수집과 함께 쓰는 프로필이다. SDP media/QoS/AMR-WB negotiation, SIP Security Agreement, identity/privacy header, iPhone-relevant byte target 을 집중 변조한다. |
 
-Pixel 전용 strategy(`pixel_*`)는 `pixel_ims` 프로필에서만 허용된다. `legacy`, `delivery_preserving`, `ims_specific`, `parser_breaker`의 기존 default 풀은 Pixel 프로필 추가와 무관하게 유지된다.
+Pixel 전용 strategy(`pixel_*`)는 `pixel_ims` 프로필에서만, iPhone 전용 strategy(`iphone_*`)는 `iphone_ims` 프로필에서만 허용된다. `legacy`, `delivery_preserving`, `ims_specific`, `parser_breaker`의 기존 default 풀은 단말별 프로필 추가와 무관하게 유지된다.
 
 예시는 아래와 같다.
 
@@ -153,9 +154,17 @@ uv run fuzzer campaign run --target-host 127.0.0.1 \
 uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 111111 \
   --methods INVITE --pixel --profile pixel_ims --layer wire,byte \
   --strategy default --ipsec-mode native --max-cases 50
+
+# iPhone IMS 집중: `--ios` 로그 수집과 함께 사용
+uv run fuzzer campaign run --mode real-ue-direct --target-msisdn 222222 \
+  --methods INVITE --profile iphone_ims --layer wire,byte \
+  --strategy default --mt-invite-template a31 --ipsec-mode native --ios \
+  --max-cases 50
 ```
 
 Pixel 9 / Galaxy A17 슬롯(`111111`)에서 Pixel이 실제 대상일 때는 먼저 `--strategy identity --max-cases 1`로 baseline 180/200 응답을 확인한 뒤 `pixel_ims`를 적용한다. 과거 Pixel 캠페인에서는 native IPsec observer의 CRLF keepalive 오인과 ADB `GRIL-AudioMetricExt` / `ConnectivityMonitorStateMachine` 로그 노이즈가 timeout 또는 `stack_failure`를 흐린 사례가 있었으므로, `stack_failure`는 `observer_events`, SIP 응답, case별 ADB anomaly를 같이 보고 해석한다.
+
+iPhone 16e 슬롯(`222222`)에서 iPhone이 실제 대상일 때도 먼저 `--strategy identity --max-cases 1 --ios` baseline 으로 MT-INVITE 응답과 syslog/crash report 수집을 확인한다. USB iPhone 1대만 연결되어 있으면 UDID 는 자동 선택되어 syslog/crash pull/snapshot 에 동일하게 고정된다. Contact 가 user-less 형식이라 live resolver 가 실패하는 환경에서만 `VMF_MSISDN_TO_IP_222222=10.20.20.2` 를 명시한다.
 
 장기 실행은 결과 디렉터리와 별도 로그 파일을 같이 남긴다. Android 단말이 여러 대 연결될 수 있으면 `--adb-serial`을 명시한다.
 
@@ -182,6 +191,34 @@ nohup uv run fuzzer campaign run \
   --pcap-interface br-volte \
   --adb \
   --adb-serial <ANDROID_SERIAL> \
+  --output "$RUN_ID" \
+  > "results/${RUN_ID}.log" 2>&1 &
+echo $! > "results/${RUN_ID}.pid"
+```
+
+iPhone 장기 실행은 iOS 로그 수집을 같이 켠다. USB iPhone 1대만 연결하는 운영에서는 `--ios-udid` 를 쓰지 않는다.
+
+```bash
+mkdir -p results
+RUN_ID="iphone-ims-longrun-$(date +%Y%m%d-%H%M%S)"
+nohup uv run fuzzer campaign run \
+  --mode real-ue-direct \
+  --target-msisdn 222222 \
+  --methods INVITE \
+  --profile iphone_ims \
+  --layer wire,byte \
+  --strategy default \
+  --mt-invite-template a31 \
+  --ipsec-mode native \
+  --ios \
+  --mutations-per-case 2 \
+  --max-cases 1000 \
+  --timeout 5 \
+  --cooldown 0.5 \
+  --oracle-log-grace 8 \
+  --wait-idle-timeout 10 \
+  --pcap \
+  --pcap-interface br-volte \
   --output "$RUN_ID" \
   > "results/${RUN_ID}.log" 2>&1 &
 echo $! > "results/${RUN_ID}.pid"

@@ -123,6 +123,54 @@ class SIPMutatorTestCase(unittest.TestCase):
         )
         return parse_editable_from_wire(wire)
 
+    def build_iphone_invite_message(self) -> EditableSIPMessage:
+        body = (
+            "v=0\r\n"
+            "o=rue 3251 3251 IN IP4 172.22.0.16\r\n"
+            "s=-\r\n"
+            "c=IN IP4 172.22.0.16\r\n"
+            "t=0 0\r\n"
+            "m=audio 49196 RTP/AVP 107 106 105 104 101 102\r\n"
+            "b=AS:41\r\n"
+            "a=rtpmap:107 AMR-WB/16000\r\n"
+            "a=fmtp:107 octet-align=1;mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:105 AMR/8000\r\n"
+            "a=fmtp:105 mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:101 telephone-event/16000\r\n"
+            "a=fmtp:101 0-15\r\n"
+            "a=curr:qos local none\r\n"
+            "a=curr:qos remote none\r\n"
+            "a=des:qos mandatory local sendrecv\r\n"
+            "a=des:qos optional remote sendrecv\r\n"
+            "a=rtcp:49197\r\n"
+            "a=ptime:20\r\n"
+            "a=maxptime:240\r\n"
+            "a=sendrecv\r\n"
+        )
+        wire = (
+            "INVITE sip:001010000123512@10.20.20.2:63193 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 172.22.0.21:5100;branch=z9hG4bK-iphone\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            'Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"\r\n'
+            "P-Called-Party-ID: <tel:222222;phone-context=ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Asserted-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Preferred-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=0010100000000001\r\n"
+            "P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel\r\n"
+            "P-Charging-Vector: icid-value=iphone-fuzz-1;orig-ioi=ims.mnc001.mcc001.3gppnetwork.org\r\n"
+            "Privacy: none\r\n"
+            "Security-Verify: ipsec-3gpp;q=0.1;prot=esp;mod=trans;spi-c=200418294;spi-s=12070439;port-c=63193;port-s=61008;alg=hmac-sha-1-96;ealg=aes-cbc\r\n"
+            "Supported: 100rel,precondition,timer,sec-agree\r\n"
+            "Require: precondition,sec-agree\r\n"
+            "Proxy-Require: sec-agree\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(body.encode('utf-8'))}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+        return parse_editable_from_wire(wire)
+
     def build_context(self) -> DialogContext:
         return DialogContext(
             call_id=REALISTIC_CONTEXT_CALL_ID,
@@ -908,6 +956,178 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
             ),
         )
         self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "header_targeted")
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(any(start <= byte_index < end for _name, start, end in ranges))
+        self.assertNotEqual(case.packet_bytes, message.render().encode("utf-8"))
+
+    def test_iphone_ims_profile_advertises_iphone_strategies(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+            profile_supports_strategy,
+            resolve_effective_strategy,
+        )
+
+        for strategy in (
+            "iphone_sdp_media_negotiation",
+            "iphone_security_agreement_pressure",
+            "iphone_identity_privacy_pressure",
+        ):
+            with self.subTest(strategy=strategy):
+                self.assertTrue(
+                    profile_supports_strategy("iphone_ims", "wire", strategy)
+                )
+                self.assertFalse(profile_supports_strategy("legacy", "wire", strategy))
+                self.assertFalse(
+                    profile_supports_strategy("pixel_ims", "wire", strategy)
+                )
+        self.assertTrue(
+            profile_supports_strategy("iphone_ims", "byte", "header_targeted")
+        )
+        self.assertFalse(profile_supports_strategy("iphone_ims", "model", "default"))
+        self.assertIn("security-verify", IPHONE_IMS_HEADER_NAMES)
+        self.assertIn("p-called-party-id", IPHONE_IMS_HEADER_NAMES)
+
+        first = resolve_effective_strategy("iphone_ims", "wire", "default", 7)
+        second = resolve_effective_strategy("iphone_ims", "wire", "default", 7)
+        self.assertEqual(first, second)
+        self.assertIn(
+            first,
+            {
+                "iphone_sdp_media_negotiation",
+                "iphone_security_agreement_pressure",
+                "iphone_identity_privacy_pressure",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+                "safe",
+                "header_whitespace_noise",
+            },
+        )
+
+    def test_iphone_sdp_media_negotiation_mutates_sdp_and_updates_content_length(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_sdp_media_negotiation",
+                seed=21,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_sdp_media_negotiation")
+        self.assertEqual(case.records[0].operator, "iphone_sdp_media_negotiation")
+        self.assertRegex(case.records[0].target.path, r"^body:sdp:")
+        self.assert_content_length_matches_body(case.wire_text)
+
+    def test_iphone_security_agreement_pressure_mutates_security_headers(
+        self,
+    ) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+        )
+
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_security_agreement_pressure",
+                seed=22,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_security_agreement_pressure")
+        self.assertEqual(
+            case.records[0].operator,
+            "iphone_security_agreement_pressure",
+        )
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), IPHONE_IMS_HEADER_NAMES)
+        self.assertNotEqual(before_value, after_value)
+
+    def test_iphone_identity_privacy_pressure_mutates_identity_headers(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+        )
+
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_identity_privacy_pressure",
+                seed=23,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_identity_privacy_pressure")
+        self.assertEqual(case.records[0].operator, "iphone_identity_privacy_pressure")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), IPHONE_IMS_HEADER_NAMES)
+        self.assertNotEqual(before_value, after_value)
+
+    def test_iphone_ims_default_wire_skips_missing_prerequisites(self) -> None:
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123512@10.20.20.2 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = SIPMutator().mutate_editable(
+            message,
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="default",
+                seed=1,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertIn(case.strategy, {"safe", "header_whitespace_noise"})
+        self.assertEqual(case.final_layer, "wire")
+
+    def test_iphone_ims_byte_targeting_prefers_iphone_headers(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+        )
+
+        mutator = SIPMutator()
+        message = self.build_iphone_invite_message()
+
+        ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "iphone_ims",
+        )
+
+        self.assertTrue(ranges)
+        self.assertTrue(
+            all(
+                name.casefold() in IPHONE_IMS_HEADER_NAMES
+                for name, _start, _end in ranges
+            )
+        )
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                profile="iphone_ims",
+                layer="byte",
+                strategy="default",
+                seed=24,
+            ),
+        )
+        self.assertEqual(case.profile, "iphone_ims")
         self.assertEqual(case.strategy, "header_targeted")
         record = case.records[0]
         self.assertRegex(record.target.path, r"^byte\[\d+\]$")

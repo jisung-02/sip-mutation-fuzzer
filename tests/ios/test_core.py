@@ -57,9 +57,7 @@ class SyslogLineParserTests(unittest.TestCase):
 class IosConnectorTests(unittest.TestCase):
     def test_cmd_without_udid(self) -> None:
         connector = IosConnector()
-        self.assertEqual(
-            connector._cmd("idevicesyslog"), ["idevicesyslog"]
-        )
+        self.assertEqual(connector._cmd("idevicesyslog"), ["idevicesyslog"])
 
     def test_cmd_with_udid(self) -> None:
         connector = IosConnector(udid="ABC-123")
@@ -69,7 +67,10 @@ class IosConnectorTests(unittest.TestCase):
         )
 
     def test_check_device_connected(self) -> None:
+        seen_commands: list[list[str]] = []
+
         def fake_run(cmd, **kwargs):
+            seen_commands.append(cmd)
             if cmd == ["idevice_id", "-l"]:
                 return _DummyCompletedProcess(stdout="ABC-123\n")
             if cmd[:2] == ["ideviceinfo", "-u"] and cmd[-2:] == ["-k", "ProductType"]:
@@ -89,6 +90,50 @@ class IosConnectorTests(unittest.TestCase):
         self.assertEqual(info.product_version, "17.5.1")
         self.assertEqual(info.device_name, "iPhone 12")
         self.assertIsNone(info.error)
+        self.assertIn(
+            ["ideviceinfo", "-u", "ABC-123", "-k", "ProductType"],
+            seen_commands,
+        )
+
+    def test_check_device_auto_selects_single_connected_udid(self) -> None:
+        seen_commands: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen_commands.append(cmd)
+            if cmd == ["idevice_id", "-l"]:
+                return _DummyCompletedProcess(stdout="AUTO-123\n")
+            if cmd == ["ideviceinfo", "-u", "AUTO-123", "-k", "ProductType"]:
+                return _DummyCompletedProcess(stdout="iPhone17,5\n")
+            return _DummyCompletedProcess(stdout="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            info = IosConnector().check_device()
+
+        self.assertEqual(info.udid, "AUTO-123")
+        self.assertEqual(info.product_type, "iPhone17,5")
+        self.assertIn(
+            ["ideviceinfo", "-u", "AUTO-123", "-k", "ProductType"],
+            seen_commands,
+        )
+
+    def test_check_device_requires_explicit_udid_when_multiple_connected(self) -> None:
+        seen_commands: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen_commands.append(cmd)
+            if cmd == ["idevice_id", "-l"]:
+                return _DummyCompletedProcess(stdout="ABC-123\nDEF-456\n")
+            return _DummyCompletedProcess(stdout="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            info = IosConnector().check_device()
+
+        self.assertEqual(info.udid, "unknown")
+        self.assertEqual(
+            info.error,
+            "multiple devices connected; pass --ios-udid",
+        )
+        self.assertEqual(seen_commands, [["idevice_id", "-l"]])
 
     def test_check_device_not_connected(self) -> None:
         with patch("subprocess.run", return_value=_DummyCompletedProcess(stdout="")):
@@ -403,7 +448,9 @@ def time_future() -> float:
 
 
 class IosAnomalyDetectorTests(unittest.TestCase):
-    def _line(self, text: str, ts: float = 1.0, process: str = "CommCenter") -> IosSyslogLine:
+    def _line(
+        self, text: str, ts: float = 1.0, process: str = "CommCenter"
+    ) -> IosSyslogLine:
         return IosSyslogLine(host_ts=ts, process=process, line=text)
 
     def test_detects_exc_bad_access(self) -> None:
@@ -478,11 +525,13 @@ class IosAnomalyDetectorTests(unittest.TestCase):
 
     def test_feed_lines_batches_matches(self) -> None:
         detector = IosAnomalyDetector()
-        events = detector.feed_lines([
-            self._line("normal"),
-            self._line("EXC_BAD_ACCESS"),
-            self._line("[IMS] deregistration"),
-        ])
+        events = detector.feed_lines(
+            [
+                self._line("normal"),
+                self._line("EXC_BAD_ACCESS"),
+                self._line("[IMS] deregistration"),
+            ]
+        )
         self.assertEqual(len(events), 2)
 
     def test_max_events_enforced(self) -> None:

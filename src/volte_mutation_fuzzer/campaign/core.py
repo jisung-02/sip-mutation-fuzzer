@@ -60,7 +60,10 @@ from volte_mutation_fuzzer.sender.contracts import (
     TransportProtocol,
 )
 from volte_mutation_fuzzer.sender.core import SIPSenderReactor
-from volte_mutation_fuzzer.sender.real_ue import RealUEDirectResolver, check_ipsec_sa_alive
+from volte_mutation_fuzzer.sender.real_ue import (
+    RealUEDirectResolver,
+    check_ipsec_sa_alive,
+)
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
 from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
 from volte_mutation_fuzzer.sip.completeness import (
@@ -75,7 +78,9 @@ from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
 from volte_mutation_fuzzer.campaign.report import HtmlReportGenerator
 
 _DEFAULT_PCSCF_IP: str = "172.22.0.21"
-_MT_TEMPLATE_FRAG_LIMIT: int = 65535  # bytes; raised — Docker bridge IP reassembly works fine in practice
+_MT_TEMPLATE_FRAG_LIMIT: int = (
+    65535  # bytes; raised — Docker bridge IP reassembly works fine in practice
+)
 
 # INVITE teardown constants
 _CANCEL_MAX_RETRIES: int = 3
@@ -259,7 +264,9 @@ class ResultStore:
         with self._path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-    def find_checkpoint(self) -> tuple[int, CampaignSummary, str, str, "CampaignConfig"] | None:
+    def find_checkpoint(
+        self,
+    ) -> tuple[int, CampaignSummary, str, str, "CampaignConfig"] | None:
         """Return (last_case_id, summary, campaign_id, started_at, original_config) or None."""
         if not self._path.exists():
             return None
@@ -388,15 +395,19 @@ class CampaignExecutor:
         self._config = config
         _gen_settings = GeneratorSettings()
         if config.target_msisdn is not None and config.mode == "real-ue-direct":
-            _gen_settings = _gen_settings.model_copy(update={
-                "to_user": config.target_msisdn,
-                "request_uri_user": config.target_msisdn,
-            })
+            _gen_settings = _gen_settings.model_copy(
+                update={
+                    "to_user": config.target_msisdn,
+                    "request_uri_user": config.target_msisdn,
+                }
+            )
         self._generator = generator or SIPGenerator(_gen_settings)
         self._mutator = mutator or SIPMutator()
         self._sender = sender or SIPSenderReactor()
         self._adb_collector: Any | None = None
         self._ios_collector: Any | None = None
+        self._ios_udid: str | None = config.ios_udid
+        self._ios_device_info: Any | None = None
         _docker_mode = config.mode == "real-ue-direct"
         if oracle is not None:
             self._oracle = oracle
@@ -437,7 +448,7 @@ class CampaignExecutor:
                 )
 
                 ios_cfg = IosCollectorConfig(
-                    udid=config.ios_udid,
+                    udid=self._ios_udid,
                     filter_processes=config.ios_filter_processes,
                 )
                 ios_collector = IosSyslogCollector(ios_cfg)
@@ -513,7 +524,11 @@ class CampaignExecutor:
 
         # Call state checker for INVITE teardown verification
         self._call_state_checker: "CallStateChecker | None" = None
-        if config.adb_enabled and config.mt_invite_template is not None and config.wait_idle_timeout_seconds > 0:
+        if (
+            config.adb_enabled
+            and config.mt_invite_template is not None
+            and config.wait_idle_timeout_seconds > 0
+        ):
             from volte_mutation_fuzzer.adb.call_state import CallStateChecker
 
             self._call_state_checker = CallStateChecker(
@@ -593,6 +608,7 @@ class CampaignExecutor:
         if self._adb_collector is not None:
             self._adb_collector.start()
         if self._ios_collector is not None:
+            self._ensure_ios_device_info()
             self._ios_collector.start()
         self._capture_ios_baseline()
         consecutive_failures = 0
@@ -668,9 +684,8 @@ class CampaignExecutor:
 
                 # Console progress reporting
                 adb_healthy: bool | None = None
-                if (
-                    self._adb_collector is not None
-                    and hasattr(self._adb_collector, "is_healthy")
+                if self._adb_collector is not None and hasattr(
+                    self._adb_collector, "is_healthy"
                 ):
                     adb_healthy = self._adb_collector.is_healthy
                     if not adb_healthy:
@@ -724,6 +739,7 @@ class CampaignExecutor:
                 self._adb_collector is not None or self._ios_collector is not None
             ):
                 import time as _time
+
                 logger.info(
                     "post-campaign log grace: collecting for %.0f s", post_grace
                 )
@@ -739,7 +755,8 @@ class CampaignExecutor:
 
         final_status = (
             "aborted"
-            if sa_checked_dead or (cb_threshold > 0 and consecutive_failures >= cb_threshold)
+            if sa_checked_dead
+            or (cb_threshold > 0 and consecutive_failures >= cb_threshold)
             else "completed"
         )
         campaign = campaign.model_copy(
@@ -797,19 +814,13 @@ class CampaignExecutor:
             # Checked before mt_invite_template because the two are mutually
             # exclusive (validated in CampaignConfig); this ordering is a
             # safety belt in case both ever leak through.
-            if (
-                self._packet_file_bytes is not None
-                and spec.response_code is None
-            ):
+            if self._packet_file_bytes is not None and spec.response_code is None:
                 return self._execute_packet_file_case(
                     spec, timestamp, case_started_monotonic
                 )
 
             # MT template path (real-ue-direct with 3GPP format)
-            if (
-                self._mt_template_text is not None
-                and spec.response_code is None
-            ):
+            if self._mt_template_text is not None and spec.response_code is None:
                 return self._execute_mt_template_case(
                     spec, timestamp, case_started_monotonic
                 )
@@ -834,7 +845,9 @@ class CampaignExecutor:
                 capture.start()
             try:
                 send_result = self._sender.send_artifact(
-                    artifact, self._target, collect_all_responses=(spec.method == "INVITE")
+                    artifact,
+                    self._target,
+                    collect_all_responses=(spec.method == "INVITE"),
                 )
             finally:
                 if capture is not None:
@@ -929,7 +942,10 @@ class CampaignExecutor:
             )
 
     def _resolve_ports_live(
-        self, msisdn: str, *, ue_ip: str | None = None,
+        self,
+        msisdn: str,
+        *,
+        ue_ip: str | None = None,
     ) -> tuple[int, int]:
         """Resolve (port_pc, port_ps) fresh on every call.
 
@@ -1025,9 +1041,7 @@ class CampaignExecutor:
                     f":codes={[o.status_code for o in cancel_result.responses]}"
                 )
             except Exception as exc:
-                events.append(
-                    f"teardown:cancel-error:attempt={attempt + 1}:{exc}"
-                )
+                events.append(f"teardown:cancel-error:attempt={attempt + 1}:{exc}")
 
             if attempt < _CANCEL_MAX_RETRIES - 1:
                 time.sleep(_CANCEL_RETRY_INTERVAL)
@@ -1077,7 +1091,8 @@ class CampaignExecutor:
             #    Pass ue_ip so the protected-port lookup is filtered against the
             #    same generation as the host we just resolved on the line above.
             port_pc, port_ps = self._resolve_ports_live(
-                config.target_msisdn, ue_ip=ue_ip,
+                config.target_msisdn,
+                ue_ip=ue_ip,
             )
 
             # 3. Build baseline payload
@@ -1105,7 +1120,9 @@ class CampaignExecutor:
             elif spec.method == "MESSAGE":
                 # SMS-over-IP MESSAGE carries binary RP-DATA, so keep it off the
                 # UTF-8 wire_text path.
-                from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet_bytes
+                from volte_mutation_fuzzer.generator.mt_packet import (
+                    build_mt_packet_bytes,
+                )
 
                 packet_bytes = build_mt_packet_bytes(
                     method=spec.method,
@@ -1121,6 +1138,7 @@ class CampaignExecutor:
             else:
                 # All other methods use the generic 3GPP builder
                 from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
+
                 wire_text = build_mt_packet(
                     method=spec.method,
                     impi=impi,
@@ -1143,7 +1161,8 @@ class CampaignExecutor:
                     len(packet_bytes)
                     if packet_bytes is not None
                     else len((wire_text or "").encode("utf-8"))
-                ) > _MT_TEMPLATE_FRAG_LIMIT
+                )
+                > _MT_TEMPLATE_FRAG_LIMIT
             ):
                 return self._build_case_result(
                     spec,
@@ -1201,7 +1220,10 @@ class CampaignExecutor:
                 )
 
             # 8. Build SendArtifact
-            if mutated_wire.final_layer == "wire" and mutated_wire.wire_text is not None:
+            if (
+                mutated_wire.final_layer == "wire"
+                and mutated_wire.wire_text is not None
+            ):
                 artifact = SendArtifact(
                     wire_text=mutated_wire.wire_text,
                     preserve_via=config.preserve_via,
@@ -1398,7 +1420,8 @@ class CampaignExecutor:
             # 2. Live port_pc / port_ps lookup — same rationale as the MT
             #    template path: stale ports masquerade as timeouts.
             port_pc, _port_ps = self._resolve_ports_live(
-                config.target_msisdn, ue_ip=ue_ip,
+                config.target_msisdn,
+                ue_ip=ue_ip,
             )
 
             # 3. Fragmentation guard for null-mode plaintext UDP. Same threshold
@@ -1770,9 +1793,7 @@ class CampaignExecutor:
         context = OracleContext(
             method=spec.method,
             timeout_threshold_ms=config.timeout_seconds * 1000,
-            log_grace_seconds=config.oracle_log_grace_seconds_for_method(
-                spec.method
-            ),
+            log_grace_seconds=config.oracle_log_grace_seconds_for_method(spec.method),
         )
         process_name = config.process_name if config.check_process else None
         verdict = self._oracle.evaluate(
@@ -2000,7 +2021,9 @@ class CampaignExecutor:
             )
             related_method = spec.related_method or spec.method
             transport_arg = (
-                f" --transport {cfg.transport}" if cfg.transport.upper() != "UDP" else ""
+                f" --transport {cfg.transport}"
+                if cfg.transport.upper() != "UDP"
+                else ""
             )
             ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
             max_ops_arg = (
@@ -2066,7 +2089,9 @@ class CampaignExecutor:
         try:
             from volte_mutation_fuzzer.adb.core import AdbConnector
 
-            snapshot_until = snapshot_until if snapshot_until is not None else time.time()
+            snapshot_until = (
+                snapshot_until if snapshot_until is not None else time.time()
+            )
             adb_snapshot_dir = str(
                 self._campaign_dir / "adb_snapshots" / f"case_{spec.case_id}"
             )
@@ -2092,15 +2117,13 @@ class CampaignExecutor:
             return
 
         try:
-            from volte_mutation_fuzzer.ios.core import IosConnector
-
             baseline_dir = self._campaign_dir / "ios_baseline"
             baseline_dir.mkdir(parents=True, exist_ok=True)
             device_info_path = baseline_dir / "device_info.json"
             if device_info_path.exists():
                 return
 
-            info = IosConnector(udid=config.ios_udid).check_device()
+            info = self._ensure_ios_device_info()
             payload = info.model_dump(mode="json")
             payload["captured_at"] = datetime.now(timezone.utc).isoformat()
             device_info_path.write_text(
@@ -2124,11 +2147,13 @@ class CampaignExecutor:
         try:
             from volte_mutation_fuzzer.ios.core import IosAnomalyDetector, IosConnector
 
-            snapshot_until = snapshot_until if snapshot_until is not None else time.time()
+            snapshot_until = (
+                snapshot_until if snapshot_until is not None else time.time()
+            )
             ios_snapshot_dir = str(
                 self._campaign_dir / "ios_snapshots" / f"case_{spec.case_id}"
             )
-            IosConnector(udid=config.ios_udid).take_snapshot(
+            IosConnector(udid=self._ios_udid).take_snapshot(
                 ios_snapshot_dir,
                 collector=self._ios_collector,
                 syslog_since=timestamp,
@@ -2144,6 +2169,27 @@ class CampaignExecutor:
                 exc,
             )
             return None
+
+    def _ensure_ios_device_info(self) -> Any:
+        config = self._config
+        if not config.ios_enabled:
+            raise RuntimeError("iOS collection is not enabled")
+        if self._ios_device_info is not None:
+            return self._ios_device_info
+
+        from volte_mutation_fuzzer.ios.core import IosConnector
+
+        info = IosConnector(udid=self._ios_udid).check_device()
+        if info.error is not None and not info.error.startswith("ideviceinfo "):
+            raise RuntimeError(f"iOS device check failed: {info.error}")
+
+        self._ios_udid = info.udid
+        self._ios_device_info = info
+        if self._ios_collector is not None:
+            self._ios_collector._config = self._ios_collector._config.model_copy(
+                update={"udid": info.udid}
+            )
+        return info
 
     def _persist_case_artifacts(
         self,

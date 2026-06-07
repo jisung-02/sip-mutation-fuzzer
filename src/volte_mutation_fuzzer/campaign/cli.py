@@ -188,7 +188,10 @@ def run_command(
     ] = False,
     ios_udid: Annotated[
         str | None,
-        typer.Option("--ios-udid", help="Target iPhone UDID (auto if omitted)."),
+        typer.Option(
+            "--ios-udid",
+            help="Target iPhone UDID. Omit when exactly one iPhone is connected.",
+        ),
     ] = None,
     ios_filter_processes: Annotated[
         str | None,
