@@ -13,7 +13,7 @@ Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"
 P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={{cell_id}}
 P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel
 P-Early-Media: supported
-Supported: 100rel,histinfo,join,norefersub,precondition,replaces,timer,sec-agree
+Supported: 100rel,histinfo,join,norefersub,replaces,timer,sec-agree
 Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK,NOTIFY,MESSAGE,REFER
 Accept: application/sdp,application/3gpp-ims+xml
 Session-Expires: 1800
@@ -49,10 +49,6 @@ a=rtpmap:101 telephone-event/16000
 a=fmtp:101 0-15
 a=rtpmap:102 telephone-event/8000
 a=fmtp:102 0-15
-a=curr:qos local none
-a=curr:qos remote none
-a=des:qos mandatory local sendrecv
-a=des:qos optional remote sendrecv
 a=sendrecv
 a=rtcp:{{sdp_rtcp_port}}
 a=ptime:20
