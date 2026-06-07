@@ -12,6 +12,13 @@ IOS_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
     # 0.67 s case rate over 300 cases -> uncorrelated), single identical message
     # repeating. Pure internal housekeeping, not a reaction to fuzzed SIP.
     re.compile(r"ari:.*\btid \(\d+\) is not found under gid"),
+    # runningboardd service-registration notices like
+    #   "[xpcservice<...CommCenter...>] is not RunningBoard jetsam managed."
+    # These co-mention a telephony process and "jetsam" and tripped the
+    # jetsam_kill critical pattern (false stack_failure, 2026-06-07), but they
+    # are benign <Notice> status reports, never a kill. Real jetsam kills are
+    # logged by the kernel/memorystatus with "killing", not by runningboardd.
+    re.compile(r"RunningBoard jetsam managed"),
 )
 
 IOS_ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (

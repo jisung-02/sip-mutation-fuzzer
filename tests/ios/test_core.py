@@ -526,6 +526,29 @@ class IosAnomalyDetectorTests(unittest.TestCase):
         assert event is not None
         self.assertEqual(event.pattern_name, "EXC_BAD_ACCESS")
 
+    def test_suppresses_runningboard_jetsam_managed_notice(self) -> None:
+        # Benign runningboardd registration notice that co-mentions a telephony
+        # process and "jetsam" — must not be flagged jetsam_kill.
+        detector = IosAnomalyDetector()
+        notice = self._line(
+            "[xpcservice<com.apple.TelephonyBlastDoorService("
+            "[osservice<com.apple.CommCenter>:101])>] is not RunningBoard jetsam managed.",
+            process="runningboardd",
+        )
+        self.assertIsNone(detector.feed_line(notice))
+
+    def test_real_jetsam_kill_still_detected(self) -> None:
+        detector = IosAnomalyDetector()
+        event = detector.feed_line(
+            self._line(
+                "kernel: memorystatus: killing_specific_process pid 101 "
+                "[CommCenter] jetsam",
+                process="kernel",
+            )
+        )
+        assert event is not None
+        self.assertEqual(event.pattern_name, "jetsam_kill")
+
     def test_detects_reportcrash_writing_ips(self) -> None:
         detector = IosAnomalyDetector()
         event = detector.feed_line(
