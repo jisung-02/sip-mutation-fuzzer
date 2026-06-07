@@ -41,7 +41,10 @@ COOLDOWN=0                    # kamailio 486=alive fix lets cooldown 0 run witho
 EXTRA_FLAGS=""
 [[ "$METHOD" == "INVITE" ]] && EXTRA_FLAGS="--no-teardown"
 
-FUZZER_DIR="${FUZZER_DIR:-$HOME/Desktop/fuzzer}"
+# Derive the fuzzer dir from this script's location (scripts/..), so it works
+# under sudo too (sudo resets $HOME to /root).
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FUZZER_DIR="${FUZZER_DIR:-$(dirname "$_SCRIPT_DIR")}"
 PCSCF_CONTAINER="pcscf"
 MASTER_LOG="$FUZZER_DIR/results/fuzz_rotation_${METHOD}.log"
 # ---------------------------------------------------------------------------
