@@ -169,6 +169,10 @@ _IPHONE_OPTION_TAG_HEADER_NAMES: frozenset[str] = frozenset(
     {"supported", "require", "proxy-require"}
 )
 
+_IPHONE_CAPABILITY_HEADER_NAMES: frozenset[str] = frozenset(
+    {"contact", "accept-contact", "allow", "allow-events", "accept", "content-type"}
+)
+
 _IPHONE_IDENTITY_PRIVACY_HEADER_NAMES: frozenset[str] = frozenset(
     {
         "p-called-party-id",
@@ -717,6 +721,11 @@ class SIPMutator:
                 editable_message,
                 _IPHONE_OPTION_TAG_HEADER_NAMES,
             )
+        if strategy == "iphone_capability_negotiation_pressure" and layer == "wire":
+            return editable_message is not None and self._has_any_header(
+                editable_message,
+                _IPHONE_CAPABILITY_HEADER_NAMES,
+            )
         if layer == "wire" and strategy in {
             "sdp_boundary_only",
             "sdp_struct_only",
@@ -1175,6 +1184,7 @@ class SIPMutator:
                 "iphone_security_agreement_pressure",
                 "iphone_identity_privacy_pressure",
                 "iphone_option_tag_negotiation",
+                "iphone_capability_negotiation_pressure",
             }:
                 raise ValueError(f"unsupported wire mutation strategy: {strategy}")
             return
@@ -1687,6 +1697,11 @@ class SIPMutator:
             return self._apply_iphone_identity_privacy_pressure(editable_message, rng)
         if strategy == "iphone_option_tag_negotiation":
             return self._apply_iphone_option_tag_negotiation(editable_message, rng)
+        if strategy == "iphone_capability_negotiation_pressure":
+            return self._apply_iphone_capability_negotiation_pressure(
+                editable_message,
+                rng,
+            )
         return None
 
     def _apply_null_byte_only(
@@ -2904,6 +2919,95 @@ class SIPMutator:
             before=(header.name, header.value),
             after=(header.name, mutated_value),
             note=f"variant=option_tag.{variant_name};header={header_key}",
+        )
+
+    def _apply_iphone_capability_negotiation_pressure(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        candidates = [
+            (index, header)
+            for index, header in enumerate(editable_message.headers)
+            if self._header_name_key(header.name) in _IPHONE_CAPABILITY_HEADER_NAMES
+        ]
+        if not candidates:
+            raise ValueError(
+                "iphone_capability_negotiation_pressure requires a capability header"
+            )
+
+        index, header = candidates[rng.randrange(len(candidates))]
+        header_key = self._header_name_key(header.name)
+        token = f"{rng.getrandbits(32):08x}"
+        if header_key == "contact":
+            variant_name = "contact"
+            if ">" in header.value:
+                uri_part, suffix = header.value.split(">", 1)
+                values = (
+                    f"{uri_part}>{suffix};audio;audio;+g.3gpp.smsip;"
+                    '+g.3gpp.icsi-ref="";iphone-cap='
+                    f"{token}",
+                    f'{uri_part}>{suffix};+sip.instance="<urn:uuid:{token}>";'
+                    "reg-id=0;reg-id=1;+g.3gpp.mid-call",
+                    f"{uri_part}>{suffix};video;audio;+g.3gpp.smsip;"
+                    f"methods=INVITE;methods=UPDATE;iphone-cap={token}",
+                )
+                mutated_value = values[rng.randrange(len(values))]
+            else:
+                mutated_value = f"{header.value};audio;audio;iphone-cap={token}"
+        elif header_key == "accept-contact":
+            variant_name = "accept_contact"
+            values = (
+                '*;+g.3gpp.icsi-ref="";explicit;require;+g.3gpp.smsip',
+                '*;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";'
+                '+g.3gpp.icsi-ref="";explicit;require',
+                f"*;audio;video;+g.3gpp.smsip;+g.3gpp.mid-call;iphone-cap={token}",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "allow":
+            variant_name = "allow"
+            values = (
+                "INVITE,INVITE,PRACK,UPDATE,UPDATE,",
+                "ACK,BYE,CANCEL,INFO,PRACK,UNKNOWNIPHONE",
+                "INVITE PRACK UPDATE INFO MESSAGE",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "allow-events":
+            variant_name = "allow_events"
+            values = (
+                "refer,refer,presence",
+                f"presence;iphone-cap={token}",
+                "",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        elif header_key == "accept":
+            variant_name = "accept"
+            values = (
+                "application/sdp,,application/3gpp-ims+xml",
+                "application/sdp;q=1.5,application/3gpp-ims+xml;q=-0.1",
+                f"application/iphone-{token},application/sdp",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+        else:
+            variant_name = "content_type"
+            values = (
+                "application/sdp;handling=required;handling=optional",
+                "application/sdp,application/3gpp-ims+xml",
+                f"application/sdp;charset=utf-8;boundary=iphone-{token}",
+            )
+            mutated_value = values[rng.randrange(len(values))]
+
+        headers = list(editable_message.headers)
+        headers[index] = header.model_copy(update={"value": mutated_value})
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path=f"header[{index}].capability"),
+            operator="iphone_capability_negotiation_pressure",
+            before=(header.name, header.value),
+            after=(header.name, mutated_value),
+            note=f"variant=capability.{variant_name};header={header_key}",
         )
 
     def _apply_iphone_identity_privacy_pressure(

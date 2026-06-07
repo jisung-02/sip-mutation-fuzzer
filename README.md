@@ -9,12 +9,14 @@ SIP는 VoIP, VoLTE, IMS 기반 메시징 등에서 세션을 설정·변경·종
 - [docs/AI_AGENT_GUIDE.md](docs/AI_AGENT_GUIDE.md): AI/에이전트용 우선순위, 문서 읽기 순서, skill 추천, mutation profile 축 가이드
 - [docs/AI_AGENT_GUIDE_EXPLAINED.md](docs/AI_AGENT_GUIDE_EXPLAINED.md): 위 AI 가이드가 왜 필요한지 사람이 이해하기 위한 설명 문서
 - [docs/README.md](docs/README.md): 전체 문서 인덱스
+- [docs/USAGE.md](docs/USAGE.md): 현재 CLI와 실기기 캠페인 실행 예시, profile/strategy 사용법
 - [docs/기획/PRD.md](docs/기획/PRD.md): 프로젝트 목표, 범위, 요구사항, 완료 기준
 - [docs/기획/GENERATOR_PRD.md](docs/기획/GENERATOR_PRD.md): Generator 상세 설계 문서
 - [docs/기획/MUTATOR_PRD.md](docs/기획/MUTATOR_PRD.md): Mutator 상세 설계 문서 (model/wire/byte 변조 + Typer CLI 설계 포함)
 - [docs/기획/PHASE4_PRD.md](docs/기획/PHASE4_PRD.md): historical softphone-first Sender/Reactor 설계 문서
 - [docs/결과/GENERATOR-구현-결과.md](docs/결과/GENERATOR-구현-결과.md): Generator 구현 및 CLI 적용 결과
 - [docs/결과/SIP-공격면-우선순위표.md](docs/결과/SIP-공격면-우선순위표.md): 공격면 우선순위 문서
+- [docs/superpowers/specs/2026-06-07-iphone-ims-mutation-profile-design.md](docs/superpowers/specs/2026-06-07-iphone-ims-mutation-profile-design.md): iPhone IMS mutation profile과 capability negotiation 전략 설계
 - [docs/프로토콜/단말-기준-SIP-메시지-분류.md](docs/프로토콜/단말-기준-SIP-메시지-분류.md): 단말 기준 SIP 메시지 전체 분류
 - [docs/프로토콜/요청-패킷-예시.md](docs/프로토콜/요청-패킷-예시.md): 요청 패킷 예시 문서
 - [docs/프로토콜/응답-패킷-예시.md](docs/프로토콜/응답-패킷-예시.md): 응답 패킷 예시 문서

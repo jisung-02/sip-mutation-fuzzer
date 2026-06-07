@@ -196,6 +196,7 @@ class SIPMutatorCLITests(unittest.TestCase):
             payload["strategy"],
             {
                 "iphone_option_tag_negotiation",
+                "iphone_capability_negotiation_pressure",
                 "safe",
                 "header_whitespace_noise",
             },
@@ -338,6 +339,7 @@ class SIPMutatorCLITests(unittest.TestCase):
         self.assertIn("pixel_capability_header_pressure", result.output)
         self.assertIn("iphone_security_agreement_pressure", result.output)
         self.assertIn("iphone_option_tag_negotiation", result.output)
+        self.assertIn("iphone_capability_negotiation_pressure", result.output)
         self.assertIn("iphone_ims", result.output)
         self.assertIn("pixel_ims", result.output)
 

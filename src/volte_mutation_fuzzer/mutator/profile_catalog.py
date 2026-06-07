@@ -40,6 +40,7 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "iphone_security_agreement_pressure",
             "iphone_identity_privacy_pressure",
             "iphone_option_tag_negotiation",
+            "iphone_capability_negotiation_pressure",
         }
     ),
     "byte": frozenset(
@@ -69,6 +70,7 @@ IPHONE_IMS_WIRE_STRATEGIES: frozenset[str] = frozenset(
         "iphone_security_agreement_pressure",
         "iphone_identity_privacy_pressure",
         "iphone_option_tag_negotiation",
+        "iphone_capability_negotiation_pressure",
     }
 )
 
@@ -165,6 +167,7 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
                 "iphone_security_agreement_pressure",
                 "iphone_identity_privacy_pressure",
                 "iphone_option_tag_negotiation",
+                "iphone_capability_negotiation_pressure",
             }
         ),
         "byte": frozenset({"default", "identity", "header_targeted"}),
@@ -225,6 +228,7 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
             "iphone_sdp_media_negotiation",
             "iphone_security_agreement_pressure",
             "iphone_option_tag_negotiation",
+            "iphone_capability_negotiation_pressure",
             "iphone_identity_privacy_pressure",
             "sdp_struct_only",
             "sdp_byte_edit",
@@ -281,6 +285,7 @@ IPHONE_IMS_HEADER_NAMES: frozenset[str] = frozenset(
         "accept",
         "accept-contact",
         "allow",
+        "allow-events",
         "content-type",
         "p-called-party-id",
         "p-asserted-identity",

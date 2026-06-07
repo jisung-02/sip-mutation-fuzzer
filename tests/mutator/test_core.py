@@ -164,6 +164,8 @@ class SIPMutatorTestCase(unittest.TestCase):
             "Supported: 100rel,precondition,timer,sec-agree\r\n"
             "Require: precondition,sec-agree\r\n"
             "Proxy-Require: sec-agree\r\n"
+            "Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK\r\n"
+            "Accept: application/sdp,application/3gpp-ims+xml\r\n"
             "Content-Type: application/sdp\r\n"
             f"Content-Length: {len(body.encode('utf-8'))}\r\n"
             "\r\n"
@@ -975,6 +977,7 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
             "iphone_security_agreement_pressure",
             "iphone_identity_privacy_pressure",
             "iphone_option_tag_negotiation",
+            "iphone_capability_negotiation_pressure",
         ):
             with self.subTest(strategy=strategy):
                 self.assertTrue(
@@ -1001,6 +1004,7 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
                 "iphone_security_agreement_pressure",
                 "iphone_identity_privacy_pressure",
                 "iphone_option_tag_negotiation",
+                "iphone_capability_negotiation_pressure",
                 "sdp_struct_only",
                 "sdp_byte_edit",
                 "safe",
@@ -1130,6 +1134,38 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         self.assertRegex(
             case.records[0].note or "",
             r"variant=option_tag\.(sec_agree|precondition|reliability|timer)",
+        )
+
+    def test_iphone_capability_negotiation_pressure_mutates_capability_headers(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_capability_negotiation_pressure",
+                seed=26,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_capability_negotiation_pressure")
+        self.assertEqual(
+            case.records[0].operator,
+            "iphone_capability_negotiation_pressure",
+        )
+        self.assertRegex(case.records[0].target.path, r"^header\[\d+\]\.capability")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(
+            before_name.casefold(),
+            {"contact", "accept-contact", "allow", "accept", "content-type"},
+        )
+        self.assertNotEqual(before_value, after_value)
+        self.assertRegex(
+            case.records[0].note or "",
+            r"variant=capability\.(contact|accept_contact|allow|accept|content_type)",
         )
 
     def test_iphone_identity_privacy_pressure_mutates_identity_headers(self) -> None:

@@ -61,12 +61,22 @@ SIP 요청 메서드 지원은 단순히 "구현됨"으로 읽지 않는다. 현
 - **지원 조합**:
   ```python
   methods: OPTIONS, INVITE, MESSAGE, REGISTER, ...
-  profiles: legacy, delivery_preserving, ims_specific, parser_breaker
+  profiles: legacy, delivery_preserving, ims_specific,
+            parser_breaker, pixel_ims, iphone_ims
   layers: model, wire, byte
   strategies: identity, default, safe, header_targeted,
               header_whitespace_noise, final_crlf_loss,
               duplicate_content_length_conflict, tail_chop_1,
-              tail_garbage, alias_port_desync, state_breaker
+              tail_garbage, alias_port_desync, state_breaker,
+              pixel_sdp_media_negotiation,
+              pixel_session_timer_skew,
+              pixel_p_header_pressure,
+              pixel_capability_header_pressure,
+              iphone_sdp_media_negotiation,
+              iphone_security_agreement_pressure,
+              iphone_option_tag_negotiation,
+              iphone_capability_negotiation_pressure,
+              iphone_identity_privacy_pressure
   ```
   - `profile`은 mutator 정책 축이고, `mode`는 실행 경로 축이다.
   - 둘은 서로 독립적이지만, `mode`에 따라 생성/변이/송신 흐름이 달라질 수 있다.
@@ -124,6 +134,15 @@ Original Input
 | **tail_chop_1** | 마지막 1바이트를 잘라내는 byte 변이 | tail truncation 재현 |
 | **tail_garbage** | 짧은 suffix를 덧붙이는 byte 변이 | parser confusion 유도 |
 | **alias_port_desync** | IMS alias/port 정합성을 비트는 wire 변이 | IMS-specific 경로 |
+| **pixel_sdp_media_negotiation** | Pixel-class SDP media/QoS/AMR 협상 필드를 흔드는 wire 변이 | `pixel_ims` |
+| **pixel_session_timer_skew** | `Session-Expires` / `Min-SE` / timer option 조합을 흔드는 wire 변이 | `pixel_ims` |
+| **pixel_p_header_pressure** | Pixel/Android IMS P-header를 흔드는 wire 변이 | `pixel_ims` |
+| **pixel_capability_header_pressure** | Pixel/Android feature-tag와 capability header를 흔드는 wire 변이 | `pixel_ims` |
+| **iphone_sdp_media_negotiation** | iPhone/CommCenter SDP media/QoS/AMR-WB 협상 필드를 흔드는 wire 변이 | `iphone_ims` |
+| **iphone_security_agreement_pressure** | iPhone Security Agreement 파라미터를 흔드는 wire 변이 | `iphone_ims` |
+| **iphone_option_tag_negotiation** | `sec-agree`, `precondition`, `100rel`, `timer` option-tag 조합을 흔드는 wire 변이 | `iphone_ims` |
+| **iphone_capability_negotiation_pressure** | `Contact`, `Accept-Contact`, `Allow`, `Accept`, `Content-Type` capability negotiation을 흔드는 wire 변이 | `iphone_ims` |
+| **iphone_identity_privacy_pressure** | iPhone IMS identity/privacy/P-header를 흔드는 wire 변이 | `iphone_ims` |
 | **state_breaker** | 상태 기반 공격 변이 | model layer의 고급 시나리오 |
 
 ### 4. Sender Layer (송신 엔진)

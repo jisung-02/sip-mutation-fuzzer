@@ -6,6 +6,7 @@
 |------|------|
 | [`AI_AGENT_GUIDE.md`](AI_AGENT_GUIDE.md) | AI/에이전트용 온보딩, 우선순위, skill 추천, mutation profile 축 해설 |
 | [`AI_AGENT_GUIDE_EXPLAINED.md`](AI_AGENT_GUIDE_EXPLAINED.md) | 위 AI 가이드를 사람이 읽기 쉽게 풀어쓴 설명 문서 |
+| [`USAGE.md`](USAGE.md) | 현재 CLI와 실기기 캠페인 실행 예시, profile/strategy 사용법 |
 | [`프로젝트-개요.md`](프로젝트-개요.md) | 프로젝트 소개, 아키텍처, 모듈 요약, CLI, 개발 환경 |
 | [`구현-문서.md`](구현-문서.md) | 모듈별 설계 배경, 동작 방식, 코드 구조 상세 |
 | [`퍼징-캠페인-명령셋.md`](퍼징-캠페인-명령셋.md) | 현재 honest runtime 기준으로 바로 복붙해 돌릴 수 있는 실기기 우선 캠페인 명령 모음 |
@@ -24,6 +25,13 @@
 | [`기획/MUTATOR_PRD.md`](기획/MUTATOR_PRD.md) | Mutator model/wire/byte 변조 구조, CLI 모드, 구현 우선순위 |
 | [`기획/PHASE4_PRD.md`](기획/PHASE4_PRD.md) | historical softphone-first Sender/Reactor 1차 범위 문서. 현재 운영 우선순위는 real-ue-direct 기준 |
 | [`기획/REAL_UE_DIRECT_PRD.md`](기획/REAL_UE_DIRECT_PRD.md) | real-ue-direct resolver 순서, route readiness, CLI 규칙 |
+
+### `superpowers/specs/` — 구현 설계 메모
+
+| 문서 | 설명 |
+|------|------|
+| [`superpowers/specs/2026-06-06-pixel-ims-mutation-profile-design.md`](superpowers/specs/2026-06-06-pixel-ims-mutation-profile-design.md) | `pixel_ims` profile 설계, Pixel 전용 wire/byte target, default pool |
+| [`superpowers/specs/2026-06-07-iphone-ims-mutation-profile-design.md`](superpowers/specs/2026-06-07-iphone-ims-mutation-profile-design.md) | `iphone_ims` profile 설계, iPhone Security Agreement / option-tag / capability negotiation 전략 |
 
 ### `결과/` — 구현 결과, 리서치
 
@@ -52,6 +60,7 @@
 | 문서 | 설명 |
 |------|------|
 | [`이슈/오픈-이슈.md`](이슈/오픈-이슈.md) | ISSUE-01~05 추적 (결정/미정 상태 관리) |
+| [`이슈/2026-06-07-프로젝트-개선안.md`](이슈/2026-06-07-프로젝트-개선안.md) | 현재 브랜치 기준 프로젝트 개선안, 우선순위, 검증 기록 |
 | [`이슈/2026-04-21-srsenb-일부-단말-attach-불안정-정리.md`](이슈/2026-04-21-srsenb-일부-단말-attach-불안정-정리.md) | `srsENB + B210` 환경에서 일부 UE가 간헐적으로 camp/attach에 실패할 때의 원인 후보, RF/EPC 구분 기준, 1차 점검 순서 |
 
 ## 문서 갱신 규칙
