@@ -95,9 +95,7 @@ class PcapCaptureTests(unittest.TestCase):
             self.assertIsNone(saved_path)
 
     @patch("volte_mutation_fuzzer.capture.core.subprocess_popen")
-    def test_stop_kills_tshark_export_on_timeout(
-        self, mock_popen: MagicMock
-    ) -> None:
+    def test_stop_kills_tshark_export_on_timeout(self, mock_popen: MagicMock) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             pcap_path = Path(tmpdir) / "case.pcap"
             pcap_path.write_bytes(b"pcap")

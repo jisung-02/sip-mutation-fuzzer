@@ -94,7 +94,9 @@ class EvidenceCollectorTests(unittest.TestCase):
             collector = EvidenceCollector(Path(tmpdir))
             result = _make_result(verdict="crash", raw_response=None)
 
-            evidence_dir = collector.collect(result, sent_payload="OPTIONS sip:x\r\n\r\n")
+            evidence_dir = collector.collect(
+                result, sent_payload="OPTIONS sip:x\r\n\r\n"
+            )
             self.assertIsNotNone(evidence_dir)
             assert evidence_dir is not None
             d = Path(evidence_dir)
@@ -145,9 +147,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             collector = EvidenceCollector(Path(tmpdir))
             result = _make_result(verdict="crash", raw_response=None)
 
-            evidence_dir = collector.collect(
-                result, pcap_path=str(pcap_path)
-            )
+            evidence_dir = collector.collect(result, pcap_path=str(pcap_path))
             assert evidence_dir is not None
             d = Path(evidence_dir)
             self.assertTrue((d / "capture.pcap").exists())
@@ -167,9 +167,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             collector = EvidenceCollector(Path(tmpdir))
             result = _make_result(verdict="stack_failure", raw_response=None)
 
-            evidence_dir = collector.collect(
-                result, adb_snapshot_dir=str(adb_dir)
-            )
+            evidence_dir = collector.collect(result, adb_snapshot_dir=str(adb_dir))
             assert evidence_dir is not None
             d = Path(evidence_dir)
             adb_log = (d / "adb_log.txt").read_text()
@@ -189,9 +187,7 @@ class EvidenceCollectorTests(unittest.TestCase):
             collector = EvidenceCollector(Path(tmpdir))
             result = _make_result(verdict="stack_failure", raw_response=None)
 
-            evidence_dir = collector.collect(
-                result, ios_snapshot_dir=str(ios_dir)
-            )
+            evidence_dir = collector.collect(result, ios_snapshot_dir=str(ios_dir))
             assert evidence_dir is not None
             d = Path(evidence_dir)
             ios_log = (d / "ios_log.txt").read_text()

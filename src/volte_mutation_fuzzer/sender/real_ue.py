@@ -56,6 +56,7 @@ _CONTACT_HOSTPORT_PATTERN: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
+
 def resolve_ue_ip_from_msisdn(
     msisdn: str, *, env: Mapping[str, str] | None = None
 ) -> str:
@@ -168,9 +169,15 @@ class RealUEDirectResolver:
         self.mysql_container = source.get(
             "VMF_REAL_UE_MYSQL_CONTAINER", _DEFAULT_MYSQL_CONTAINER
         )
-        self.scscf_db_user = source.get("VMF_REAL_UE_SCSCF_DB_USER", _DEFAULT_SCSCF_DB_USER)
-        self.scscf_db_pass = source.get("VMF_REAL_UE_SCSCF_DB_PASS", _DEFAULT_SCSCF_DB_PASS)
-        self.scscf_db_name = source.get("VMF_REAL_UE_SCSCF_DB_NAME", _DEFAULT_SCSCF_DB_NAME)
+        self.scscf_db_user = source.get(
+            "VMF_REAL_UE_SCSCF_DB_USER", _DEFAULT_SCSCF_DB_USER
+        )
+        self.scscf_db_pass = source.get(
+            "VMF_REAL_UE_SCSCF_DB_PASS", _DEFAULT_SCSCF_DB_PASS
+        )
+        self.scscf_db_name = source.get(
+            "VMF_REAL_UE_SCSCF_DB_NAME", _DEFAULT_SCSCF_DB_NAME
+        )
         self.pyhss_url = _normalize_optional_text(source.get("VMF_REAL_UE_PYHSS_URL"))
         raw_log_tail = source.get("VMF_REAL_UE_PCSCF_LOG_TAIL")
         try:
@@ -183,7 +190,10 @@ class RealUEDirectResolver:
             self.pcscf_log_tail = _DEFAULT_PCSCF_LOG_TAIL
 
     def resolve(
-        self, target: TargetEndpoint, *, impi: str | None = None,
+        self,
+        target: TargetEndpoint,
+        *,
+        impi: str | None = None,
     ) -> ResolvedRealUETarget:
         if target.host is not None:
             assert target.port is not None
@@ -337,7 +347,10 @@ class RealUEDirectResolver:
         return None
 
     def _lookup_via_pcscf_options_ping(
-        self, msisdn: str, *, impi: str | None = None,
+        self,
+        msisdn: str,
+        *,
+        impi: str | None = None,
     ) -> UEContact | None:
         """Parse pcscf logs for OPTIONS keepalive pings that contain IMPI→IP mapping.
 
@@ -346,8 +359,17 @@ class RealUEDirectResolver:
         """
         try:
             result = subprocess.run(
-                ["docker", "logs", self.pcscf_container, "--tail", str(self.pcscf_log_tail)],
-                capture_output=True, text=True, timeout=15.0, check=False,
+                [
+                    "docker",
+                    "logs",
+                    self.pcscf_container,
+                    "--tail",
+                    str(self.pcscf_log_tail),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15.0,
+                check=False,
             )
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             return None
@@ -365,7 +387,13 @@ class RealUEDirectResolver:
             log_impi = match.group(1)
             host = match.group(2)
             port = int(match.group(3))
-            contact = UEContact(msisdn=msisdn, host=host, port=port, source="pcscf-options-ping", impi=log_impi)
+            contact = UEContact(
+                msisdn=msisdn,
+                host=host,
+                port=port,
+                source="pcscf-options-ping",
+                impi=log_impi,
+            )
             # Exact IMPI match — best
             if impi is not None and log_impi == impi:
                 return contact
@@ -388,7 +416,10 @@ class RealUEDirectResolver:
         try:
             result = subprocess.run(
                 ["docker", "exec", self.pcscf_container, "ip", "xfrm", "state"],
-                capture_output=True, text=True, timeout=10.0, check=False,
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
             )
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             return None
@@ -397,13 +428,17 @@ class RealUEDirectResolver:
 
         # Find "src <ue_ip> dst <pcscf_ip>" lines → extract UE IP + sport
         pattern = re.compile(
-            r"sel src ([\d.]+)/\d+ dst " + re.escape(pcscf_ip) + r"/\d+ sport (\d+) dport (\d+)"
+            r"sel src ([\d.]+)/\d+ dst "
+            + re.escape(pcscf_ip)
+            + r"/\d+ sport (\d+) dport (\d+)"
         )
         for match in pattern.finditer(result.stdout):
             ue_ip = match.group(1)
             ue_port = int(match.group(2))
             if ue_ip != pcscf_ip:
-                return UEContact(msisdn=msisdn, host=ue_ip, port=ue_port, source="xfrm-state")
+                return UEContact(
+                    msisdn=msisdn, host=ue_ip, port=ue_port, source="xfrm-state"
+                )
         return None
 
     def _xfrm_active_ue_ips(self) -> frozenset[str]:
@@ -421,7 +456,10 @@ class RealUEDirectResolver:
         try:
             result = subprocess.run(
                 ["docker", "exec", self.pcscf_container, "ip", "xfrm", "state"],
-                capture_output=True, text=True, timeout=10.0, check=False,
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
             )
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             return frozenset()
@@ -429,7 +467,9 @@ class RealUEDirectResolver:
             return frozenset()
 
         pattern = re.compile(
-            r"sel src ([\d.]+)/\d+ dst " + re.escape(pcscf_ip) + r"/\d+ sport \d+ dport \d+"
+            r"sel src ([\d.]+)/\d+ dst "
+            + re.escape(pcscf_ip)
+            + r"/\d+ sport \d+ dport \d+"
         )
         return frozenset(m.group(1) for m in pattern.finditer(result.stdout))
 
@@ -456,7 +496,10 @@ class RealUEDirectResolver:
         return None
 
     def _lookup_ue_contact(
-        self, msisdn: str, *, impi: str | None = None,
+        self,
+        msisdn: str,
+        *,
+        impi: str | None = None,
     ) -> UEContact | None:
         """Run the full UE contact lookup chain.
 
@@ -510,7 +553,10 @@ class RealUEDirectResolver:
         return contact
 
     def resolve_protected_ports(
-        self, msisdn: str, *, ue_ip: str | None = None,
+        self,
+        msisdn: str,
+        *,
+        ue_ip: str | None = None,
     ) -> tuple[int, int]:
         """Return ``(port_pc, port_ps)`` for the UE identified by *msisdn*.
 
@@ -647,9 +693,7 @@ def resolve_ue_protected_ports(
     # Strategy 1: Security-Client header (authoritative — both ports read,
     # never estimated).
     if log_text:
-        ports = _parse_security_client_ports(
-            log_text, requested_ue_ip=requested_ue_ip
-        )
+        ports = _parse_security_client_ports(log_text, requested_ue_ip=requested_ue_ip)
         if ports is not None:
             return ports
 
@@ -702,7 +746,9 @@ def resolve_ue_protected_ports(
 
 
 def _parse_security_client_ports(
-    log_text: str, *, requested_ue_ip: str | None,
+    log_text: str,
+    *,
+    requested_ue_ip: str | None,
 ) -> tuple[int, int] | None:
     """Extract ``(port_pc, port_ps)`` from kamailio P-CSCF Security-Client lines.
 
@@ -949,8 +995,12 @@ def check_ipsec_sa_alive(
                 sa_count += 1
 
     if sa_count > 0:
-        return IPsecSAStatus(alive=True, sa_count=sa_count, detail=f"{sa_count} UE SAs found")
-    return IPsecSAStatus(alive=False, sa_count=0, detail="no UE SAs found in xfrm state")
+        return IPsecSAStatus(
+            alive=True, sa_count=sa_count, detail=f"{sa_count} UE SAs found"
+        )
+    return IPsecSAStatus(
+        alive=False, sa_count=0, detail="no UE SAs found in xfrm state"
+    )
 
 
 def check_route_to_target(target_ip: str) -> RouteCheckResult:
@@ -1064,9 +1114,11 @@ def normalize_direct_wire_text(
 
     first_line = lines[0]
     if rewrite_request_uri is not None:
-        _rl_match = re.match(r'^(\S+)\s+\S+\s+(SIP/\S+)\s*$', first_line)
+        _rl_match = re.match(r"^(\S+)\s+\S+\s+(SIP/\S+)\s*$", first_line)
         if _rl_match:
-            first_line = f"{_rl_match.group(1)} {rewrite_request_uri} {_rl_match.group(2)}"
+            first_line = (
+                f"{_rl_match.group(1)} {rewrite_request_uri} {_rl_match.group(2)}"
+            )
     updated_lines = [first_line]
     via_rewritten = False
     contact_rewritten = False
@@ -1149,9 +1201,11 @@ def normalize_direct_packet_bytes(
     first_line = lines[0]
     request_uri_rewritten = False
     if rewrite_request_uri is not None:
-        _rl_match = re.match(r'^(\S+)\s+\S+\s+(SIP/\S+)\s*$', first_line)
+        _rl_match = re.match(r"^(\S+)\s+\S+\s+(SIP/\S+)\s*$", first_line)
         if _rl_match:
-            first_line = f"{_rl_match.group(1)} {rewrite_request_uri} {_rl_match.group(2)}"
+            first_line = (
+                f"{_rl_match.group(1)} {rewrite_request_uri} {_rl_match.group(2)}"
+            )
             request_uri_rewritten = first_line != lines[0]
 
     updated_lines = [first_line]

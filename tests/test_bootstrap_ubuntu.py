@@ -50,7 +50,7 @@ class UbuntuBootstrapScriptTests(unittest.TestCase):
             "netplan.io",
             "passwd",
             "sudo -v",
-            'linux-modules-extra-$(uname -r)',
+            "linux-modules-extra-$(uname -r)",
             "uv python install",
             "uv sync --dev",
             "setup_host.sh --all",

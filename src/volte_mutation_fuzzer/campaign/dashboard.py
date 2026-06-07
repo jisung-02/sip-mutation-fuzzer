@@ -3,7 +3,11 @@
 import sys
 import time
 
-from volte_mutation_fuzzer.campaign.contracts import CampaignSummary, CaseResult, CaseSpec
+from volte_mutation_fuzzer.campaign.contracts import (
+    CampaignSummary,
+    CaseResult,
+    CaseSpec,
+)
 
 
 _VERDICT_ORDER: tuple[str, ...] = (
@@ -84,9 +88,7 @@ class ConsoleProgressReporter:
         self._print(f"  ** CIRCUIT BREAKER: {reason}")
 
     def on_adb_warning(self, dead_buffers: frozenset[str]) -> None:
-        self._print(
-            f"  ** ADB WARNING: dead buffers: {','.join(sorted(dead_buffers))}"
-        )
+        self._print(f"  ** ADB WARNING: dead buffers: {','.join(sorted(dead_buffers))}")
 
     def finalize(self, summary: CampaignSummary, status: str) -> None:
         """Print final summary after campaign ends."""
@@ -94,9 +96,7 @@ class ConsoleProgressReporter:
         rate = summary.total / elapsed if elapsed > 0 else 0.0
 
         self._print("")
-        self._print(
-            f"=== Campaign {self._campaign_id} {status} ==="
-        )
+        self._print(f"=== Campaign {self._campaign_id} {status} ===")
         self._print(
             f"  Total: {summary.total}  |  "
             f"Elapsed: {_format_duration(elapsed)}  |  "

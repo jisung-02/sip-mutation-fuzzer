@@ -134,7 +134,9 @@ def _validate_registry() -> None:
     expected_methods = set(REQUEST_MODELS_BY_METHOD)
     registered_methods = set(PACKET_COMPLETENESS)
     if registered_methods != expected_methods:
-        missing = sorted(method.value for method in expected_methods - registered_methods)
+        missing = sorted(
+            method.value for method in expected_methods - registered_methods
+        )
         extra = sorted(method.value for method in registered_methods - expected_methods)
         raise RuntimeError(
             "packet completeness registry is out of sync with REQUEST_MODELS_BY_METHOD"

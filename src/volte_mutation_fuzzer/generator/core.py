@@ -798,9 +798,7 @@ class SIPGenerator:
     # 3GPP IMS defaults (real-ue-direct mode)
     # ------------------------------------------------------------------
 
-    def _apply_3gpp_defaults(
-        self, defaults: dict[str, Any], spec: RequestSpec
-    ) -> None:
+    def _apply_3gpp_defaults(self, defaults: dict[str, Any], spec: RequestSpec) -> None:
         """Inject 3GPP IMS-standard headers sourced from .env settings.
 
         These headers make the packet acceptable to real VoLTE UEs that
@@ -813,19 +811,22 @@ class SIPGenerator:
         # --- Common 3GPP headers (all methods) ---
         defaults["max_forwards"] = 66  # IMS core reduces from 70
 
-        defaults.setdefault("p_asserted_identity", (
-            NameAddress(
-                uri=SIPURI(
-                    user=s.from_user,
-                    host=domain,
+        defaults.setdefault(
+            "p_asserted_identity",
+            (
+                NameAddress(
+                    uri=SIPURI(
+                        user=s.from_user,
+                        host=domain,
+                    ),
                 ),
             ),
-        ))
+        )
 
         defaults.setdefault("p_visited_network_id", domain)
 
-        defaults.setdefault("p_access_network_info",
-            f"3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={s.cell_id}"
+        defaults.setdefault(
+            "p_access_network_info", f"3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={s.cell_id}"
         )
 
         # --- INVITE-specific 3GPP headers ---
@@ -834,8 +835,9 @@ class SIPGenerator:
 
         # --- MESSAGE-specific ---
         if spec.method == SIPMethod.MESSAGE:
-            defaults.setdefault("p_preferred_service",
-                "urn:urn-7:3gpp-service.ims.icsi.mmtel")
+            defaults.setdefault(
+                "p_preferred_service", "urn:urn-7:3gpp-service.ims.icsi.mmtel"
+            )
 
     def _apply_3gpp_invite_defaults(self, defaults: dict[str, Any]) -> None:
         """INVITE-specific 3GPP IMS headers and SDP."""
@@ -848,22 +850,51 @@ class SIPGenerator:
         if isinstance(from_na, NameAddress) and from_na.parameters:
             from_tag = from_na.parameters.get("tag", "")
 
-        defaults.setdefault("record_route", [
-            NameAddress(uri=SIPURI(
-                user="mo", host=pcscf_ip, port=s.pcscf_mt_port,
-                parameters={"lr": "on", "ftag": from_tag, "rm": "8", "did": "643.7a11"},
-            )),
-            NameAddress(uri=SIPURI(
-                user="mo", host=s.scscf_ip, port=s.scscf_port,
-                parameters={"transport": "tcp", "r2": "on", "lr": "on",
-                             "ftag": from_tag, "did": "643.3382"},
-            )),
-            NameAddress(uri=SIPURI(
-                user="mo", host=s.scscf_ip, port=s.scscf_port,
-                parameters={"r2": "on", "lr": "on",
-                             "ftag": from_tag, "did": "643.3382"},
-            )),
-        ])
+        defaults.setdefault(
+            "record_route",
+            [
+                NameAddress(
+                    uri=SIPURI(
+                        user="mo",
+                        host=pcscf_ip,
+                        port=s.pcscf_mt_port,
+                        parameters={
+                            "lr": "on",
+                            "ftag": from_tag,
+                            "rm": "8",
+                            "did": "643.7a11",
+                        },
+                    )
+                ),
+                NameAddress(
+                    uri=SIPURI(
+                        user="mo",
+                        host=s.scscf_ip,
+                        port=s.scscf_port,
+                        parameters={
+                            "transport": "tcp",
+                            "r2": "on",
+                            "lr": "on",
+                            "ftag": from_tag,
+                            "did": "643.3382",
+                        },
+                    )
+                ),
+                NameAddress(
+                    uri=SIPURI(
+                        user="mo",
+                        host=s.scscf_ip,
+                        port=s.scscf_port,
+                        parameters={
+                            "r2": "on",
+                            "lr": "on",
+                            "ftag": from_tag,
+                            "did": "643.3382",
+                        },
+                    )
+                ),
+            ],
+        )
 
         # Contact with 3GPP feature tags
         contact_uri = SIPURI(
@@ -871,37 +902,53 @@ class SIPGenerator:
             host=s.contact_host or s.from_host,
             port=s.contact_port or s.from_port,
         )
-        defaults["contact"] = [NameAddress(
-            uri=contact_uri,
-            parameters={
-                "+sip.instance": f'"<urn:gsma:imei:{s.mo_imei}>"',
-                "+g.3gpp.icsi-ref": '"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"',
-                "audio": None,
-                "video": None,
-                "+g.3gpp.mid-call": None,
-                "+g.3gpp.srvcc-alerting": None,
-                "+g.3gpp.ps2cs-srvcc-orig-pre-alerting": None,
-            },
-        )]
+        defaults["contact"] = [
+            NameAddress(
+                uri=contact_uri,
+                parameters={
+                    "+sip.instance": f'"<urn:gsma:imei:{s.mo_imei}>"',
+                    "+g.3gpp.icsi-ref": '"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"',
+                    "audio": None,
+                    "video": None,
+                    "+g.3gpp.mid-call": None,
+                    "+g.3gpp.srvcc-alerting": None,
+                    "+g.3gpp.ps2cs-srvcc-orig-pre-alerting": None,
+                },
+            )
+        ]
 
         # Accept-Contact
-        defaults.setdefault("accept_contact",
-            '*;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"')
+        defaults.setdefault(
+            "accept_contact",
+            '*;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"',
+        )
 
         # P-* headers
-        defaults.setdefault("p_preferred_service",
-            "urn:urn-7:3gpp-service.ims.icsi.mmtel")
+        defaults.setdefault(
+            "p_preferred_service", "urn:urn-7:3gpp-service.ims.icsi.mmtel"
+        )
         defaults.setdefault("p_early_media", "supported")
-        defaults.setdefault("p_charging_vector",
-            f"icid-value={self._uuid_hex(32).upper()};icid-generated-at={pcscf_ip}")
+        defaults.setdefault(
+            "p_charging_vector",
+            f"icid-value={self._uuid_hex(32).upper()};icid-generated-at={pcscf_ip}",
+        )
 
         # Supported / Allow / Accept
-        defaults.setdefault("supported",
-            ("100rel", "histinfo", "join", "norefersub",
-             "precondition", "replaces", "timer", "sec-agree"))
+        defaults.setdefault(
+            "supported",
+            (
+                "100rel",
+                "histinfo",
+                "join",
+                "norefersub",
+                "precondition",
+                "replaces",
+                "timer",
+                "sec-agree",
+            ),
+        )
         defaults.setdefault("allow", tuple(SIPMethod))
-        defaults.setdefault("accept",
-            ("application/sdp", "application/3gpp-ims+xml"))
+        defaults.setdefault("accept", ("application/sdp", "application/3gpp-ims+xml"))
 
         # Session timer
         defaults.setdefault("session_expires", 1800)

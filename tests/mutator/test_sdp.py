@@ -7,6 +7,8 @@ from __future__ import annotations
 import random
 import unittest
 
+from volte_mutation_fuzzer.campaign.contracts import CampaignConfig, CaseSpec
+from volte_mutation_fuzzer.campaign.core import CampaignExecutor
 from volte_mutation_fuzzer.generator import (
     GeneratorSettings,
     RequestSpec,
@@ -618,46 +620,36 @@ class SDPStructReproductionCmdTests(unittest.TestCase):
     apply the same N rounds against the same baseline.
     """
 
-    def _executor_with(self, *, mutations_per_case: int, mt: bool = False) -> "object":
-        # Imported lazily so this test module doesn't pull campaign
-        # contracts at module-import time.
+    def _executor_with(
+        self, *, mutations_per_case: int, mt: bool = False
+    ) -> CampaignExecutor:
         import tempfile
-        from volte_mutation_fuzzer.campaign.contracts import (
-            CampaignConfig,
-        )
-        from volte_mutation_fuzzer.campaign.core import CampaignExecutor
 
         with tempfile.TemporaryDirectory() as tmp:
-            kwargs: dict[str, object] = {
-                "target_msisdn": "111111",
-                "mode": "real-ue-direct",
-                "methods": ("INVITE",),
-                "ipsec_mode": "native",
-                "mutations_per_case": mutations_per_case,
-                "results_dir": tmp,
-                "output_name": "sdp-struct-replay",
-            }
-            if mt:
-                kwargs.update(
-                    mt_invite_template="3gpp",
-                    impi="001010000123511@ims.mnc001.mcc001.3gppnetwork.org",
-                )
-            cfg = CampaignConfig(**kwargs)
+            cfg = CampaignConfig(
+                target_msisdn="111111",
+                mode="real-ue-direct",
+                methods=("INVITE",),
+                ipsec_mode="native",
+                mutations_per_case=mutations_per_case,
+                results_dir=tmp,
+                output_name="sdp-struct-replay",
+                mt_invite_template="3gpp" if mt else None,
+                impi=(
+                    "001010000123511@ims.mnc001.mcc001.3gppnetwork.org" if mt else None
+                ),
+            )
             return CampaignExecutor(cfg)
 
-    def _spec(self, **overrides: object):
-        from volte_mutation_fuzzer.campaign.contracts import CaseSpec
-
-        defaults: dict[str, object] = {
-            "case_id": 0,
-            "seed": 0,
-            "method": "INVITE",
-            "layer": "wire",
-            "strategy": "sdp_struct_only",
-            "profile": "delivery_preserving",
-        }
-        defaults.update(overrides)
-        return CaseSpec(**defaults)
+    def _spec(self) -> CaseSpec:
+        return CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="wire",
+            strategy="sdp_struct_only",
+            profile="delivery_preserving",
+        )
 
     def test_replay_cmd_carries_strategy_and_mutations(self) -> None:
         executor = self._executor_with(mutations_per_case=4)
@@ -974,42 +966,36 @@ class SDPByteEditReproductionCmdTests(unittest.TestCase):
     strategies move in lockstep.
     """
 
-    def _executor_with(self, *, mutations_per_case: int, mt: bool = False) -> "object":
+    def _executor_with(
+        self, *, mutations_per_case: int, mt: bool = False
+    ) -> CampaignExecutor:
         import tempfile
-        from volte_mutation_fuzzer.campaign.contracts import CampaignConfig
-        from volte_mutation_fuzzer.campaign.core import CampaignExecutor
 
         with tempfile.TemporaryDirectory() as tmp:
-            kwargs: dict[str, object] = {
-                "target_msisdn": "111111",
-                "mode": "real-ue-direct",
-                "methods": ("INVITE",),
-                "ipsec_mode": "native",
-                "mutations_per_case": mutations_per_case,
-                "results_dir": tmp,
-                "output_name": "sdp-byte-edit-replay",
-            }
-            if mt:
-                kwargs.update(
-                    mt_invite_template="3gpp",
-                    impi="001010000123511@ims.mnc001.mcc001.3gppnetwork.org",
-                )
-            cfg = CampaignConfig(**kwargs)
+            cfg = CampaignConfig(
+                target_msisdn="111111",
+                mode="real-ue-direct",
+                methods=("INVITE",),
+                ipsec_mode="native",
+                mutations_per_case=mutations_per_case,
+                results_dir=tmp,
+                output_name="sdp-byte-edit-replay",
+                mt_invite_template="3gpp" if mt else None,
+                impi=(
+                    "001010000123511@ims.mnc001.mcc001.3gppnetwork.org" if mt else None
+                ),
+            )
             return CampaignExecutor(cfg)
 
-    def _spec(self, **overrides: object):
-        from volte_mutation_fuzzer.campaign.contracts import CaseSpec
-
-        defaults: dict[str, object] = {
-            "case_id": 0,
-            "seed": 0,
-            "method": "INVITE",
-            "layer": "wire",
-            "strategy": "sdp_byte_edit",
-            "profile": "delivery_preserving",
-        }
-        defaults.update(overrides)
-        return CaseSpec(**defaults)
+    def _spec(self) -> CaseSpec:
+        return CaseSpec(
+            case_id=0,
+            seed=0,
+            method="INVITE",
+            layer="wire",
+            strategy="sdp_byte_edit",
+            profile="delivery_preserving",
+        )
 
     def test_replay_cmd_carries_strategy_and_mutations(self) -> None:
         executor = self._executor_with(mutations_per_case=4)

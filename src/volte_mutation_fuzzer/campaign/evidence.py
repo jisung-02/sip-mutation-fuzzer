@@ -69,9 +69,7 @@ class EvidenceCollector:
                 if isinstance(sent_payload, bytes):
                     (case_dir / "sent.bin").write_bytes(sent_payload)
                 else:
-                    (case_dir / "sent.sip").write_text(
-                        sent_payload, encoding="utf-8"
-                    )
+                    (case_dir / "sent.sip").write_text(sent_payload, encoding="utf-8")
 
             # 3. response.sip — raw response from target
             if case_result.raw_response:

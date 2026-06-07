@@ -4,7 +4,11 @@ import io
 import sys
 import unittest
 
-from volte_mutation_fuzzer.campaign.contracts import CampaignSummary, CaseResult, CaseSpec
+from volte_mutation_fuzzer.campaign.contracts import (
+    CampaignSummary,
+    CaseResult,
+    CaseSpec,
+)
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
 
 
@@ -129,7 +133,9 @@ class ConsoleProgressReporterTests(unittest.TestCase):
             self._restore()
 
         lines = output.splitlines()
-        verdict_index = next(i for i, line in enumerate(lines) if "normal 1(100%)" in line)
+        verdict_index = next(
+            i for i, line in enumerate(lines) if "normal 1(100%)" in line
+        )
         self.assertTrue(lines[verdict_index + 1].startswith("  [1/10]"))
 
     def test_crash_verdict_prints_alert(self) -> None:
@@ -168,9 +174,7 @@ class ConsoleProgressReporterTests(unittest.TestCase):
     def test_finalize_prints_final_summary(self) -> None:
         buf = self._capture()
         try:
-            reporter = ConsoleProgressReporter(
-                total_cases=10, campaign_id="test5"
-            )
+            reporter = ConsoleProgressReporter(total_cases=10, campaign_id="test5")
             summary = CampaignSummary(total=5, normal=3, timeout=2)
             reporter.finalize(summary, "completed")
             output = buf.getvalue()
@@ -206,9 +210,7 @@ class ConsoleProgressReporterTests(unittest.TestCase):
     def test_circuit_breaker_message(self) -> None:
         buf = self._capture()
         try:
-            reporter = ConsoleProgressReporter(
-                total_cases=10, campaign_id="test7"
-            )
+            reporter = ConsoleProgressReporter(total_cases=10, campaign_id="test7")
             reporter.on_circuit_breaker("SA expired")
             output = buf.getvalue()
         finally:

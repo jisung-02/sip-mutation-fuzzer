@@ -9,18 +9,14 @@ from volte_mutation_fuzzer.mutator.editable import (
 )
 
 REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
-REALISTIC_REQUEST_URI = (
-    "sip:001010000123511@10.20.20.8:8100;alias=10.20.20.8~8101~1"
-)
+REALISTIC_REQUEST_URI = "sip:001010000123511@10.20.20.8:8100;alias=10.20.20.8~8101~1"
 REALISTIC_INVITE_START_LINE = f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0"
 REALISTIC_MESSAGE_START_LINE = "MESSAGE sip:222222@10.20.20.9:31800 SIP/2.0"
 REALISTIC_VIA_PCSCF = (
-    "SIP/2.0/UDP 172.22.0.21:15100;"
-    "branch=z9hG4bK-524287-1---abcd1234;rport"
+    "SIP/2.0/UDP 172.22.0.21:15100;branch=z9hG4bK-524287-1---abcd1234;rport"
 )
 REALISTIC_VIA_UE = (
-    "SIP/2.0/UDP 10.20.20.9:31800;"
-    "branch=z9hG4bK-524287-1---efgh5678;rport"
+    "SIP/2.0/UDP 10.20.20.9:31800;branch=z9hG4bK-524287-1---efgh5678;rport"
 )
 
 
@@ -130,9 +126,7 @@ class EditableSIPMessageTests(unittest.TestCase):
     def test_render_supports_custom_header_separator(self) -> None:
         message = EditableSIPMessage(
             start_line=EditableStartLine(text=REALISTIC_INVITE_START_LINE),
-            headers=(
-                EditableHeader(name="X-Custom", value="value", separator=" = "),
-            ),
+            headers=(EditableHeader(name="X-Custom", value="value", separator=" = "),),
         )
 
         self.assertIn("X-Custom = value", message.render())
@@ -166,11 +160,7 @@ class EditableSIPMessageTests(unittest.TestCase):
 
         self.assertEqual(
             message.render(),
-            (
-                f"{REALISTIC_INVITE_START_LINE}\r\n"
-                f"Call-ID: {REALISTIC_CALL_ID}\r\n"
-                "hello"
-            ),
+            (f"{REALISTIC_INVITE_START_LINE}\r\nCall-ID: {REALISTIC_CALL_ID}\r\nhello"),
         )
 
     def test_render_supports_lf_only_line_endings(self) -> None:
@@ -183,11 +173,7 @@ class EditableSIPMessageTests(unittest.TestCase):
 
         self.assertEqual(
             message.render(),
-            (
-                f"{REALISTIC_INVITE_START_LINE}\n"
-                f"Call-ID: {REALISTIC_CALL_ID}\n\n"
-                "hello"
-            ),
+            (f"{REALISTIC_INVITE_START_LINE}\nCall-ID: {REALISTIC_CALL_ID}\n\nhello"),
         )
 
 

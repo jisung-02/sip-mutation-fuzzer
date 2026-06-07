@@ -1089,12 +1089,8 @@ class SIPGeneratorSeedDeterminismTests(unittest.TestCase):
         # ``uuid4`` path so transaction IDs stay unique per call. Pinning
         # this preserves the spec-compliant default for ad-hoc invocations
         # outside the campaign loop.
-        first = self.generator.generate_request(
-            RequestSpec(method=SIPMethod.OPTIONS)
-        )
-        second = self.generator.generate_request(
-            RequestSpec(method=SIPMethod.OPTIONS)
-        )
+        first = self.generator.generate_request(RequestSpec(method=SIPMethod.OPTIONS))
+        second = self.generator.generate_request(RequestSpec(method=SIPMethod.OPTIONS))
         self.assertNotEqual(first.call_id, second.call_id)
 
     def test_seed_is_per_call_no_state_leak(self) -> None:

@@ -46,8 +46,8 @@ def _load_env_tags(name: str) -> tuple[str, ...]:
 # to start with one of these prefixes — an unrelated process emitting a
 # regex-shaped log line will not promote a fuzz case verdict.
 WHITELIST_TAG_PREFIXES: tuple[str, ...] = (
-    "[IMS",            # Samsung native IMS log brand: [IMS6.0], [IMS5.0]
-    "SIPMSG",          # SIPMSG[0,2], SIPMSG[1,3]
+    "[IMS",  # Samsung native IMS log brand: [IMS6.0], [IMS5.0]
+    "SIPMSG",  # SIPMSG[0,2], SIPMSG[1,3]
     "RILJ",
     "SecRIL",
     "SemImsService",
@@ -66,104 +66,110 @@ WHITELIST_TAG_PREFIXES: tuple[str, ...] = (
 # tags is treated as noise and never promotes a verdict.  These are
 # Android background services that periodically log expected exceptions
 # unrelated to IMS / VoLTE fuzzing.
-BLACKLIST_TAGS_EXACT: frozenset[str] = frozenset({
-    "BluetoothPowerStatsCollector",
-    "WifiNl80211Manager",
-    "NetworkStatsManager",
-    "PowerStatsService",
-    "KeyguardViewMediator",
-    # Pixel/Google framework + Google-app tags that throw routine
-    # java.lang.* exceptions during normal background operation. Observed
-    # in 2026-04-26 byte_edit_only campaign on Pixel 10 — every one of
-    # these lit up the ``uncaught_java_exception`` critical pattern despite
-    # having no relation to the SIP/IMS surface under test.
-    "LoadedApk",
-    "NearbyPresence",
-    "PickerSyncController",
-    "TaskFragmentComponent",
-    "NexusCSStateManager",
-    "JavaBinder",
-    "Bundle",
-    "System.err",
-    # Obfuscated Google framework/component tags (eikg, jqxd, dcqy, ...)
-    # — short lowercase tags that appear from minified Google Mobile
-    # Services classes. Always background, never IMS-related.
-    "eikg",
-    "jqxd",
-    "dcqy",
-    "afes",
-    "dqmh",
-    "afcb",
-    "ajbw",
-    "aeyc",
-    "afco",
-    "ajbi",
-    # Generic Android framework background services. They surface
-    # exceptions / "process died" / lifecycle warnings during routine
-    # operation that have no bearing on the IMS / SIP surface.
-    "DropBoxManagerService",
-    "WindowManager",
-    "InputDispatcher",
-    "ConnectivityService",
-    "DisplayManagerService",
-    "ActivityThread",
-    "PackageManager",
-    "AppOps",
-    "NotificationService",
-    "JobScheduler",
-    "AlarmManager",
-    "GnssLocationProvider",
-    "LocationManagerService",
-    "MediaSessionService",
-    "AudioFlinger",
-    # Battery / thermal / sensor — pure hardware telemetry, never SIP-side.
-    "BatteryDump",
-    "BatteryStatsService",
-    "BatteryStatsImpl",
-    "thermal_core",
-    "thermal_service",
-    "seh_thermal_service",
-    "mtk_thermal",
-    # NOTE: We intentionally do *not* blacklist DSRM-* / NRM-C-* even though
-    # their routine recovery / registration-state warnings are noisy. Real
-    # baseband faults and EMM rejects also surface under those tags, and
-    # losing them would mask cellular-side CVE-class signals. The
-    # tightened ``nv_corruption`` regex (``\bNV(?:RAM)?\b ...``) already
-    # neutralises the ``invalid``/``recovery`` substring FP that motivated
-    # adding them, so per-tag suppression is unnecessary and unsafe.
-    # CHRE (Context Hub Runtime) sensor / positioning chatter. Lines like
-    # ``[WallabyPD] Device (0x201) >>> stationary-unspecified <<<`` matched
-    # native_crash regex purely from the ``>>>`` decoration.
-    "CHRE",
-    "WallabyPD",
-    # Samsung-specific routine telemetry.
-    "SEM_SLOG",
-    "SemDvfs",
-    "SemDesktopModeManager",
-    "SemEmergencyManager",
-    "SemPlatform",
-    # Samsung Connectivity Monitor — fires per-call lifecycle reporter
-    # lines like ``updateAudioSubSystemInfo =MicStatus: -1, CrashCounter:
-    # -1, ...`` whose ``SubSystem`` + ``Crash`` substrings tripped
-    # radio_subsystem_restart under IGNORECASE on every fuzzed INVITE.
-    # Never indicates an actual subsystem restart.
-    "ConnectivityMonitorStateMachine",
-    # Samsung Galaxy RIL audio metric init — periodic
-    # ``initAudioMetricExtHal: Exception: java.util.NoSuchElementException``
-    # fires on every call setup. Lifecycle, not a crash; was the dominant
-    # source of ``uncaught_java_exception`` FPs on Pixel campaigns.
-    "GRIL-AudioMetricExt",
-    # AOSP UI jank measurement framework. Throws routine
-    # ``java.lang.IllegalArgumentException: invalid view`` whenever a
-    # tracked notification row is detached before the jank measurement
-    # window closes. Pure UI metric noise, never SIP/IMS-relevant.
-    "InteractionJankMonitor",
-})
+BLACKLIST_TAGS_EXACT: frozenset[str] = frozenset(
+    {
+        "BluetoothPowerStatsCollector",
+        "WifiNl80211Manager",
+        "NetworkStatsManager",
+        "PowerStatsService",
+        "KeyguardViewMediator",
+        # Pixel/Google framework + Google-app tags that throw routine
+        # java.lang.* exceptions during normal background operation. Observed
+        # in 2026-04-26 byte_edit_only campaign on Pixel 10 — every one of
+        # these lit up the ``uncaught_java_exception`` critical pattern despite
+        # having no relation to the SIP/IMS surface under test.
+        "LoadedApk",
+        "NearbyPresence",
+        "PickerSyncController",
+        "TaskFragmentComponent",
+        "NexusCSStateManager",
+        "JavaBinder",
+        "Bundle",
+        "System.err",
+        # Obfuscated Google framework/component tags (eikg, jqxd, dcqy, ...)
+        # — short lowercase tags that appear from minified Google Mobile
+        # Services classes. Always background, never IMS-related.
+        "eikg",
+        "jqxd",
+        "dcqy",
+        "afes",
+        "dqmh",
+        "afcb",
+        "ajbw",
+        "aeyc",
+        "afco",
+        "ajbi",
+        # Generic Android framework background services. They surface
+        # exceptions / "process died" / lifecycle warnings during routine
+        # operation that have no bearing on the IMS / SIP surface.
+        "DropBoxManagerService",
+        "WindowManager",
+        "InputDispatcher",
+        "ConnectivityService",
+        "DisplayManagerService",
+        "ActivityThread",
+        "PackageManager",
+        "AppOps",
+        "NotificationService",
+        "JobScheduler",
+        "AlarmManager",
+        "GnssLocationProvider",
+        "LocationManagerService",
+        "MediaSessionService",
+        "AudioFlinger",
+        # Battery / thermal / sensor — pure hardware telemetry, never SIP-side.
+        "BatteryDump",
+        "BatteryStatsService",
+        "BatteryStatsImpl",
+        "thermal_core",
+        "thermal_service",
+        "seh_thermal_service",
+        "mtk_thermal",
+        # NOTE: We intentionally do *not* blacklist DSRM-* / NRM-C-* even though
+        # their routine recovery / registration-state warnings are noisy. Real
+        # baseband faults and EMM rejects also surface under those tags, and
+        # losing them would mask cellular-side CVE-class signals. The
+        # tightened ``nv_corruption`` regex (``\bNV(?:RAM)?\b ...``) already
+        # neutralises the ``invalid``/``recovery`` substring FP that motivated
+        # adding them, so per-tag suppression is unnecessary and unsafe.
+        # CHRE (Context Hub Runtime) sensor / positioning chatter. Lines like
+        # ``[WallabyPD] Device (0x201) >>> stationary-unspecified <<<`` matched
+        # native_crash regex purely from the ``>>>`` decoration.
+        "CHRE",
+        "WallabyPD",
+        # Samsung-specific routine telemetry.
+        "SEM_SLOG",
+        "SemDvfs",
+        "SemDesktopModeManager",
+        "SemEmergencyManager",
+        "SemPlatform",
+        # Samsung Connectivity Monitor — fires per-call lifecycle reporter
+        # lines like ``updateAudioSubSystemInfo =MicStatus: -1, CrashCounter:
+        # -1, ...`` whose ``SubSystem`` + ``Crash`` substrings tripped
+        # radio_subsystem_restart under IGNORECASE on every fuzzed INVITE.
+        # Never indicates an actual subsystem restart.
+        "ConnectivityMonitorStateMachine",
+        # Samsung Galaxy RIL audio metric init — periodic
+        # ``initAudioMetricExtHal: Exception: java.util.NoSuchElementException``
+        # fires on every call setup. Lifecycle, not a crash; was the dominant
+        # source of ``uncaught_java_exception`` FPs on Pixel campaigns.
+        "GRIL-AudioMetricExt",
+        # AOSP UI jank measurement framework. Throws routine
+        # ``java.lang.IllegalArgumentException: invalid view`` whenever a
+        # tracked notification row is detached before the jank measurement
+        # window closes. Pure UI metric noise, never SIP/IMS-relevant.
+        "InteractionJankMonitor",
+    }
+)
 
 
 # env override (append-only) — set via VMF_ADB_WHITELIST_TAGS / VMF_ADB_BLACKLIST_TAGS
-WHITELIST_TAG_PREFIXES = WHITELIST_TAG_PREFIXES + _load_env_tags("VMF_ADB_WHITELIST_TAGS")
-BLACKLIST_TAGS_EXACT = BLACKLIST_TAGS_EXACT | frozenset(_load_env_tags("VMF_ADB_BLACKLIST_TAGS"))
+WHITELIST_TAG_PREFIXES = WHITELIST_TAG_PREFIXES + _load_env_tags(
+    "VMF_ADB_WHITELIST_TAGS"
+)
+BLACKLIST_TAGS_EXACT = BLACKLIST_TAGS_EXACT | frozenset(
+    _load_env_tags("VMF_ADB_BLACKLIST_TAGS")
+)
 
 
 def _extract_logcat_tag(line: str) -> str | None:
@@ -304,9 +310,7 @@ class AdbConnector:
         if collector is not None and log_since is not None and log_until is not None:
             log_lines = collector.slice(log_since, log_until)
             combined_lines = [
-                line
-                for buffer_name, line in log_lines
-                if buffer_name in logcat_buffers
+                line for buffer_name, line in log_lines if buffer_name in logcat_buffers
             ]
             for buf in logcat_buffers:
                 matched = [

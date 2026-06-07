@@ -3,7 +3,7 @@ from volte_mutation_fuzzer.dialog.state_extractor import (
     extract_dialog_state_from_responses,
 )
 from volte_mutation_fuzzer.generator.contracts import DialogContext
-from volte_mutation_fuzzer.sender.contracts import SocketObservation
+from volte_mutation_fuzzer.sender.contracts import ObservationClass, SocketObservation
 from volte_mutation_fuzzer.sip.common import SIPURI
 
 IMS_DOMAIN = "ims.mnc001.mcc001.3gppnetwork.org"
@@ -17,7 +17,7 @@ def _make_observation(
     *,
     status_code: int = 200,
     reason_phrase: str = "OK",
-    classification: str = "success",
+    classification: ObservationClass = "success",
 ) -> SocketObservation:
     return SocketObservation(
         status_code=status_code,
@@ -94,9 +94,7 @@ class TestExtractRecordRoute:
     def test_multiple_record_routes_reversed(self) -> None:
         # Record-Route is ordered from first proxy to last (UAC→UAS direction)
         # Route set must be reversed for UAC use (RFC 3261 §12.1.2)
-        obs = _make_observation(
-            {"Record-Route": f"<{ROUTE_1}>,<{ROUTE_2}>"}
-        )
+        obs = _make_observation({"Record-Route": f"<{ROUTE_1}>,<{ROUTE_2}>"})
         ctx = DialogContext(call_id="c1", remote_tag="t")
         extract_dialog_state(obs, ctx)
         assert len(ctx.route_set) == 2

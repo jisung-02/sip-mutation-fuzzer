@@ -68,11 +68,17 @@ class RealUEDirectHelperTests(unittest.TestCase):
                     stderr="",
                 )
             if args[:5] == ["docker", "exec", "scscf", "kamctl", "ul"]:
-                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    args=args, returncode=1, stdout="", stderr=""
+                )
             if args[:5] == ["docker", "exec", "pcscf", "kamctl", "ul"]:
-                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    args=args, returncode=1, stdout="", stderr=""
+                )
             if args[:4] == ["docker", "exec", "mysql", "mysql"]:
-                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    args=args, returncode=1, stdout="", stderr=""
+                )
             if args == ["docker", "logs", "pcscf", "--tail", "500"]:
                 return subprocess.CompletedProcess(
                     args=args,
@@ -86,8 +92,13 @@ class RealUEDirectHelperTests(unittest.TestCase):
             raise AssertionError(f"unexpected command: {args!r}")
 
         with (
-            patch.object(resolver, "_lookup_imsi_from_pyhss", return_value="001010000123511"),
-            patch("volte_mutation_fuzzer.sender.real_ue.subprocess.run", side_effect=fake_run),
+            patch.object(
+                resolver, "_lookup_imsi_from_pyhss", return_value="001010000123511"
+            ),
+            patch(
+                "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+                side_effect=fake_run,
+            ),
         ):
             resolved = resolver.resolve(target)
 
@@ -231,7 +242,8 @@ class RealUEDirectHelperTests(unittest.TestCase):
             ),
         ) as mock_run:
             port_pc, port_ps = resolver.resolve_protected_ports(
-                "111111", ue_ip="10.20.20.8",
+                "111111",
+                ue_ip="10.20.20.8",
             )
 
         self.assertEqual((port_pc, port_ps), (8100, 8101))
@@ -243,7 +255,9 @@ class RealUEDirectHelperTests(unittest.TestCase):
             check=False,
         )
 
-    def test_resolve_protected_ports_xfrm_reads_non_adjacent_pair_from_dport(self) -> None:
+    def test_resolve_protected_ports_xfrm_reads_non_adjacent_pair_from_dport(
+        self,
+    ) -> None:
         """iPhone 16e returns non-adjacent (port_pc, port_ps) pairs.
 
         Real capture from `docker exec pcscf ip xfrm state` for UE 10.20.20.2 / PCSCF 172.22.0.21:
@@ -287,12 +301,15 @@ class RealUEDirectHelperTests(unittest.TestCase):
             ),
         ):
             port_pc, port_ps = resolver.resolve_protected_ports(
-                "111111", ue_ip="10.20.20.2",
+                "111111",
+                ue_ip="10.20.20.2",
             )
 
         self.assertEqual((port_pc, port_ps), (63193, 61008))
 
-    def test_resolve_protected_ports_reads_both_ports_from_security_client_header(self) -> None:
+    def test_resolve_protected_ports_reads_both_ports_from_security_client_header(
+        self,
+    ) -> None:
         """Kamailio P-CSCF log lines carry port-c and port-s in Security-Client.
 
         The header gives the authoritative pair without any +1 estimation:
@@ -350,7 +367,8 @@ class RealUEDirectHelperTests(unittest.TestCase):
             ),
         ):
             port_pc, port_ps = resolver.resolve_protected_ports(
-                "111111", ue_ip="10.20.20.2",
+                "111111",
+                ue_ip="10.20.20.2",
             )
 
         self.assertEqual((port_pc, port_ps), (63193, 61008))
@@ -405,7 +423,8 @@ class RealUEDirectHelperTests(unittest.TestCase):
             ),
         ) as mock_run:
             port_pc, port_ps = resolver.resolve_protected_ports(
-                "111111", ue_ip="10.20.20.8",
+                "111111",
+                ue_ip="10.20.20.8",
             )
 
         self.assertEqual((port_pc, port_ps), (8100, 8101))
@@ -435,8 +454,12 @@ class RealUEDirectHelperTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             side_effect=(
-                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="", stderr=""),
-                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=partial_xfrm, stderr=""),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=partial_xfrm, stderr=""
+                ),
             ),
         ):
             with self.assertRaises(RealUEDirectResolutionError):
@@ -462,14 +485,20 @@ class RealUEDirectHelperTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             side_effect=(
-                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout="", stderr=""),
-                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=rekey_overlap_xfrm, stderr=""),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=rekey_overlap_xfrm, stderr=""
+                ),
             ),
         ):
             with self.assertRaises(RealUEDirectResolutionError):
                 resolver.resolve_protected_ports("111111", ue_ip="10.20.20.2")
 
-    def test_resolve_protected_ports_falls_back_to_xfrm_when_security_client_malformed(self) -> None:
+    def test_resolve_protected_ports_falls_back_to_xfrm_when_security_client_malformed(
+        self,
+    ) -> None:
         """Malformed Security-Client header (missing port-s) must not poison the chain.
 
         The regex requires both port-c= and port-s=; if only port-c is present,
@@ -494,12 +523,17 @@ class RealUEDirectHelperTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             side_effect=(
-                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=malformed_log, stderr=""),
-                subprocess.CompletedProcess(args=["docker"], returncode=0, stdout=canonical_xfrm, stderr=""),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=malformed_log, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=canonical_xfrm, stderr=""
+                ),
             ),
         ):
             port_pc, port_ps = resolver.resolve_protected_ports(
-                "111111", ue_ip="10.20.20.2",
+                "111111",
+                ue_ip="10.20.20.2",
             )
         self.assertEqual((port_pc, port_ps), (63193, 61008))
 
@@ -526,8 +560,10 @@ class IPsecSACheckTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             return_value=subprocess.CompletedProcess(
-                args=["docker"], returncode=0,
-                stdout=self._XFRM_OUTPUT_WITH_UE_SA, stderr="",
+                args=["docker"],
+                returncode=0,
+                stdout=self._XFRM_OUTPUT_WITH_UE_SA,
+                stderr="",
             ),
         ):
             status = check_ipsec_sa_alive()
@@ -538,8 +574,10 @@ class IPsecSACheckTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             return_value=subprocess.CompletedProcess(
-                args=["docker"], returncode=0,
-                stdout=self._XFRM_OUTPUT_NO_UE_SA, stderr="",
+                args=["docker"],
+                returncode=0,
+                stdout=self._XFRM_OUTPUT_NO_UE_SA,
+                stderr="",
             ),
         ):
             status = check_ipsec_sa_alive()
@@ -550,7 +588,10 @@ class IPsecSACheckTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             return_value=subprocess.CompletedProcess(
-                args=["docker"], returncode=0, stdout="", stderr="",
+                args=["docker"],
+                returncode=0,
+                stdout="",
+                stderr="",
             ),
         ):
             status = check_ipsec_sa_alive()
@@ -560,7 +601,10 @@ class IPsecSACheckTests(unittest.TestCase):
         with patch(
             "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
             return_value=subprocess.CompletedProcess(
-                args=["docker"], returncode=1, stdout="", stderr="not found",
+                args=["docker"],
+                returncode=1,
+                stdout="",
+                stderr="not found",
             ),
         ):
             status = check_ipsec_sa_alive()

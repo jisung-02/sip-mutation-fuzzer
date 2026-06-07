@@ -173,9 +173,7 @@ class NativeIPsecObserverTests(unittest.TestCase):
             via_branch=None,
             confidence="low",
         )
-        log_output = (
-            f"SIP/2.0 200 OK Call-ID: unrelated CSeq: 9 INVITE Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-unrelated\n"
-        )
+        log_output = f"SIP/2.0 200 OK Call-ID: unrelated CSeq: 9 INVITE Via: SIP/2.0/UDP {PCSCF_HOST}:5060;branch=z9hG4bK-unrelated\n"
 
         def fake_run(*args, **kwargs):
             return subprocess.CompletedProcess(
@@ -186,7 +184,10 @@ class NativeIPsecObserverTests(unittest.TestCase):
             )
 
         with (
-            patch("volte_mutation_fuzzer.sender.ipsec_native.subprocess.run", side_effect=fake_run),
+            patch(
+                "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+                side_effect=fake_run,
+            ),
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.time.monotonic",
                 side_effect=[0.0, 0.0, 0.6],
@@ -233,7 +234,10 @@ class NativeIPsecObserverTests(unittest.TestCase):
             )
 
         with (
-            patch("volte_mutation_fuzzer.sender.ipsec_native.subprocess.run", side_effect=fake_run),
+            patch(
+                "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+                side_effect=fake_run,
+            ),
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.time.monotonic",
                 side_effect=[0.0, 0.0, 0.6],
@@ -266,9 +270,7 @@ class NativeIPsecObserverTests(unittest.TestCase):
             via_branch=REALISTIC_VIA_BRANCH,
             confidence="high",
         )
-        log_output = (
-            f"SIP/2.0 200 OK Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE Via: SIP/2.0/UDP 172.22.0.21:5103;branch={REALISTIC_VIA_BRANCH}\n"
-        )
+        log_output = f"SIP/2.0 200 OK Call-ID: {REALISTIC_CALL_ID} CSeq: 42 INVITE Via: SIP/2.0/UDP 172.22.0.21:5103;branch={REALISTIC_VIA_BRANCH}\n"
 
         def fake_run(*args, **kwargs):
             return subprocess.CompletedProcess(
@@ -279,7 +281,10 @@ class NativeIPsecObserverTests(unittest.TestCase):
             )
 
         with (
-            patch("volte_mutation_fuzzer.sender.ipsec_native.subprocess.run", side_effect=fake_run),
+            patch(
+                "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+                side_effect=fake_run,
+            ),
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.time.monotonic",
                 side_effect=[0.0, 0.0],
@@ -335,7 +340,10 @@ class NativeIPsecObserverTests(unittest.TestCase):
             )
 
         with (
-            patch("volte_mutation_fuzzer.sender.ipsec_native.subprocess.run", side_effect=fake_run),
+            patch(
+                "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+                side_effect=fake_run,
+            ),
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.time.monotonic",
                 side_effect=[0.0, 0.0],
@@ -391,7 +399,10 @@ class NativeIPsecObserverTests(unittest.TestCase):
             )
 
         with (
-            patch("volte_mutation_fuzzer.sender.ipsec_native.subprocess.run", side_effect=fake_run),
+            patch(
+                "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+                side_effect=fake_run,
+            ),
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.time.monotonic",
                 side_effect=[0.0, 0.0, 0.1, 0.1, 0.6],
@@ -467,7 +478,9 @@ class NativeIPsecObserverTests(unittest.TestCase):
         with (
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
-                side_effect=subprocess.TimeoutExpired(cmd=["docker", "logs"], timeout=0.2),
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["docker", "logs"], timeout=0.2
+                ),
             ),
             patch(
                 "volte_mutation_fuzzer.sender.ipsec_native.time.monotonic",
@@ -512,7 +525,9 @@ class NativeIPsecSendTests(unittest.TestCase):
                 src_port=5103,
                 dst_ip="10.20.20.8",
                 dst_port=8100,
-                payload=f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode("utf-8"),
+                payload=f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode(
+                    "utf-8"
+                ),
                 timeout_seconds=1.0,
             )
 
@@ -544,7 +559,9 @@ class NativeIPsecSendTests(unittest.TestCase):
                     src_port=5103,
                     dst_ip="10.20.20.8",
                     dst_port=8100,
-                    payload=f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode("utf-8"),
+                    payload=f"INVITE {REALISTIC_REQUEST_URI} SIP/2.0\r\n\r\n".encode(
+                        "utf-8"
+                    ),
                     timeout_seconds=1.0,
                 )
 
@@ -567,6 +584,7 @@ class NativeIPsecUdpDriverKeepaliveFilterTests(unittest.TestCase):
 
     def _driver_script(self) -> str:
         from volte_mutation_fuzzer.sender.ipsec_native import _UDP_DRIVER_SCRIPT
+
         return _UDP_DRIVER_SCRIPT
 
     def test_driver_imports_time_for_deadline_loop(self) -> None:

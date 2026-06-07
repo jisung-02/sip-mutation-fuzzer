@@ -21,9 +21,7 @@ class PoeTaskConfigTests(unittest.TestCase):
     def test_poe_tasks_cover_quality_checks_and_softphone_runner(self) -> None:
         tasks = self.pyproject["tool"]["poe"]["tasks"]
 
-        self.assertEqual(
-            tasks["install"]["cmd"], "bash scripts/install_system_deps.sh"
-        )
+        self.assertEqual(tasks["install"]["cmd"], "bash scripts/install_system_deps.sh")
         self.assertEqual(tasks["format"], "ruff format .")
         self.assertEqual(tasks["lint"], "ruff check .")
         self.assertEqual(tasks["lint-fix"], "ruff check . --fix")

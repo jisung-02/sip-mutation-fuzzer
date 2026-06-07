@@ -1,6 +1,7 @@
 import unittest
 import threading
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -390,7 +391,10 @@ def test_take_snapshot_rejects_unknown_profile(tmp_path: Path) -> None:
     connector = AdbConnector(serial="SER123")
 
     with pytest.raises(ValueError, match="unsupported snapshot profile"):
-        connector.take_snapshot(str(tmp_path / "snapshots"), profile="unknown")
+        connector.take_snapshot(
+            str(tmp_path / "snapshots"),
+            profile=cast(Any, "unknown"),
+        )
 
 
 def test_take_snapshot_light_profile_rejects_bugreport(tmp_path: Path) -> None:

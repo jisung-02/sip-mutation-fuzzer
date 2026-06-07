@@ -241,9 +241,7 @@ class SIPCatalogTests(unittest.TestCase):
                 ),
                 "call_id": REALISTIC_CALL_ID_3,
                 "cseq": CSeqHeader(sequence=3, method=SIPMethod.REGISTER),
-                "www_authenticate": (
-                    AuthChallenge(realm=IMS_DOMAIN, nonce="nonce-1"),
-                ),
+                "www_authenticate": (AuthChallenge(realm=IMS_DOMAIN, nonce="nonce-1"),),
             }
         )
         self.assertEqual(packet.status_code, 401)
@@ -291,9 +289,7 @@ class SIPCatalogTests(unittest.TestCase):
         with self.assertRaises(Exception):
             bad_alert_model.model_validate(
                 {
-                    "via": [
-                        ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-alert")
-                    ],
+                    "via": [ViaHeader(host=PCSCF_HOST, branch="z9hG4bK-alert")],
                     "from_": NameAddress(
                         uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
@@ -317,7 +313,9 @@ class SIPCatalogTests(unittest.TestCase):
                         uri=SIPURI(scheme="sip", user="remote", host=IMS_DOMAIN),
                         parameters={"tag": "remote"},
                     ),
-                    "to": NameAddress(uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)),
+                    "to": NameAddress(
+                        uri=SIPURI(scheme="sip", user="111111", host=IMS_DOMAIN)
+                    ),
                     "call_id": REALISTIC_CALL_ID_4,
                     "cseq": CSeqHeader(sequence=5, method=SIPMethod.OPTIONS),
                 }

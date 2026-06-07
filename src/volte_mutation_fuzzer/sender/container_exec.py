@@ -192,7 +192,9 @@ def send_via_container(
 
     if proc.returncode != 0:
         stderr_snippet = (proc.stderr or b"").decode("utf-8", errors="replace")[:200]
-        observer_events.append(f"container-send:exit:{proc.returncode}:{stderr_snippet}")
+        observer_events.append(
+            f"container-send:exit:{proc.returncode}:{stderr_snippet}"
+        )
 
     raw_responses: list[tuple[bytes, tuple[str, int]]] = []
     stdout = (proc.stdout or b"").decode("utf-8", errors="replace")

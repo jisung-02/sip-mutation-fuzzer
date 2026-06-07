@@ -147,7 +147,9 @@ def render_mt_invite(template_text: str, slots: MTInviteSlots) -> str:
     # Split headers / body at the blank line separator
     separator = _CRLF + _CRLF
     if separator not in text:
-        raise ValueError("template has no blank-line header/body separator after substitution")
+        raise ValueError(
+            "template has no blank-line header/body separator after substitution"
+        )
 
     header_part, body_part = text.split(separator, 1)
 
@@ -156,7 +158,9 @@ def render_mt_invite(template_text: str, slots: MTInviteSlots) -> str:
     content_length = len(body_bytes)
 
     # Replace the placeholder Content-Length value (rendered as empty string above)
-    header_part = header_part.replace("Content-Length: ", f"Content-Length: {content_length}", 1)
+    header_part = header_part.replace(
+        "Content-Length: ", f"Content-Length: {content_length}", 1
+    )
 
     # Verify no leftover {{...}} slots
     remaining = _SLOT_PATTERN.findall(header_part) + _SLOT_PATTERN.findall(body_part)

@@ -215,13 +215,11 @@ METHOD_BODY: dict[SIPMethod, tuple[str, str]] = {
     SIPMethod.MESSAGE: ("text/plain", "Hello from SIP MESSAGE\r\n"),
     SIPMethod.NOTIFY: (
         "application/pidf+xml",
-        '<?xml version="1.0"?>\r\n'
-        f'<presence entity="{CALLEE_AOR}"/>\r\n',
+        f'<?xml version="1.0"?>\r\n<presence entity="{CALLEE_AOR}"/>\r\n',
     ),
     SIPMethod.PUBLISH: (
         "application/pidf+xml",
-        '<?xml version="1.0"?>\r\n'
-        f'<presence entity="{CALLER_AOR}"/>\r\n',
+        f'<?xml version="1.0"?>\r\n<presence entity="{CALLER_AOR}"/>\r\n',
     ),
     SIPMethod.UPDATE: (
         "application/sdp",

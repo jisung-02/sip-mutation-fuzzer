@@ -483,8 +483,13 @@ class AdbOracle:
         if hasattr(self._collector, "is_healthy") and not self._collector.is_healthy:
             dead = getattr(self._collector, "dead_buffers", frozenset())
             if dead:
-                error = f"adb collector disconnected: buffers {','.join(sorted(dead))} dead"
-            elif hasattr(self._collector, "is_running") and not self._collector.is_running:
+                error = (
+                    f"adb collector disconnected: buffers {','.join(sorted(dead))} dead"
+                )
+            elif (
+                hasattr(self._collector, "is_running")
+                and not self._collector.is_running
+            ):
                 error = "adb collector stopped"
 
         lines = self._collector.get_lines()

@@ -46,7 +46,8 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
             timeout_seconds=1.0,
             cooldown_seconds=0.0,
             check_process=False,
-            results_dir=tmpdir.name, output_name="test",
+            results_dir=tmpdir.name,
+            output_name="test",
         )
         defaults.update(kwargs)
         return CampaignConfig.model_validate(defaults)
@@ -65,9 +66,7 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
     def _methods_seen(server: DialogUDPResponder) -> list[str]:
         methods: list[str] = []
         for payload in server.received_payloads:
-            first_line = payload.split(b"\r\n", 1)[0].decode(
-                "utf-8", errors="replace"
-            )
+            first_line = payload.split(b"\r\n", 1)[0].decode("utf-8", errors="replace")
             methods.append(first_line.split(" ", 1)[0])
         return methods
 
@@ -91,9 +90,7 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
         self.assertIn("BYE", self._methods_seen(server))
 
     def test_execute_case_returns_unknown_when_dialog_setup_fails(self) -> None:
-        server = DialogUDPResponder(
-            responses_by_method={"INVITE": make_486_busy()}
-        )
+        server = DialogUDPResponder(responses_by_method={"INVITE": make_486_busy()})
         server.start()
         self.addCleanup(server.close)
 
@@ -157,7 +154,10 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
         self.assertEqual(self._methods_seen(server), ["INVITE", "PRACK"])
         prack_payload = server.received_payloads[-1].decode("utf-8", errors="replace")
         self.assertIn("PRACK sip:111111@127.0.0.1:5070", prack_payload)
-        self.assertIn("To: \"UE\" <sip:111111@ims.mnc001.mcc001.3gppnetwork.org>;tag=early-183", prack_payload)
+        self.assertIn(
+            'To: "UE" <sip:111111@ims.mnc001.mcc001.3gppnetwork.org>;tag=early-183',
+            prack_payload,
+        )
         self.assertIn("RAck: 73 41 INVITE", prack_payload)
         self.assertIn(
             "Route: sip:pcscf2.ims.mnc001.mcc001.3gppnetwork.org;lr",

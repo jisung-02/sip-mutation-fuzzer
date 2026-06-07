@@ -40,7 +40,15 @@ def _write_campaign(tmpdir: str, cases: list[CaseResult]) -> Path:
     out = Path(tmpdir) / "campaign.jsonl"
     config = CampaignConfig(target_host="127.0.0.1", max_cases=len(cases))
     summary_data = {"total": len(cases)}
-    for v in ("normal", "suspicious", "timeout", "crash", "stack_failure", "infra_failure", "unknown"):
+    for v in (
+        "normal",
+        "suspicious",
+        "timeout",
+        "crash",
+        "stack_failure",
+        "infra_failure",
+        "unknown",
+    ):
         summary_data[v] = sum(1 for c in cases if c.verdict == v)
     summary = CampaignSummary(**summary_data)
 

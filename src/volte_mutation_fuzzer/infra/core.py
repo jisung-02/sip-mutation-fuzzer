@@ -278,7 +278,10 @@ class InfraManager:
             detail = _join_output(result.stdout, result.stderr)
             if result.returncode == 0:
                 return
-            if "already exists" in detail.casefold() or "duplicate key" in detail.casefold():
+            if (
+                "already exists" in detail.casefold()
+                or "duplicate key" in detail.casefold()
+            ):
                 return
             last_detail = detail or f"command exited with status {result.returncode}"
         raise RuntimeError(f"failed to provision HSS subscriber {imsi}: {last_detail}")

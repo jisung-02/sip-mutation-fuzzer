@@ -134,7 +134,11 @@ def _build_target(
             "real-ue-direct requires exactly one of host or msisdn"
         )
     normalized_ipsec_mode = "native" if ipsec_mode == "ipsec" else ipsec_mode
-    if mode == "real-ue-direct" and normalized_ipsec_mode == "native" and msisdn is None:
+    if (
+        mode == "real-ue-direct"
+        and normalized_ipsec_mode == "native"
+        and msisdn is None
+    ):
         raise typer.BadParameter(
             "real-ue-direct native ipsec_mode requires --target-msisdn"
         )
@@ -289,7 +293,9 @@ def request_command(
     ] = False,
     preserve_contact: Annotated[
         bool,
-        typer.Option("--preserve-contact/--no-preserve-contact", help="Do not rewrite Contact."),
+        typer.Option(
+            "--preserve-contact/--no-preserve-contact", help="Do not rewrite Contact."
+        ),
     ] = False,
 ) -> None:
     """Generate a baseline request and immediately send it."""
@@ -318,12 +324,15 @@ def request_command(
         )
         resolved = resolver.resolve(tmp_target, impi=impi)
         port_pc, port_ps = resolver.resolve_protected_ports(
-            target_msisdn or "", ue_ip=resolved.host,
+            target_msisdn or "",
+            ue_ip=resolved.host,
         )
 
         resolved_impi = impi or resolved.impi or os.environ.get("VMF_IMPI")
         if not resolved_impi:
-            raise typer.BadParameter("IMPI could not be resolved. Provide --impi or set VMF_IMPI.")
+            raise typer.BadParameter(
+                "IMPI could not be resolved. Provide --impi or set VMF_IMPI."
+            )
 
         if method == SIPMethod.MESSAGE:
             packet_bytes = build_mt_packet_bytes(

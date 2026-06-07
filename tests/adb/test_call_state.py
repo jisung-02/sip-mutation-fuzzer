@@ -27,21 +27,15 @@ class CallStateCheckerTests(unittest.TestCase):
         return checker
 
     def test_parse_idle(self) -> None:
-        checker = self._make_patched(
-            "  mCallState=0\n  mCallIncomingNumber=\n"
-        )
+        checker = self._make_patched("  mCallState=0\n  mCallIncomingNumber=\n")
         self.assertEqual(checker.get_call_state(), CallState.IDLE)
 
     def test_parse_ringing(self) -> None:
-        checker = self._make_patched(
-            "  mCallState=1\n  mCallIncomingNumber=111111\n"
-        )
+        checker = self._make_patched("  mCallState=1\n  mCallIncomingNumber=111111\n")
         self.assertEqual(checker.get_call_state(), CallState.RINGING)
 
     def test_parse_offhook(self) -> None:
-        checker = self._make_patched(
-            "  mCallState=2\n"
-        )
+        checker = self._make_patched("  mCallState=2\n")
         self.assertEqual(checker.get_call_state(), CallState.OFFHOOK)
 
     def test_parse_unknown_on_missing(self) -> None:

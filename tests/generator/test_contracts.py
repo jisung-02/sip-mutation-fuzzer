@@ -139,9 +139,7 @@ class DialogContextTests(unittest.TestCase):
         self.assertEqual(context.remote_cseq, 10)
 
     def test_fork_for_reinvite_preserves_context_state(self) -> None:
-        route = NameAddress(
-            uri=SIPURI(scheme="sip", user="pcscf", host=PCSCF_HOST)
-        )
+        route = NameAddress(uri=SIPURI(scheme="sip", user="pcscf", host=PCSCF_HOST))
         request_uri = SIPURI(scheme="sip", user="001010000123511", host=UE_HOST)
         context = DialogContext(
             call_id=REALISTIC_REINVITE_CALL_ID,
@@ -215,9 +213,7 @@ class RequestSpecTests(unittest.TestCase):
 
 class ResponseSpecTests(unittest.TestCase):
     def test_normalizes_scenario_and_copies_overrides(self) -> None:
-        source_overrides = {
-            "contact": [{"uri": {"scheme": "sip", "host": PCSCF_HOST}}]
-        }
+        source_overrides = {"contact": [{"uri": {"scheme": "sip", "host": PCSCF_HOST}}]}
         spec = ResponseSpec.model_validate(
             {
                 "status_code": 180,

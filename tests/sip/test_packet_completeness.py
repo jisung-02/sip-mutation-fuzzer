@@ -126,7 +126,10 @@ class PacketCompletenessTests(unittest.TestCase):
                 self.assertIsNone(scenario)
             else:
                 self.assertIsNotNone(scenario)
-                self.assertEqual(scenario.scenario_type.value, completion.runtime_path.value)
+                assert scenario is not None
+                self.assertEqual(
+                    scenario.scenario_type.value, completion.runtime_path.value
+                )
 
     def test_generator_complete_methods_render_without_overrides(self) -> None:
         generator = SIPGenerator(GeneratorSettings())

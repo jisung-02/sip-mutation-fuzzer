@@ -95,9 +95,7 @@ class TargetEndpoint(BaseModel):
                     "real-ue-direct requires at least one of host or msisdn"
                 )
             if self.ipsec_mode == "native" and self.msisdn is None:
-                raise ValueError(
-                    "real-ue-direct native ipsec_mode requires msisdn"
-                )
+                raise ValueError("real-ue-direct native ipsec_mode requires msisdn")
 
             # host=None 허용 — RealUEDirectResolver가 msisdn으로 동적 resolve
             if self.transport not in ("UDP", "TCP"):
@@ -123,9 +121,7 @@ class TargetEndpoint(BaseModel):
                         "real-ue-direct source_ip must be an IPv4 address"
                     ) from exc
                 if parsed_source.version != 4:
-                    raise ValueError(
-                        "real-ue-direct source_ip must be an IPv4 address"
-                    )
+                    raise ValueError("real-ue-direct source_ip must be an IPv4 address")
             return self
 
         if self.msisdn is not None:
@@ -166,7 +162,11 @@ class SendArtifact(BaseModel):
         preserve_via: bool = False,
         preserve_contact: bool = False,
     ) -> Self:
-        return cls(wire_text=wire_text, preserve_via=preserve_via, preserve_contact=preserve_contact)
+        return cls(
+            wire_text=wire_text,
+            preserve_via=preserve_via,
+            preserve_contact=preserve_contact,
+        )
 
     @classmethod
     def from_packet_bytes(
@@ -176,7 +176,11 @@ class SendArtifact(BaseModel):
         preserve_via: bool = False,
         preserve_contact: bool = False,
     ) -> Self:
-        return cls(packet_bytes=packet_bytes, preserve_via=preserve_via, preserve_contact=preserve_contact)
+        return cls(
+            packet_bytes=packet_bytes,
+            preserve_via=preserve_via,
+            preserve_contact=preserve_contact,
+        )
 
     @computed_field
     @property

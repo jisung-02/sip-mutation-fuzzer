@@ -799,9 +799,9 @@ class CampaignReplayCLITests(unittest.TestCase):
             store.append(_make_case_result(0, profile="parser_breaker"))
             store.write_footer(campaign)
 
-            captured: dict[str, object] = {}
+            captured: dict[str, Mock] = {}
 
-            def _build_executor(*args, **kwargs):
+            def _build_executor(*args, **kwargs) -> Mock:
                 executor = Mock()
                 executor._execute_case.return_value = CaseResult(
                     case_id=0,

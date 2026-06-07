@@ -17,7 +17,9 @@ def main() -> None:
         sys.exit(result.returncode)
 
     for subnet, via in ROUTES:
-        subprocess.run(["sudo", "-n", "ip", "route", "replace", subnet, "via", via], check=True)
+        subprocess.run(
+            ["sudo", "-n", "ip", "route", "replace", subnet, "via", via], check=True
+        )
 
     print("Routes added:")
     subprocess.run(["ip", "route", "show"])

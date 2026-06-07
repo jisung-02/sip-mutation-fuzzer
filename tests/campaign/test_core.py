@@ -5,7 +5,7 @@ import unittest
 import unittest.mock
 from types import SimpleNamespace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.contracts import (
@@ -29,6 +29,7 @@ from volte_mutation_fuzzer.sender.contracts import TargetEndpoint
 from volte_mutation_fuzzer.sender.contracts import SocketObservation, SendReceiveResult
 from volte_mutation_fuzzer.ios.contracts import IosDeviceInfo, IosSnapshotResult
 from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
+from volte_mutation_fuzzer.sip.common import SIPURI
 from tests.sender._server import UDPResponder
 
 REALISTIC_MT_REQUEST_URI = "sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~1"
@@ -1848,6 +1849,7 @@ class CampaignExecutorTests(unittest.TestCase):
 
         adb_warning = result.details.get("adb_warning")
         assert isinstance(adb_warning, dict)
+        adb_warning = cast(dict[str, object], adb_warning)
         self.assertEqual(adb_warning["severity"], "warning")
         self.assertIn("IMS deregist", str(adb_warning["matched_line"]))
 
@@ -2239,6 +2241,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 adb_enabled=False,
             )
             executor = CampaignExecutor(cfg)
+            ios_collector = executor._ios_collector
+            assert ios_collector is not None
             fake_case = CaseResult(
                 case_id=0,
                 seed=0,
@@ -2291,6 +2295,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 adb_enabled=False,
             )
             executor = CampaignExecutor(cfg)
+            ios_collector = executor._ios_collector
+            assert ios_collector is not None
             fake_case = CaseResult(
                 case_id=0,
                 seed=0,
@@ -2313,11 +2319,11 @@ class CampaignExecutorTests(unittest.TestCase):
                     ),
                 ),
                 unittest.mock.patch.object(
-                    executor._ios_collector,
+                    ios_collector,
                     "start",
                 ) as start_mock,
                 unittest.mock.patch.object(
-                    executor._ios_collector,
+                    ios_collector,
                     "stop",
                 ),
                 unittest.mock.patch.object(
@@ -2329,7 +2335,7 @@ class CampaignExecutorTests(unittest.TestCase):
                 executor.run()
 
             start_mock.assert_called_once()
-            self.assertEqual(executor._ios_collector._config.udid, "AUTO-123")
+            self.assertEqual(ios_collector._config.udid, "AUTO-123")
 
     def test_run_keeps_ios_udid_when_device_metadata_query_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2346,6 +2352,8 @@ class CampaignExecutorTests(unittest.TestCase):
                 adb_enabled=False,
             )
             executor = CampaignExecutor(cfg)
+            ios_collector = executor._ios_collector
+            assert ios_collector is not None
             fake_case = CaseResult(
                 case_id=0,
                 seed=0,
@@ -2368,11 +2376,11 @@ class CampaignExecutorTests(unittest.TestCase):
                     ),
                 ),
                 unittest.mock.patch.object(
-                    executor._ios_collector,
+                    ios_collector,
                     "start",
                 ) as start_mock,
                 unittest.mock.patch.object(
-                    executor._ios_collector,
+                    ios_collector,
                     "stop",
                 ),
                 unittest.mock.patch.object(
@@ -2384,7 +2392,7 @@ class CampaignExecutorTests(unittest.TestCase):
                 executor.run()
 
             start_mock.assert_called_once()
-            self.assertEqual(executor._ios_collector._config.udid, "AUTO-123")
+            self.assertEqual(ios_collector._config.udid, "AUTO-123")
             baseline_path = Path(tmpdir) / "test" / "ios_baseline" / "device_info.json"
             body = json.loads(baseline_path.read_text(encoding="utf-8"))
             self.assertEqual(body["udid"], "AUTO-123")
@@ -3687,11 +3695,16 @@ class CampaignBuildPacketDeterminismTests(unittest.TestCase):
             )
             executor = CampaignExecutor(cfg)
         ctx = executor._synthetic_dialog_context()
-        self.assertIsNotNone(ctx.request_uri.host)
-        self.assertIn("111111", ctx.request_uri.host)
+        self.assertIsInstance(ctx.request_uri, SIPURI)
+        request_uri = cast(SIPURI, ctx.request_uri)
+        host = request_uri.host
+        assert host is not None
+        self.assertIn("111111", host)
 
         ctx_seeded = executor._synthetic_dialog_context(seed=7)
-        self.assertIsNotNone(ctx_seeded.request_uri.host)
+        self.assertIsInstance(ctx_seeded.request_uri, SIPURI)
+        seeded_request_uri = cast(SIPURI, ctx_seeded.request_uri)
+        assert seeded_request_uri.host is not None
 
 
 class CampaignConfigMutationsPerCaseTests(unittest.TestCase):

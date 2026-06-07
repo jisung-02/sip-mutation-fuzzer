@@ -15,6 +15,7 @@ from volte_mutation_fuzzer.sender.contracts import SendArtifact
 from volte_mutation_fuzzer.sender.contracts import SendReceiveResult
 from volte_mutation_fuzzer.sender.contracts import SocketObservation
 from volte_mutation_fuzzer.sender.contracts import TargetEndpoint
+from volte_mutation_fuzzer.sip.common import SIPURI
 
 from tests.dialog._dialog_server import (
     DialogUDPResponder,
@@ -98,21 +99,28 @@ class TestInviteDialogBye(unittest.TestCase):
         sock = mock.Mock()
         mutation_config = MutationConfig(seed=42, strategy="default", layer="model")
 
-        with mock.patch.object(
-            generator,
-            "generate_request",
-            return_value=packet,
-        ), mock.patch.object(
-            mutator,
-            "mutate",
-            return_value=mutated,
-        ), mock.patch.object(
-            orchestrator,
-            "_artifact_from_mutated",
-            return_value=SendArtifact.from_wire_text("BYE sip:test SIP/2.0\r\n\r\n"),
-        ), mock.patch(
-            "volte_mutation_fuzzer.dialog.core.read_udp_observations",
-            return_value=[],
+        with (
+            mock.patch.object(
+                generator,
+                "generate_request",
+                return_value=packet,
+            ),
+            mock.patch.object(
+                mutator,
+                "mutate",
+                return_value=mutated,
+            ),
+            mock.patch.object(
+                orchestrator,
+                "_artifact_from_mutated",
+                return_value=SendArtifact.from_wire_text(
+                    "BYE sip:test SIP/2.0\r\n\r\n"
+                ),
+            ),
+            mock.patch(
+                "volte_mutation_fuzzer.dialog.core.read_udp_observations",
+                return_value=[],
+            ),
         ):
             result = orchestrator._send_step(
                 sock,
@@ -143,18 +151,24 @@ class TestInviteDialogBye(unittest.TestCase):
         sock.sendto.side_effect = OSError("send failed")
         mutation_config = MutationConfig(seed=42, strategy="default", layer="model")
 
-        with mock.patch.object(
-            generator,
-            "generate_request",
-            return_value=packet,
-        ), mock.patch.object(
-            mutator,
-            "mutate",
-            return_value=mutated,
-        ), mock.patch.object(
-            orchestrator,
-            "_artifact_from_mutated",
-            return_value=SendArtifact.from_wire_text("BYE sip:test SIP/2.0\r\n\r\n"),
+        with (
+            mock.patch.object(
+                generator,
+                "generate_request",
+                return_value=packet,
+            ),
+            mock.patch.object(
+                mutator,
+                "mutate",
+                return_value=mutated,
+            ),
+            mock.patch.object(
+                orchestrator,
+                "_artifact_from_mutated",
+                return_value=SendArtifact.from_wire_text(
+                    "BYE sip:test SIP/2.0\r\n\r\n"
+                ),
+            ),
         ):
             result = orchestrator._send_step(
                 sock,
@@ -382,10 +396,13 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         socket_context.__enter__.return_value = socket_factory
         socket_context.__exit__.return_value = False
 
-        with mock.patch(
-            "volte_mutation_fuzzer.dialog.core.socket.socket",
-            return_value=socket_context,
-        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+        with (
+            mock.patch(
+                "volte_mutation_fuzzer.dialog.core.socket.socket",
+                return_value=socket_context,
+            ),
+            mock.patch.object(orchestrator, "_run_step", side_effect=run_step),
+        ):
             exchange = orchestrator.execute(scenario, mutation_config)
 
         assert exchange.setup_succeeded is True
@@ -393,9 +410,11 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         context = captured_contexts[0]
         assert context.local_tag == "early-183"
         assert context.request_uri is not None
+        assert isinstance(context.request_uri, SIPURI)
         assert context.request_uri.host == "10.0.0.9"
         assert context.request_uri.port == 5088
         assert len(context.route_set) == 2
+        assert isinstance(context.route_set[0], SIPURI)
         assert context.route_set[0].host == "pcscf2.ims.mnc001.mcc001.3gppnetwork.org"
         assert context.reliable_invite_rseq == 73
         assert context.reliable_invite_cseq == 41
@@ -459,10 +478,13 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         socket_context.__enter__.return_value = socket_factory
         socket_context.__exit__.return_value = False
 
-        with mock.patch(
-            "volte_mutation_fuzzer.dialog.core.socket.socket",
-            return_value=socket_context,
-        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+        with (
+            mock.patch(
+                "volte_mutation_fuzzer.dialog.core.socket.socket",
+                return_value=socket_context,
+            ),
+            mock.patch.object(orchestrator, "_run_step", side_effect=run_step),
+        ):
             exchange = orchestrator.execute(scenario, mutation_config)
 
         assert exchange.setup_succeeded is False
@@ -545,10 +567,13 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         socket_context.__enter__.return_value = socket_factory
         socket_context.__exit__.return_value = False
 
-        with mock.patch(
-            "volte_mutation_fuzzer.dialog.core.socket.socket",
-            return_value=socket_context,
-        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+        with (
+            mock.patch(
+                "volte_mutation_fuzzer.dialog.core.socket.socket",
+                return_value=socket_context,
+            ),
+            mock.patch.object(orchestrator, "_run_step", side_effect=run_step),
+        ):
             exchange = orchestrator.execute(scenario, mutation_config)
 
         assert exchange.setup_succeeded is False
@@ -638,10 +663,13 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         socket_context.__enter__.return_value = socket_factory
         socket_context.__exit__.return_value = False
 
-        with mock.patch(
-            "volte_mutation_fuzzer.dialog.core.socket.socket",
-            return_value=socket_context,
-        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+        with (
+            mock.patch(
+                "volte_mutation_fuzzer.dialog.core.socket.socket",
+                return_value=socket_context,
+            ),
+            mock.patch.object(orchestrator, "_run_step", side_effect=run_step),
+        ):
             exchange = orchestrator.execute(scenario, mutation_config)
 
         assert exchange.setup_succeeded is True
@@ -737,10 +765,13 @@ class TestInvitePrackEarlyDialogState(unittest.TestCase):
         socket_context.__enter__.return_value = socket_factory
         socket_context.__exit__.return_value = False
 
-        with mock.patch(
-            "volte_mutation_fuzzer.dialog.core.socket.socket",
-            return_value=socket_context,
-        ), mock.patch.object(orchestrator, "_run_step", side_effect=run_step):
+        with (
+            mock.patch(
+                "volte_mutation_fuzzer.dialog.core.socket.socket",
+                return_value=socket_context,
+            ),
+            mock.patch.object(orchestrator, "_run_step", side_effect=run_step),
+        ):
             exchange = orchestrator.execute(scenario, mutation_config)
 
         assert exchange.setup_succeeded is True

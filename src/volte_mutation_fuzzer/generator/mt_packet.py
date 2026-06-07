@@ -76,14 +76,14 @@ _INVITE_SDP_TEMPLATE: Final[str] = (
 )
 
 _SMS_TEXT_ALPHABET: Final[str] = (
-    "abcdefghijklmnopqrstuvwxyz"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "0123456789 ."
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ."
 )
 _SMS_DEFAULT_SMSC: Final[str] = "821000000000"
 _SMS_DEFAULT_SCTS_HEX: Final[str] = "62403151423300"
 _SMS_DEFAULT_TEXT: Final[str] = "DL_SMS_TEST"
-_SMS_DEFAULT_TIMESTAMP: Final[datetime] = datetime(2026, 4, 13, 15, 24, 33, tzinfo=timezone.utc)
+_SMS_DEFAULT_TIMESTAMP: Final[datetime] = datetime(
+    2026, 4, 13, 15, 24, 33, tzinfo=timezone.utc
+)
 
 
 def _encode_tbcd(digits: str) -> str:
@@ -171,10 +171,10 @@ def _build_default_sms_body(seed: int, from_msisdn: str) -> str:
 
     tp_oa = f"{len(from_msisdn):02X}91{_encode_tbcd(from_msisdn)}"
     tpdu_hex = (
-        "04"                   # first octet: MTI=DELIVER, MMS=1
-        + tp_oa                # TP-Originating-Address
-        + "00"                 # TP-PID
-        + "04"                 # TP-DCS: 8-bit data
+        "04"  # first octet: MTI=DELIVER, MMS=1
+        + tp_oa  # TP-Originating-Address
+        + "00"  # TP-PID
+        + "04"  # TP-DCS: 8-bit data
         + _SMS_DEFAULT_SCTS_HEX
         + f"{len(ud_bytes):02X}"
         + ud_bytes.hex()
@@ -185,11 +185,11 @@ def _build_default_sms_body(seed: int, from_msisdn: str) -> str:
     rp_oa_len = len(bytes.fromhex(rp_oa_body))
 
     rp_data = (
-        "00"                                  # RP-MTI = RP-DATA (n→ms)
-        + f"{seed & 0xFF:02X}"                # RP-Message-Reference
-        + f"{rp_oa_len:02X}{rp_oa_body}"      # RP-Originator-Address (SMSC)
-        + "00"                                # RP-Destination-Address (empty)
-        + f"{tpdu_len:02X}{tpdu_hex}"         # RP-User-Data (TPDU)
+        "00"  # RP-MTI = RP-DATA (n→ms)
+        + f"{seed & 0xFF:02X}"  # RP-Message-Reference
+        + f"{rp_oa_len:02X}{rp_oa_body}"  # RP-Originator-Address (SMSC)
+        + "00"  # RP-Destination-Address (empty)
+        + f"{tpdu_len:02X}{tpdu_hex}"  # RP-User-Data (TPDU)
     )
     return rp_data.upper()
 
@@ -408,8 +408,7 @@ def build_mt_packet(
 
     # Request line
     lines.append(
-        f"{method} sip:{impi}@{ue_ip}:{port_pc}"
-        f";alias={ue_ip}~{port_ps}~1 SIP/2.0"
+        f"{method} sip:{impi}@{ue_ip}:{port_pc};alias={ue_ip}~{port_ps}~1 SIP/2.0"
     )
 
     # Via
@@ -450,7 +449,9 @@ def build_mt_packet(
     )
 
     # 3GPP headers
-    lines.append(f"P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={cell_id}")
+    lines.append(
+        f"P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp={cell_id}"
+    )
     lines.append("P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel")
     lines.append(f"P-Asserted-Identity: <sip:{effective_from}@{ims_domain}>")
     lines.append(f"P-Charging-Vector: icid-value={icid};icid-generated-at={pcscf_ip}")
@@ -459,8 +460,12 @@ def build_mt_packet(
     # Method-specific headers
     if method == "INVITE":
         lines.append("P-Early-Media: supported")
-        lines.append("Supported: 100rel,histinfo,join,norefersub,precondition,replaces,timer,sec-agree")
-        lines.append("Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK,NOTIFY,MESSAGE,REFER")
+        lines.append(
+            "Supported: 100rel,histinfo,join,norefersub,precondition,replaces,timer,sec-agree"
+        )
+        lines.append(
+            "Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK,NOTIFY,MESSAGE,REFER"
+        )
         lines.append("Accept: application/sdp,application/3gpp-ims+xml")
         lines.append("Session-Expires: 1800")
         lines.append("Min-SE: 90")
@@ -537,7 +542,9 @@ def build_mt_packet_bytes(
     ims_domain = source.get("VMF_IMS_DOMAIN", "ims.mnc001.mcc001.3gppnetwork.org")
     pcscf_ip = source.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21")
     effective_from = from_msisdn or source.get("VMF_FROM_MSISDN", "222222")
-    sms_text = body if body is not None else source.get("VMF_SMS_TEXT", _SMS_DEFAULT_TEXT)
+    sms_text = (
+        body if body is not None else source.get("VMF_SMS_TEXT", _SMS_DEFAULT_TEXT)
+    )
     x_msg_id = source.get("VMF_X_MSG_ID", "sms_client")
 
     rng = random.Random(seed)

@@ -290,7 +290,8 @@ class SIPSenderReactor:
         pixel_request_uri: str | None = None
         if target.ipsec_mode == "native" and target.msisdn is not None:
             _port_pc, port_ps = resolver.resolve_protected_ports(
-                target.msisdn, ue_ip=resolved.host,
+                target.msisdn,
+                ue_ip=resolved.host,
             )
             # Inbound P-CSCF→UE SIP requests belong on the UE's UAS listener
             # (port_ps) regardless of transport. port_pc is UE's UAC (outbound)
@@ -318,7 +319,9 @@ class SIPSenderReactor:
 
         if target.pixel_mode and resolved.impi is not None:
             pixel_request_uri = f"sip:{resolved.impi}@{resolved.host}:{resolved_port}"
-            observer_events.append(f"pixel-mode:rewrite-request-uri:{pixel_request_uri}")
+            observer_events.append(
+                f"pixel-mode:rewrite-request-uri:{pixel_request_uri}"
+            )
 
         if target.ipsec_mode == "native":
             return self._send_via_native_ipsec(
@@ -505,7 +508,9 @@ class SIPSenderReactor:
             started_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             send_timeout = round(max(deadline - time.monotonic(), 0.0), 6)
             if send_timeout <= 0.0:
-                observer_events.append("native-ipsec:send-skipped:timeout-budget-exhausted")
+                observer_events.append(
+                    "native-ipsec:send-skipped:timeout-budget-exhausted"
+                )
                 return resolved_target, payload, [], tuple(observer_events)
             # IMS IPsec negotiates four SAs (UE/P-CSCF × client/server). The
             # primary 4-tuple drives the server-side SA (port_ps ↔
@@ -567,9 +572,7 @@ class SIPSenderReactor:
                 observer_events.append("native-ipsec:recv:observation-added")
 
             observe_timeout = round(max(deadline - time.monotonic(), 0.0), 6)
-            if observe_timeout > 0.0 and (
-                not observations or collect_all_responses
-            ):
+            if observe_timeout > 0.0 and (not observations or collect_all_responses):
                 observations.extend(
                     observe_pcscf_log_responses(
                         container=container,

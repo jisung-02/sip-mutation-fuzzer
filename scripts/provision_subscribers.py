@@ -109,7 +109,9 @@ def upsert_pyhss(
                 rid = record.get(f"{resource}_id") or record.get("id")
                 if rid:
                     patch_data = update_data if update_data is not None else data
-                    patch_status, patch_body = patch_json(f"{base_url}/{resource}/{rid}", patch_data)
+                    patch_status, patch_body = patch_json(
+                        f"{base_url}/{resource}/{rid}", patch_data
+                    )
                     try:
                         return patch_status, json.loads(patch_body)
                     except Exception:
@@ -135,7 +137,7 @@ def provision_open5gs(env: dict, subscribers: list[dict]) -> None:
 const imsi = "{imsi}";
 const ki = "{ki}";
 const opc = "{opc}";
-const msisdn = "{ue['msisdn']}";
+const msisdn = "{ue["msisdn"]}";
 
 const defaultSlice = [{{
   sst: 1,
@@ -217,8 +219,20 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
 
     # APN 생성 (이미 있으면 무시)
     print("  Creating APNs...")
-    upsert_pyhss(base_url, "apn", {"apn": "internet", "apn_ambr_dl": 0, "apn_ambr_ul": 0}, "apn", "internet")
-    upsert_pyhss(base_url, "apn", {"apn": "ims", "apn_ambr_dl": 0, "apn_ambr_ul": 0}, "apn", "ims")
+    upsert_pyhss(
+        base_url,
+        "apn",
+        {"apn": "internet", "apn_ambr_dl": 0, "apn_ambr_ul": 0},
+        "apn",
+        "internet",
+    )
+    upsert_pyhss(
+        base_url,
+        "apn",
+        {"apn": "ims", "apn_ambr_dl": 0, "apn_ambr_ul": 0},
+        "apn",
+        "ims",
+    )
     print("    APNs ready (internet, ims)")
 
     mnc = env.get("MNC", "01").zfill(3)
@@ -235,16 +249,19 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
 
         # AUC 생성 또는 업데이트 (업데이트 시 sqn 리셋 금지 — IMS 인증 깨짐)
         _, auc = upsert_pyhss(
-            base_url, "auc",
+            base_url,
+            "auc",
             {"ki": ki, "opc": opc, "amf": "8000", "sqn": 0, "imsi": imsi},
-            "imsi", imsi,
+            "imsi",
+            imsi,
             update_data={"ki": ki, "opc": opc, "amf": "8000", "imsi": imsi},
         )
         auc_id = auc.get("auc_id", i)
 
         # Subscriber 생성 또는 업데이트
         _, sub = upsert_pyhss(
-            base_url, "subscriber",
+            base_url,
+            "subscriber",
             {
                 "imsi": imsi,
                 "enabled": True,
@@ -255,14 +272,16 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
                 "ue_ambr_dl": 0,
                 "ue_ambr_ul": 0,
             },
-            "imsi", imsi,
+            "imsi",
+            imsi,
         )
 
         # IMS Subscriber 생성 또는 업데이트
         # ifc_path 필수 — null이면 S-CSCF MAR에서 403 반환
         scscf_peer = f"scscf.{ims_domain}"
         upsert_pyhss(
-            base_url, "ims_subscriber",
+            base_url,
+            "ims_subscriber",
             {
                 "imsi": imsi,
                 "msisdn": msisdn,
@@ -273,7 +292,8 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
                 "scscf": scscf_uri,
                 "scscf_realm": ims_domain,
             },
-            "imsi", imsi,
+            "imsi",
+            imsi,
         )
 
     print("  Done\n")
@@ -298,7 +318,9 @@ def apply_pyhss_ifc_template(project_root: Path) -> None:
         return
 
     if out != repo_ifc.read_text():
-        print("  WARNING: repo iFC differs from pyhss bind mount — check rsync to server")
+        print(
+            "  WARNING: repo iFC differs from pyhss bind mount — check rsync to server"
+        )
 
     print("Restarting pyhss to reload iFC template...")
     subprocess.run(["docker", "restart", "pyhss"], check=False)

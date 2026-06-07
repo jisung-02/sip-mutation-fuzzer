@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+from typing import cast
 from unittest.mock import patch
 
 from volte_mutation_fuzzer.adb.core import AdbAnomalyDetector
@@ -679,6 +680,7 @@ class AdbOracleTests(unittest.TestCase):
         self.assertFalse(result.matched)
         top_warning = result.details.get("top_warning")
         assert isinstance(top_warning, dict)
+        top_warning = cast(dict[str, object], top_warning)
         self.assertIn("IMS.*(?:deregist|DEREGIST)", str(top_warning["matched_pattern"]))
         self.assertEqual(top_warning["log_path"], "adb:logcat")
         self.assertEqual(top_warning["severity"], "warning")
@@ -736,6 +738,7 @@ class OracleEngineWithAdbTests(unittest.TestCase):
         self.assertEqual(verdict.verdict, "timeout")
         adb_warning = verdict.details.get("adb_warning")
         assert isinstance(adb_warning, dict)
+        adb_warning = cast(dict[str, object], adb_warning)
         self.assertEqual(adb_warning["log_path"], "adb:logcat")
         self.assertEqual(adb_warning["severity"], "warning")
 
@@ -797,6 +800,7 @@ class IosOracleTests(unittest.TestCase):
         self.assertFalse(result.matched)
         top_warning = result.details.get("top_warning")
         assert isinstance(top_warning, dict)
+        top_warning = cast(dict[str, object], top_warning)
         self.assertIn(r"\[IMS\].*deregist", str(top_warning["matched_pattern"]))
         self.assertEqual(top_warning["log_path"], "ios:syslog")
         self.assertEqual(top_warning["severity"], "warning")
@@ -918,5 +922,6 @@ class OracleEngineWithIosTests(unittest.TestCase):
         self.assertEqual(verdict.verdict, "normal")
         ios_warning = verdict.details.get("ios_warning")
         assert isinstance(ios_warning, dict)
+        ios_warning = cast(dict[str, object], ios_warning)
         self.assertEqual(ios_warning["log_path"], "ios:syslog")
         self.assertEqual(ios_warning["severity"], "warning")

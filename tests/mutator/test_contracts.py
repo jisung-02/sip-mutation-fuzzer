@@ -17,9 +17,7 @@ from volte_mutation_fuzzer.mutator.contracts import (
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
-REALISTIC_MUTATED_CALL_ID = (
-    "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
-)
+REALISTIC_MUTATED_CALL_ID = "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
 REALISTIC_LOCAL_TAG = "9fxced76sl"
 REALISTIC_OPTIONS_WIRE = (
     "OPTIONS sip:001010000123511@10.20.20.8:8100 SIP/2.0\r\n"
@@ -188,7 +186,9 @@ class MutatedCaseTests(MutatorContractTestCase):
         self.assertEqual(payload["seed"], 17)
         self.assertEqual(payload["profile"], "legacy")
         self.assertEqual(payload["strategy"], "state_breaker")
-        self.assertEqual(payload["mutated_packet"]["call_id"], REALISTIC_MUTATED_CALL_ID)
+        self.assertEqual(
+            payload["mutated_packet"]["call_id"], REALISTIC_MUTATED_CALL_ID
+        )
         self.assertIn("from", payload["original_packet"])
         self.assertNotIn("from_", payload["original_packet"])
         self.assertEqual(payload["records"][0]["target"]["path"], "call_id")

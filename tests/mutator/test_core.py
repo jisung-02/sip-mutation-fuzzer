@@ -1952,9 +1952,11 @@ class SIPMutatorEdgeBoundaryTests(SIPMutatorTestCase):
             self.assertEqual(len(case.records), 1)
             record = case.records[0]
             self.assertEqual(record.operator, "edge_boundary")
-            variant = (record.note or "").removeprefix("variant=")
+            variant = str((record.note or "").removeprefix("variant="))
             if variant not in seen:
                 _, after_value = record.after
+                assert case.wire_text is not None
+                assert isinstance(after_value, str)
                 seen[variant] = (case.wire_text, after_value)
             if set(seen) >= self.EXPECTED_VARIANTS:
                 break

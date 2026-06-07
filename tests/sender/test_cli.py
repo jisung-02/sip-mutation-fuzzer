@@ -11,10 +11,10 @@ from volte_mutation_fuzzer.sender.real_ue import ResolvedRealUETarget, RouteChec
 
 REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
 REALISTIC_LOCAL_TAG = "9fxced76sl"
-REALISTIC_CONTEXT_JSON = (
-    f'{{"call_id":"{REALISTIC_CALL_ID}","local_tag":"{REALISTIC_LOCAL_TAG}","local_cseq":1}}'
+REALISTIC_CONTEXT_JSON = f'{{"call_id":"{REALISTIC_CALL_ID}","local_tag":"{REALISTIC_LOCAL_TAG}","local_cseq":1}}'
+REALISTIC_OPTIONS_WIRE = (
+    "OPTIONS sip:111111@10.20.20.8:8100 SIP/2.0\r\nContent-Length: 0\r\n\r\n"
 )
-REALISTIC_OPTIONS_WIRE = "OPTIONS sip:111111@10.20.20.8:8100 SIP/2.0\r\nContent-Length: 0\r\n\r\n"
 REALISTIC_MT_INVITE = (
     "INVITE sip:111111@10.20.20.8:8100;alias=10.20.20.8~8101~1 SIP/2.0\r\n"
     "Content-Length: 0\r\n\r\n"
@@ -98,13 +98,15 @@ class SIPSenderCLITests(unittest.TestCase):
             with self.subTest(ipsec_mode=ipsec_mode):
                 with patch(
                     "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_packet",
-                    side_effect=lambda packet, target, collect_all_responses=False: SendReceiveResult(
-                        target=target,
-                        artifact_kind="packet",
-                        bytes_sent=0,
-                        outcome="success",
-                        send_started_at=0.0,
-                        send_completed_at=0.0,
+                    side_effect=lambda packet, target, collect_all_responses=False: (
+                        SendReceiveResult(
+                            target=target,
+                            artifact_kind="packet",
+                            bytes_sent=0,
+                            outcome="success",
+                            send_started_at=0.0,
+                            send_completed_at=0.0,
+                        )
                     ),
                 ) as mock_send_packet:
                     result = self.runner.invoke(
@@ -140,13 +142,15 @@ class SIPSenderCLITests(unittest.TestCase):
             with self.subTest(ipsec_mode=ipsec_mode):
                 with patch(
                     "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                    side_effect=lambda artifact, target, collect_all_responses=False: SendReceiveResult(
-                        target=target,
-                        artifact_kind=artifact.artifact_kind,
-                        bytes_sent=0,
-                        outcome="success",
-                        send_started_at=0.0,
-                        send_completed_at=0.0,
+                    side_effect=lambda artifact, target, collect_all_responses=False: (
+                        SendReceiveResult(
+                            target=target,
+                            artifact_kind=artifact.artifact_kind,
+                            bytes_sent=0,
+                            outcome="success",
+                            send_started_at=0.0,
+                            send_completed_at=0.0,
+                        )
                     ),
                 ) as mock_send_artifact:
                     result = self.runner.invoke(
@@ -290,13 +294,15 @@ class SIPSenderCLITests(unittest.TestCase):
             with self.subTest(ipsec_mode=ipsec_mode):
                 with patch(
                     "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                    side_effect=lambda artifact, target, collect_all_responses=False: SendReceiveResult(
-                        target=target,
-                        artifact_kind=artifact.artifact_kind,
-                        bytes_sent=0,
-                        outcome="success",
-                        send_started_at=0.0,
-                        send_completed_at=0.0,
+                    side_effect=lambda artifact, target, collect_all_responses=False: (
+                        SendReceiveResult(
+                            target=target,
+                            artifact_kind=artifact.artifact_kind,
+                            bytes_sent=0,
+                            outcome="success",
+                            send_started_at=0.0,
+                            send_completed_at=0.0,
+                        )
                     ),
                 ) as mock_send_artifact:
                     result = self.runner.invoke(
@@ -486,13 +492,15 @@ class SIPSenderCLITests(unittest.TestCase):
             ),
             patch(
                 "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                side_effect=lambda _artifact, target, collect_all_responses=False: SendReceiveResult(
-                    target=target,
-                    artifact_kind="wire",
-                    bytes_sent=0,
-                    outcome="success",
-                    send_started_at=0.0,
-                    send_completed_at=0.0,
+                side_effect=lambda _artifact, target, collect_all_responses=False: (
+                    SendReceiveResult(
+                        target=target,
+                        artifact_kind="wire",
+                        bytes_sent=0,
+                        outcome="success",
+                        send_started_at=0.0,
+                        send_completed_at=0.0,
+                    )
                 ),
             ) as mock_send_artifact,
         ):
@@ -544,9 +552,7 @@ class SIPSenderCLITests(unittest.TestCase):
                             host="10.20.20.8",
                             port=5060,
                             label="msisdn:111111",
-                            observer_events=(
-                                "resolver:test:111111->10.20.20.8:5060",
-                            ),
+                            observer_events=("resolver:test:111111->10.20.20.8:5060",),
                         ),
                     ),
                     patch(
@@ -555,13 +561,15 @@ class SIPSenderCLITests(unittest.TestCase):
                     ),
                     patch(
                         "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                        side_effect=lambda _artifact, target, collect_all_responses=False: SendReceiveResult(
-                            target=target,
-                            artifact_kind="wire",
-                            bytes_sent=0,
-                            outcome="success",
-                            send_started_at=0.0,
-                            send_completed_at=0.0,
+                        side_effect=lambda _artifact, target, collect_all_responses=False: (
+                            SendReceiveResult(
+                                target=target,
+                                artifact_kind="wire",
+                                bytes_sent=0,
+                                outcome="success",
+                                send_started_at=0.0,
+                                send_completed_at=0.0,
+                            )
                         ),
                     ) as mock_send_artifact,
                 ):
@@ -619,9 +627,7 @@ class SIPSenderCLITests(unittest.TestCase):
         "volte_mutation_fuzzer.sender.core.check_route_to_target",
         return_value=RouteCheckResult(True, "loopback"),
     )
-    def test_send_request_direct_mode_allows_tcp(
-        self, _mock_route: object
-    ) -> None:
+    def test_send_request_direct_mode_allows_tcp(self, _mock_route: object) -> None:
         responder = TCPResponder(
             response=b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"
         )

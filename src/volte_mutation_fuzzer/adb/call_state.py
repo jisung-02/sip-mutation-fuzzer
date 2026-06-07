@@ -53,7 +53,8 @@ class CallStateChecker:
         """Return the current mCallState from telephony.registry."""
         try:
             result = self._connector.run_shell(
-                "dumpsys", "telephony.registry",
+                "dumpsys",
+                "telephony.registry",
                 timeout=5,
             )
         except Exception as exc:

@@ -6,16 +6,18 @@ import time
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from volte_mutation_fuzzer.sender.contracts import ObservationClass, SendArtifact, SocketObservation
+from volte_mutation_fuzzer.sender.contracts import (
+    ObservationClass,
+    SendArtifact,
+    SocketObservation,
+)
 from volte_mutation_fuzzer.sender.real_ue import (
     RealUEDirectResolutionError,
     ResolvedNativeIPsecSession,
 )
 
 _CRLF: Final[str] = "\r\n"
-_SIP_STATUS_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^SIP/2\.0\s+(\d{3})\s*(.*)$"
-)
+_SIP_STATUS_PATTERN: Final[re.Pattern[str]] = re.compile(r"^SIP/2\.0\s+(\d{3})\s*(.*)$")
 _CALL_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"Call-ID:\s*([^\r\n]+)", re.IGNORECASE
 )
@@ -291,9 +293,9 @@ def _extract_log_headers(line: str) -> dict[str, str]:
             )
             if candidate_match is not None:
                 next_start = min(next_start, value_start + candidate_match.start())
-        headers[header_name.casefold()] = _normalize_optional_text(
-            line[value_start:next_start]
-        ) or ""
+        headers[header_name.casefold()] = (
+            _normalize_optional_text(line[value_start:next_start]) or ""
+        )
     return headers
 
 
@@ -304,9 +306,9 @@ def _extract_wire_headers(text: str) -> dict[str, str]:
             prefix = f"{header_name}:"
             if not line.lower().startswith(prefix.lower()):
                 continue
-            headers[header_name.casefold()] = _normalize_optional_text(
-                line[len(prefix) :]
-            ) or ""
+            headers[header_name.casefold()] = (
+                _normalize_optional_text(line[len(prefix) :]) or ""
+            )
     return headers
 
 
@@ -376,7 +378,9 @@ def extract_correlation_from_artifact(artifact: SendArtifact) -> ArtifactCorrela
         return correlation
 
     if artifact.packet_bytes is not None:
-        return _parse_correlation_text(artifact.packet_bytes.decode("utf-8", errors="replace"))
+        return _parse_correlation_text(
+            artifact.packet_bytes.decode("utf-8", errors="replace")
+        )
 
     return ArtifactCorrelation(None, None, None, None, "low")
 
@@ -489,7 +493,9 @@ def send_via_native_ipsec(
             observer_events=(f"native-ipsec:send:failed:{type(exc).__name__}",),
         ) from exc
     if proc.returncode != 0:
-        stderr_text = _normalize_optional_text((proc.stderr or b"").decode("utf-8", errors="replace")[:200])
+        stderr_text = _normalize_optional_text(
+            (proc.stderr or b"").decode("utf-8", errors="replace")[:200]
+        )
         raise NativeIPsecError(
             f"native IPsec injector failed: {stderr_text or 'unknown error'}",
             observer_events=("native-ipsec:send:failed:returncode",),
@@ -597,7 +603,10 @@ def _matches_correlation(line: str, correlation: ArtifactCorrelation) -> bool:
     if correlation.cseq_method is not None:
         cseq_text = headers.get("cseq") or ""
         cseq_match = re.match(r"(\d+)\s+([A-Z][A-Z0-9_-]*)", cseq_text, re.IGNORECASE)
-        if cseq_match is None or cseq_match.group(2).upper() != correlation.cseq_method.upper():
+        if (
+            cseq_match is None
+            or cseq_match.group(2).upper() != correlation.cseq_method.upper()
+        ):
             return False
     if correlation.cseq_sequence is not None:
         cseq_text = headers.get("cseq") or ""
@@ -657,11 +666,16 @@ def observe_pcscf_log_responses(
                     continue
             elif not _matches_correlation(line, correlation):
                 continue
-            observation = _parse_pcscf_log_observation(line, ue_ip=ue_ip, ue_port=ue_port)
+            observation = _parse_pcscf_log_observation(
+                line, ue_ip=ue_ip, ue_port=ue_port
+            )
             if observation is None:
                 continue
             observations.append(observation)
-            if not collect_all_responses and observation.classification != "provisional":
+            if (
+                not collect_all_responses
+                and observation.classification != "provisional"
+            ):
                 return tuple(observations)
         time.sleep(poll_interval_seconds)
     return tuple(observations)

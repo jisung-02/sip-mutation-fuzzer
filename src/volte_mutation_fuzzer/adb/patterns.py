@@ -83,7 +83,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "critical",
         "fatal_signal",
     ),
-
     # ---------------------------------------------------------------------
     # Java / ART unhandled exceptions (surface as AndroidRuntime lines).
     # Samsung's ``com.sec.imsservice`` dies this way, not via SIGSEGV,
@@ -120,7 +119,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "fatal_signal",
     ),
-
     # ---------------------------------------------------------------------
     # Modem / RIL / baseband
     # ---------------------------------------------------------------------
@@ -192,7 +190,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "call_anomaly",
     ),
-
     # ---------------------------------------------------------------------
     # IMS / VoLTE / SIP / PDN
     # ---------------------------------------------------------------------
@@ -262,7 +259,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "call_anomaly",
     ),
-
     # ---------------------------------------------------------------------
     # System-level service / watchdog / resource pressure
     # ---------------------------------------------------------------------
@@ -340,7 +336,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "system_anomaly",
     ),
-
     # ---------------------------------------------------------------------
     # Memory safety / corruption — sanitizers, allocator aborts, stack
     # smashing, OOM. fatal_signal so they bypass the IMS-tag whitelist
@@ -427,7 +422,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "fatal_signal",
     ),
-
     # ---------------------------------------------------------------------
     # IMS / SIP / VoLTE functional failures (beyond what existing
     # patterns capture). ims_anomaly category — gated by tag whitelist
@@ -477,7 +471,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "ims_anomaly",
     ),
-
     # ---------------------------------------------------------------------
     # Modem / RIL firmware-level failures. fatal_signal for the truly
     # catastrophic ones (assert, subsystem restart) so they bypass tag
@@ -540,7 +533,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "critical",
         "fatal_signal",
     ),
-
     # ---------------------------------------------------------------------
     # System / process death (boost on existing patterns).
     # ---------------------------------------------------------------------
@@ -561,7 +553,7 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         r"|com\.android\.cellbroadcast\S*"
         r"|com\.google\.android\.ims(?:\.\S+|\b)"
         r"|com\.samsung\.android\.app\.imsservice\S*"
-        r"|com\.\S+\.imsservice(?:\.\S+|\b)"   # generic vendor IMS service
+        r"|com\.\S+\.imsservice(?:\.\S+|\b)"  # generic vendor IMS service
         r"|imsd|rild|RILD"
         r"|system_server|surfaceflinger"
         r")\s+\(pid\s+\d+\) has died",
@@ -586,7 +578,6 @@ ANOMALY_PATTERNS: tuple[AnomalyPattern, ...] = (
         "warning",
         "system_anomaly",
     ),
-
     # ---------------------------------------------------------------------
     # CVE-class signals not covered by earlier patterns.
     # Added 2026-04-26 after auditing what real SIP/IMS/baseband CVE
