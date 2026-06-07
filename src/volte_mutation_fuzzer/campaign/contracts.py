@@ -106,6 +106,10 @@ class CampaignConfig(BaseModel):
     # cases.  Set to 0 to skip idle waiting entirely (useful for high-rate
     # campaigns where back-pressure from the previous call is intentional).
     wait_idle_timeout_seconds: float = Field(default=10.0, ge=0.0, le=60.0)
+    # Send a CANCEL to tear down each INVITE after a provisional response.
+    # On by default so campaigns don't leave the UE ringing. Set False to let
+    # the call actually alert/ring — useful for baseline "does it ring" checks.
+    invite_teardown: bool = True
 
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None

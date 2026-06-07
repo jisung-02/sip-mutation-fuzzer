@@ -128,6 +128,17 @@ def run_command(
             ),
         ),
     ] = 10.0,
+    no_teardown: Annotated[
+        bool,
+        typer.Option(
+            "--no-teardown",
+            help=(
+                "Do not send CANCEL to tear down each INVITE. Lets the UE "
+                "actually alert/ring — use for baseline 'does it ring' checks. "
+                "By default INVITEs are cancelled so the UE doesn't keep ringing."
+            ),
+        ),
+    ] = False,
     seed_start: Annotated[
         int, typer.Option("--seed-start", help="Starting seed value.")
     ] = 0,
@@ -428,6 +439,7 @@ def run_command(
                 10.0 if oracle_log_grace is not None and oracle_log_grace < 8.0 else 0.0
             ),
             wait_idle_timeout_seconds=wait_idle_timeout,
+            invite_teardown=not no_teardown,
         )
         if strategy is None and config.packet_file is None:
             default_strategies = (

@@ -31,6 +31,11 @@ class CampaignConfigTests(unittest.TestCase):
         self.assertIsNone(cfg.output_name)
         self.assertEqual(cfg.process_name, "baresip")
         self.assertTrue(cfg.check_process)
+        self.assertTrue(cfg.invite_teardown)
+
+    def test_invite_teardown_can_be_disabled(self) -> None:
+        cfg = CampaignConfig(target_host="127.0.0.1", invite_teardown=False)
+        self.assertFalse(cfg.invite_teardown)
 
     def test_profiles_normalize_and_dedupe(self) -> None:
         cfg = CampaignConfig(

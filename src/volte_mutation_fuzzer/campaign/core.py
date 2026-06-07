@@ -1296,8 +1296,9 @@ class CampaignExecutor:
             )
             sent_wire_text = self._artifact_wire_text(artifact) or wire_text or ""
 
-            # 9b. Reliable CANCEL teardown (INVITE only)
-            if is_invite:
+            # 9b. Reliable CANCEL teardown (INVITE only). Skippable so the UE
+            # can actually ring (baseline "does it ring" checks).
+            if is_invite and config.invite_teardown:
                 teardown_events = self._teardown_invite(
                     sent_wire_text, mt_target, send_result, config
                 )
