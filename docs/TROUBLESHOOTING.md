@@ -216,6 +216,82 @@ docker logs pcscf --since 5m 2>&1 | grep -iE 'register|subscribe|10.20.20'
 docker logs pcscf --since 2m 2>&1 | grep -iE 'OPTIONS.*10.20.20.*(200|408)'
 ```
 
+### iPhone MT-INVITE 퍼징 — 도달/링 트러블슈팅 (2026-06-07)
+
+**무엇에 대한 트러블슈팅인가:** SIM 111111 을 꽂은 iPhone 16e(iOS 26.1) 를 native
+IPsec 로 MT-INVITE 퍼징할 때, 캠페인은 정상 완료(verdict 분포까지 나옴)되는데 실제로는
+**변이 INVITE 가 단말에 한 건도 도달하지 않던** 문제. "허공에 쏘는데 결과만 그럴듯하게
+나오는" 상황이라 verdict 만 보면 발견이 안 됐다. 동시에 baseline(identity) INVITE 가
+"안 울린다" 도 추적했다. 표면은 하나(안 닿는다/안 울린다)인데 **원인이 4겹**이라 순서대로
+판별해야 한다.
+
+| 증상 | 진짜 원인 | 해결 |
+|------|-----------|------|
+| 도달 0% (verdict 는 timeout/정상처럼 보임) | `--timeout 0.01` → native send 전송 미완 | timeout ≥ 0.2 |
+| 도중부터 `unknown`(resolve 실패) | usrloc 빈 채 UE IP 이동 → resolver 실패 | `VMF_MSISDN_TO_IP` 핀 |
+| `unknown` + `Fail Counter`/`Unregistering` | 486 keepalive → P-CSCF 가 UE de-register | cfg fix(486=alive) 또는 cooldown |
+| 도달은 되는데 안 울림 | precondition 미충족/제거, teardown CANCEL | curr:qos met + `--no-teardown` |
+
+> 핵심 교훈: **verdict 는 도달을 보장하지 않는다.** 반드시 단말 syslog 의 `Is a INVITE`
+> 카운트로 도달률을 따로 검증한다. (아래 판정법)
+
+증상이 비슷해도 원인이 4겹이라 순서대로 확인한다.
+
+**도달 여부 판정법** — verdict 가 아니라 단말 syslog 의 INVITE 파서 진입으로 본다:
+```bash
+# 도달률 = (Is a INVITE 수) / (송신 케이스 수). 100% 가 목표.
+grep -c 'Is a INVITE' results/<dir>/syslog_full.txt
+grep -c '<-- 172.22.0.21.*INVITE' results/<dir>/syslog_full.txt
+# 단말이 받은 게 OPTIONS(secure TCP) 뿐이면 = NATPING keepalive 만, INVITE 미도달.
+```
+
+**원인 1 — `--timeout` 0.01 이면 패킷이 아예 안 나간다 (제일 흔함).**
+native IPsec send 가 그 짧은 시간에 전송을 못 끝내 0% 도달. timeout 별 도달률:
+`0.01 → 0%`, `0.1 → ~79%`, `0.2 → ~100%`, `0.3 → 100%`. **fuzzing 도 `--timeout 0.2`
+이상**으로 둔다. (verdict timeout 은 응답을 안 기다린 것일 뿐 도달과 무관.)
+
+**원인 2 — resolver 가 이동한 UE IP 를 못 찾는다.**
+kamailio usrloc 이 비어(`kamctl ul show` → `Domains: []`) live resolver 가 실패하면
+INVITE 가 엉뚱한/옛 IP 로 가 미도달. 현재 라이브 IP 를 직접 핀한다:
+```bash
+docker logs pcscf --since 60s 2>&1 | grep -oE '10.20.20.[0-9]+:[0-9]+.*200'  # 라이브 IP 확인
+sudo VMF_MSISDN_TO_IP_111111=<live-ip> uv run fuzzer campaign run ...           # 핀
+```
+IP 는 재등록마다 바뀌니(.2→.3→.7…) 돌리기 직전 확인. de-reg 가 잦으면 더 자주 바뀐다.
+
+**원인 3 — 486 keepalive → P-CSCF 가 UE 를 de-register (자기가 자기를 죽임).**
+INVITE 로 폰이 busy 면 P-CSCF 의 NATPING OPTIONS 에 **486 Busy Here** 로 답하고,
+P-CSCF cfg 의 keepalive 가 비-200 을 fail 로 세서 ~10회 넘으면 contact 를 제거
+(`Fail Counter is N` → `Unregistering`). 그러면 이후 케이스가 `unknown`(resolve 실패).
+- 회피(운영): `--cooldown 1` 로 case 사이 폰이 idle→OPTIONS 200 답하게 → 카운터 리셋.
+- 근본(서버): `infrastructure/pcscf/kamailio_pcscf.cfg` 의 `event_route[uac:reply]` 에서
+  **응답이 오면 코드 무관 alive** 로 처리(무응답 timeout 만 fail). 이 fix 적용 후엔
+  `--cooldown 0` 으로 돌려도 de-reg 안 난다. (kamailio 재시작 필요.) 확인:
+  ```bash
+  docker logs pcscf --since 2m 2>&1 | grep -c 'Fail Counter'   # fix 됐으면 0
+  ```
+
+**원인 4 — 도달은 했는데 안 울린다 (precondition / teardown).**
+도달(`Is a INVITE`)은 되는데 벨이 안 울리는 건 콜 셋업 협상 문제다:
+- SDP 의 `a=des:qos mandatory local sendrecv` + `a=curr:qos local none`(미충족) →
+  iOS 가 183 ServerEarly 에서 precondition 완료(PRACK/UPDATE) 대기 → 180 안 감.
+  (precondition 을 통째로 빼면 iOS 가 `580 Precondition Failure` 로 거부 — VoLTE 는
+  precondition 필수.) → 템플릿에서 `a=curr:qos local sendrecv`(이미 충족)로 두면 ring.
+- 그 다음엔 캠페인이 INVITE 마다 CANCEL teardown 을 보내 `487 Request Terminated` 로
+  끊어 울리기 전에 종료한다. baseline ring 확인은 `--no-teardown` 으로.
+- 단, **fuzzing 목적이면 ring 까지 갈 필요 없다** — 변이 INVITE 가 파서에 도달(`Is a
+  INVITE`)하면 충분. ring 은 baseline(identity) 검증용.
+
+**권장 fuzzing 명령 (도달 100% + de-reg 없음):**
+```bash
+sudo VMF_MSISDN_TO_IP_111111=<live-ip> uv run fuzzer campaign run \
+  --target-msisdn 111111 --impi 001010000123511 --from-msisdn 222222 \
+  --methods INVITE --profile iphone_ims --strategy default --layer wire \
+  --mt --ipsec-mode native --ios \
+  --cooldown 0 --timeout 0.2 --max-cases 300 \
+  --circuit-breaker 0 --no-pcap --no-adb --oracle-log-grace 0
+```
+
 ### Docker 환경 재시작
 ```bash
 # 1. 컨테이너 재시작
