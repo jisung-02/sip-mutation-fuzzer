@@ -1008,9 +1008,15 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
         executor = CampaignExecutor(cfg)
         captured: dict[str, object] = {}
 
-        def fake_resolve_protected_ports(msisdn: str, *, ue_ip: str | None = None):
+        def fake_resolve_protected_ports(
+            msisdn: str,
+            *,
+            ue_ip: str | None = None,
+            xfrm_state: str | None = None,
+        ):
             captured["msisdn"] = msisdn
             captured["ue_ip"] = ue_ip
+            captured["xfrm_state"] = xfrm_state
             return (8100, 8101)
 
         with unittest.mock.patch.object(
@@ -1019,12 +1025,14 @@ class CampaignExecutorWallClockTests(unittest.TestCase):
             side_effect=fake_resolve_protected_ports,
         ):
             port_pc, port_ps = executor._resolve_ports_live(
-                "111111", ue_ip="10.20.20.8"
+                "111111", ue_ip="10.20.20.8", xfrm_state="SNAP"
             )
 
         self.assertEqual((port_pc, port_ps), (8100, 8101))
         self.assertEqual(captured["msisdn"], "111111")
         self.assertEqual(captured["ue_ip"], "10.20.20.8")
+        # The per-case xfrm snapshot is threaded through unchanged.
+        self.assertEqual(captured["xfrm_state"], "SNAP")
 
 
 # ---------------------------------------------------------------------------

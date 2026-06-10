@@ -194,6 +194,7 @@ class RealUEDirectResolver:
         target: TargetEndpoint,
         *,
         impi: str | None = None,
+        xfrm_state: str | None = None,
     ) -> ResolvedRealUETarget:
         if target.host is not None:
             assert target.port is not None
@@ -209,7 +210,7 @@ class RealUEDirectResolver:
         msisdn = target.msisdn
         resolved_port = target.port
 
-        contact = self._lookup_ue_contact(msisdn, impi=impi)
+        contact = self._lookup_ue_contact(msisdn, impi=impi, xfrm_state=xfrm_state)
         if contact is None:
             raise RealUEDirectResolutionError(
                 f"real-ue-direct target msisdn {msisdn} could not be resolved via "
@@ -441,18 +442,19 @@ class RealUEDirectResolver:
                 )
         return None
 
-    def _xfrm_active_ue_ips(self) -> frozenset[str]:
-        """Return the set of UE IPs currently bound to live IPsec SAs.
+    def read_xfrm_state(self) -> str | None:
+        """Read ``ip xfrm state`` from the P-CSCF container once.
 
-        Used as a stale-data sentinel for ``_lookup_ue_contact``: contacts
-        scraped from kamctl / pcscf logs / OPTIONS pings can refer to a UE
-        that has since detached or rekeyed to a new IP, while ``ip xfrm
-        state`` only ever lists currently-active SAs from the kernel.
-        Cross-checking the lookup-chain result against this set lets us
-        discard scrape-cache poisoning without needing to choose a single
-        source winner up front (which is unsafe in multi-UE setups).
+        Returns the raw stdout, or ``None`` when the command failed or
+        produced no output. Exposed so a caller (e.g. the campaign
+        executor) can read the kernel SA table a single time per case and
+        thread the snapshot into both ``resolve()`` and
+        ``resolve_protected_ports()`` instead of each re-running ``docker
+        exec`` — the two consumers otherwise read the same state twice.
+        Threading the snapshot back in is purely an optimization: every
+        consumer falls back to its own fresh read when handed ``None``, so
+        behaviour is identical to the un-threaded path.
         """
-        pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21")
         try:
             result = subprocess.run(
                 ["docker", "exec", self.pcscf_container, "ip", "xfrm", "state"],
@@ -462,8 +464,30 @@ class RealUEDirectResolver:
                 check=False,
             )
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-            return frozenset()
-        if result.returncode != 0:
+            return None
+        if result.returncode != 0 or not result.stdout:
+            return None
+        return result.stdout
+
+    def _xfrm_active_ue_ips(self, xfrm_state: str | None = None) -> frozenset[str]:
+        """Return the set of UE IPs currently bound to live IPsec SAs.
+
+        Used as a stale-data sentinel for ``_lookup_ue_contact``: contacts
+        scraped from kamctl / pcscf logs / OPTIONS pings can refer to a UE
+        that has since detached or rekeyed to a new IP, while ``ip xfrm
+        state`` only ever lists currently-active SAs from the kernel.
+        Cross-checking the lookup-chain result against this set lets us
+        discard scrape-cache poisoning without needing to choose a single
+        source winner up front (which is unsafe in multi-UE setups).
+
+        When *xfrm_state* is supplied the caller already read the SA table
+        this case; we parse that snapshot instead of issuing another
+        ``docker exec``. ``None`` (the default) reads fresh, preserving the
+        original behaviour.
+        """
+        pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", "172.22.0.21")
+        stdout = xfrm_state if xfrm_state is not None else self.read_xfrm_state()
+        if not stdout:
             return frozenset()
 
         pattern = re.compile(
@@ -471,7 +495,7 @@ class RealUEDirectResolver:
             + re.escape(pcscf_ip)
             + r"/\d+ sport \d+ dport \d+"
         )
-        return frozenset(m.group(1) for m in pattern.finditer(result.stdout))
+        return frozenset(m.group(1) for m in pattern.finditer(stdout))
 
     def _lookup_imsi_from_pyhss(self, msisdn: str) -> str | None:
         if self.pyhss_url is None:
@@ -500,6 +524,7 @@ class RealUEDirectResolver:
         msisdn: str,
         *,
         impi: str | None = None,
+        xfrm_state: str | None = None,
     ) -> UEContact | None:
         """Run the full UE contact lookup chain.
 
@@ -516,7 +541,7 @@ class RealUEDirectResolver:
         chain falls through to the next source. The xfrm-state lookup
         itself is left unchecked (it *is* the authoritative source).
         """
-        active_ips = self._xfrm_active_ue_ips()
+        active_ips = self._xfrm_active_ue_ips(xfrm_state)
 
         def _is_active(c: UEContact | None) -> bool:
             # If we couldn't read xfrm at all (active_ips empty) we cannot
@@ -557,6 +582,7 @@ class RealUEDirectResolver:
         msisdn: str,
         *,
         ue_ip: str | None = None,
+        xfrm_state: str | None = None,
     ) -> tuple[int, int]:
         """Return ``(port_pc, port_ps)`` for the UE identified by *msisdn*.
 
@@ -573,7 +599,7 @@ class RealUEDirectResolver:
         env override.
         """
         if ue_ip is None:
-            contact = self._lookup_ue_contact(msisdn)
+            contact = self._lookup_ue_contact(msisdn, xfrm_state=xfrm_state)
             if contact is not None:
                 ue_ip = contact.host
         return resolve_ue_protected_ports(
@@ -581,6 +607,7 @@ class RealUEDirectResolver:
             pcscf_container=self.pcscf_container,
             env=self._env,
             ue_ip=ue_ip,
+            xfrm_state=xfrm_state,
         )
 
     def _parse_kamctl_output(self, msisdn: str, output: str) -> UEContact | None:
@@ -626,6 +653,7 @@ def resolve_ue_protected_ports(
     pcscf_container: str = _DEFAULT_PCSCF_CONTAINER,
     env: Mapping[str, str] | None = None,
     ue_ip: str | None = None,
+    xfrm_state: str | None = None,
 ) -> tuple[int, int]:
     """Return ``(port_pc, port_ps)`` for *msisdn* by querying the P-CSCF container.
 
@@ -693,7 +721,9 @@ def resolve_ue_protected_ports(
     # ``ip xfrm state`` is read at most once and shared by the Strategy 1
     # cross-check and Strategy 2 — avoids a second docker exec when both
     # consult it, and keeps the common nearby-match path docker-exec-free.
-    _xfrm_cache: list[str | None] = []
+    # A caller-supplied snapshot (read once per case) primes the cache so
+    # no docker exec happens here at all.
+    _xfrm_cache: list[str | None] = [xfrm_state] if xfrm_state is not None else []
 
     def _get_xfrm_state() -> str | None:
         if _xfrm_cache:
@@ -717,9 +747,7 @@ def resolve_ue_protected_ports(
     # Strategy 1: Security-Client header (authoritative — both ports read,
     # never estimated).
     if log_text:
-        parsed = _parse_security_client_ports(
-            log_text, requested_ue_ip=requested_ue_ip
-        )
+        parsed = _parse_security_client_ports(log_text, requested_ue_ip=requested_ue_ip)
         if parsed is not None:
             port_pc, port_ps, provenance = parsed
             trusted = True

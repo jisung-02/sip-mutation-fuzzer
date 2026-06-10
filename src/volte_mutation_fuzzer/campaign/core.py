@@ -959,6 +959,7 @@ class CampaignExecutor:
         msisdn: str,
         *,
         ue_ip: str | None = None,
+        xfrm_state: str | None = None,
     ) -> tuple[int, int]:
         """Resolve (port_pc, port_ps) fresh on every call.
 
@@ -974,8 +975,17 @@ class CampaignExecutor:
         resolved. Without it, a re-registration between the caller's
         ``resolve()`` and this call could land us on a port pair from a
         newer or older generation than the host we are about to send to.
+
+        ``xfrm_state`` is the per-case ``ip xfrm state`` snapshot the caller
+        already read for ``resolve()``; forwarding it lets the protected-port
+        lookup reuse that snapshot instead of issuing a second ``docker
+        exec``. It is still a fresh read *this case* — only the redundant
+        intra-case duplicate is removed, so the no-stale-cache guarantee
+        above is unaffected.
         """
-        return self._ue_resolver.resolve_protected_ports(msisdn, ue_ip=ue_ip)
+        return self._ue_resolver.resolve_protected_ports(
+            msisdn, ue_ip=ue_ip, xfrm_state=xfrm_state
+        )
 
     def _teardown_invite(
         self,
@@ -1085,11 +1095,19 @@ class CampaignExecutor:
         mutated_wire: MutatedWireCase | None = None
 
         try:
-            # 1. Resolve UE IP and IMPI dynamically
+            # 1. Resolve UE IP and IMPI dynamically. Read the xfrm SA table
+            #    once and thread it through resolve() + protected-port lookup
+            #    so we don't docker-exec the same state twice this case (only
+            #    primed in msisdn mode, where resolve() runs; static-host mode
+            #    leaves it None and the port lookup reads lazily as before).
+            xfrm_state: str | None = None
             ue_ip = config.target_host
             impi = config.impi
             if ue_ip is None:
-                resolved = self._ue_resolver.resolve(self._target, impi=impi)
+                xfrm_state = self._ue_resolver.read_xfrm_state()
+                resolved = self._ue_resolver.resolve(
+                    self._target, impi=impi, xfrm_state=xfrm_state
+                )
                 ue_ip = resolved.host
                 if impi is None and resolved.impi is not None:
                     impi = resolved.impi
@@ -1102,10 +1120,12 @@ class CampaignExecutor:
             # 2. Resolve live port_pc / port_ps (no caching — UE re-registration
             #    invalidates ports and stale values silently masquerade as timeouts).
             #    Pass ue_ip so the protected-port lookup is filtered against the
-            #    same generation as the host we just resolved on the line above.
+            #    same generation as the host we just resolved on the line above,
+            #    and the per-case xfrm snapshot to skip the redundant docker exec.
             port_pc, port_ps = self._resolve_ports_live(
                 config.target_msisdn,
                 ue_ip=ue_ip,
+                xfrm_state=xfrm_state,
             )
 
             # 3. Build baseline payload
@@ -1422,11 +1442,17 @@ class CampaignExecutor:
         try:
             # 1. Resolve UE IP and IMPI (IMPI is informational here — the file
             #    already encodes whatever Request-URI / P-Preferred-Identity
-            #    the user authored — but the resolver still needs UE IP).
+            #    the user authored — but the resolver still needs UE IP). Read
+            #    the xfrm SA table once and thread it through both lookups to
+            #    avoid a duplicate docker exec this case (msisdn mode only).
+            xfrm_state: str | None = None
             ue_ip = config.target_host
             impi = config.impi
             if ue_ip is None:
-                resolved = self._ue_resolver.resolve(self._target, impi=impi)
+                xfrm_state = self._ue_resolver.read_xfrm_state()
+                resolved = self._ue_resolver.resolve(
+                    self._target, impi=impi, xfrm_state=xfrm_state
+                )
                 ue_ip = resolved.host
                 if impi is None and resolved.impi is not None:
                     impi = resolved.impi
@@ -1436,6 +1462,7 @@ class CampaignExecutor:
             port_pc, _port_ps = self._resolve_ports_live(
                 config.target_msisdn,
                 ue_ip=ue_ip,
+                xfrm_state=xfrm_state,
             )
 
             # 3. Fragmentation guard for null-mode plaintext UDP. Same threshold

@@ -682,6 +682,91 @@ class RealUEDirectHelperTests(unittest.TestCase):
             )
         self.assertEqual((port_pc, port_ps), (63193, 61008))
 
+    def test_resolve_protected_ports_reuses_caller_xfrm_snapshot(self) -> None:
+        """A caller-supplied xfrm snapshot skips the in-resolver docker exec.
+
+        With empty logs (Strategy 1 yields nothing) the resolver needs xfrm
+        to read ports. When the caller already read the SA table this case
+        and threads it in via ``xfrm_state``, the only subprocess call is the
+        single ``docker logs`` — the xfrm read is served from the snapshot.
+        side_effect has exactly one entry so any second subprocess call
+        (a redundant ``docker exec ... ip xfrm state``) raises StopIteration
+        and fails the test loudly.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        snapshot = (
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 63193 dport 6100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout="", stderr=""
+                ),
+            ),
+        ) as mock_run:
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111",
+                ue_ip="10.20.20.8",
+                xfrm_state=snapshot,
+            )
+
+        self.assertEqual((port_pc, port_ps), (63193, 61008))
+        # Only the docker-logs read happened; xfrm came from the snapshot.
+        mock_run.assert_called_once()
+
+    def test_resolve_reuses_caller_xfrm_snapshot_for_active_ip_check(self) -> None:
+        """resolve() validates the kamctl contact against a threaded snapshot.
+
+        The active-UE-IP sentinel normally issues its own ``docker exec ...
+        ip xfrm state``. When the caller threads the snapshot in, that read
+        is served from it, so the only subprocess call is the single kamctl
+        lookup. A second call (the sentinel's own xfrm exec) would raise
+        StopIteration.
+        """
+        resolver = RealUEDirectResolver(
+            env={
+                "VMF_REAL_UE_SCSCF_CONTAINER": "scscf",
+                "VMF_REAL_UE_PCSCF_CONTAINER": "pcscf",
+                "VMF_REAL_UE_PCSCF_IP": "172.22.0.21",
+            }
+        )
+        target = TargetEndpoint(mode="real-ue-direct", msisdn="111111")
+        snapshot = (
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8100 dport 5100\n"
+        )
+        kamctl_out = "Contact:: <sip:111111@10.20.20.8:8100;...>;q=;expires=..."
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=kamctl_out, stderr=""
+                ),
+            ),
+        ) as mock_run:
+            resolved = resolver.resolve(target, xfrm_state=snapshot)
+
+        self.assertEqual(resolved.host, "10.20.20.8")
+        mock_run.assert_called_once()
+
+    def test_read_xfrm_state_returns_none_on_failure(self) -> None:
+        """read_xfrm_state returns None when docker exec fails (fail-safe)."""
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=["docker"], returncode=1, stdout="", stderr="boom"
+            ),
+        ):
+            self.assertIsNone(resolver.read_xfrm_state())
+
 
 class IPsecSACheckTests(unittest.TestCase):
     """Tests for check_ipsec_sa_alive()."""
