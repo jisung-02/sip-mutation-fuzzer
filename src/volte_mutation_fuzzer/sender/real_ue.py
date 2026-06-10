@@ -690,33 +690,69 @@ def resolve_ue_protected_ports(
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         log_text = None
 
+    # ``ip xfrm state`` is read at most once and shared by the Strategy 1
+    # cross-check and Strategy 2 — avoids a second docker exec when both
+    # consult it, and keeps the common nearby-match path docker-exec-free.
+    _xfrm_cache: list[str | None] = []
+
+    def _get_xfrm_state() -> str | None:
+        if _xfrm_cache:
+            return _xfrm_cache[0]
+        out: str | None = None
+        try:
+            result = subprocess.run(
+                ["docker", "exec", pcscf_container, "ip", "xfrm", "state"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                out = result.stdout
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            out = None
+        _xfrm_cache.append(out)
+        return out
+
     # Strategy 1: Security-Client header (authoritative — both ports read,
     # never estimated).
     if log_text:
-        ports = _parse_security_client_ports(log_text, requested_ue_ip=requested_ue_ip)
-        if ports is not None:
-            return ports
+        parsed = _parse_security_client_ports(
+            log_text, requested_ue_ip=requested_ue_ip
+        )
+        if parsed is not None:
+            port_pc, port_ps, provenance = parsed
+            trusted = True
+            # Cross-check global-fallback pairs against live SAs. A single
+            # stale Security-Client line (UE rekeyed within the log window)
+            # would have zero overlap with the kernel's current UE sports;
+            # distrust it and let xfrm resolve the live pair. Fail open when
+            # xfrm is unreadable or shows no UE sports (don't break a working
+            # single-UE setup over a transient xfrm read). Nearby-match pairs
+            # are already IP-correlated and skip this — no extra docker exec
+            # on the common path.
+            if provenance == "global" and requested_ue_ip is not None:
+                xfrm_state = _get_xfrm_state()
+                if xfrm_state:
+                    ue_sports = _xfrm_ue_sports(
+                        xfrm_state, ue_ip=requested_ue_ip, pcscf_ip=pcscf_ip
+                    )
+                    if ue_sports and not ({port_pc, port_ps} & ue_sports):
+                        trusted = False
+            if trusted:
+                return port_pc, port_ps
 
     # Strategy 2: ip xfrm state — read both ports from the kernel-installed
     # SAs via dport ordering. Ambiguous UE sets fall through.
-    try:
-        result = subprocess.run(
-            ["docker", "exec", pcscf_container, "ip", "xfrm", "state"],
-            capture_output=True,
-            text=True,
-            timeout=10.0,
-            check=False,
+    xfrm_state = _get_xfrm_state()
+    if xfrm_state:
+        ports = _parse_xfrm_protected_ports(
+            xfrm_state,
+            requested_ue_ip=requested_ue_ip,
+            pcscf_ip=pcscf_ip,
         )
-        if result.returncode == 0 and result.stdout:
-            ports = _parse_xfrm_protected_ports(
-                result.stdout,
-                requested_ue_ip=requested_ue_ip,
-                pcscf_ip=pcscf_ip,
-            )
-            if ports is not None:
-                return ports
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        pass
+        if ports is not None:
+            return ports
 
     # Strategy 3: Term UE connection log fallback. Only consulted after
     # Security-Client and xfrm have both failed — and only correct when
@@ -749,8 +785,8 @@ def _parse_security_client_ports(
     log_text: str,
     *,
     requested_ue_ip: str | None,
-) -> tuple[int, int] | None:
-    """Extract ``(port_pc, port_ps)`` from kamailio P-CSCF Security-Client lines.
+) -> tuple[int, int, str] | None:
+    """Extract ``(port_pc, port_ps, provenance)`` from P-CSCF Security-Client lines.
 
     The header is emitted once per REGISTER and looks like::
 
@@ -769,8 +805,21 @@ def _parse_security_client_ports(
     to span a full REGISTER block without spilling into the next one.
 
     If no nearby match is found, fall back to the most recent global
-    match — that's the correct behaviour for a single-UE deployment
-    where the REGISTER block layout may legitimately omit the UE IP.
+    match *only* when every Security-Client line in the log carries the
+    same port pair — a genuine single-UE deployment where the REGISTER
+    block layout may legitimately omit the UE IP. When the log carries
+    more than one distinct pair we refuse to guess and return ``None``
+    so the caller falls through to the IP-filtered ``ip xfrm state``
+    strategy; picking the most-recent global match in a multi-UE
+    testbed would silently route to a *different* UE's protected ports
+    and surface as an indistinguishable timeout.
+
+    The third tuple element is the provenance tag: ``"nearby"`` when the
+    pair was correlated to *requested_ue_ip* via the log window (trusted
+    as-is), ``"global"`` when it came from the single-pair global
+    fallback. The caller cross-checks ``"global"`` results against live
+    xfrm SAs because a single stale Security-Client line (UE rekeyed
+    since) can otherwise win over the kernel's current ports.
     """
     lines = log_text.splitlines()
     matches: list[tuple[int, int, int]] = []  # (line_index, port_c, port_s)
@@ -795,11 +844,65 @@ def _parse_security_client_ports(
                 nearby_matches.append((line_index, port_c, port_s))
         if nearby_matches:
             _, port_c, port_s = nearby_matches[-1]
-            return port_c, port_s
+            return port_c, port_s, "nearby"
+        # No nearby match for the requested UE IP. Only fall back to the
+        # global most-recent match when every Security-Client line agrees
+        # on a single port pair (single-UE log). If the log carries
+        # multiple distinct pairs, guessing would route to another UE's
+        # ports, so return None and let the IP-filtered xfrm strategy
+        # resolve it authoritatively.
+        distinct_pairs = {(port_c, port_s) for _, port_c, port_s in matches}
+        if len(distinct_pairs) > 1:
+            return None
 
-    # No UE IP filter, or filter found nothing nearby — last match wins.
+    # No UE IP filter, or single-UE log — last match wins.
     _, port_c, port_s = matches[-1]
-    return port_c, port_s
+    return port_c, port_s, "global"
+
+
+def _xfrm_ue_sports(
+    xfrm_output: str,
+    *,
+    ue_ip: str,
+    pcscf_ip: str,
+) -> frozenset[int]:
+    """Return the UE protected sports installed in live UE→PCSCF SAs.
+
+    Walks ``src X dst Y`` SA headers paired with their ``sel ... sport N``
+    selector lines and collects ``sport`` values for SAs where
+    ``src == ue_ip`` and ``dst == pcscf_ip``. These are the UE's
+    currently-installed protected ports — the kernel's authoritative live
+    view, used to cross-check a Security-Client pair scraped from the
+    (possibly stale) P-CSCF log. Ports ≤ 1024 are ignored as noise.
+    """
+    sports: set[int] = set()
+    current_src: str | None = None
+    current_dst: str | None = None
+    for raw_line in xfrm_output.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("src ") and " dst " in stripped:
+            parts = stripped.split()
+            if len(parts) >= 4:
+                current_src = parts[1]
+                current_dst = parts[3]
+            else:
+                current_src = None
+                current_dst = None
+            continue
+        if not stripped.startswith("sel "):
+            continue
+        if current_src != ue_ip or current_dst != pcscf_ip:
+            continue
+        sport_match = re.search(r"\bsport\s+(\d+)\b", stripped)
+        if sport_match is None:
+            continue
+        sport = int(sport_match.group(1))
+        if sport <= 1024:
+            continue
+        sports.add(sport)
+    return frozenset(sports)
 
 
 def _parse_xfrm_protected_ports(

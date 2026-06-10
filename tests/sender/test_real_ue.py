@@ -255,6 +255,146 @@ class RealUEDirectHelperTests(unittest.TestCase):
             check=False,
         )
 
+    def test_resolve_protected_ports_multi_ue_no_nearby_match_falls_through_to_xfrm(
+        self,
+    ) -> None:
+        """Multi-UE Security-Client logs with no nearby UE-IP context must not guess.
+
+        When the requested UE IP appears in no Security-Client line's ±20
+        window and the log carries *more than one distinct* port pair, the
+        global most-recent fallback is unsafe — it would route to whichever
+        UE registered last. Strategy 1 returns None instead, and the
+        resolver falls through to the IP-filtered xfrm strategy, which keys
+        strictly on 10.20.20.8 and returns its non-adjacent pair
+        (63193, 61008) — not the last Security-Client pair (7000, 7001).
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        # Two distinct Security-Client pairs, neither line carrying the
+        # requested UE IP anywhere in its window.
+        security_client_log = (
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+            "mod=trans;port-c=8100;port-s=8101;prot=esp;spi-c=1;spi-s=2\n"
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+            "mod=trans;port-c=7000;port-s=7001;prot=esp;spi-c=3;spi-s=4\n"
+        )
+        canonical_xfrm = (
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 63193 dport 6100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=security_client_log, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=canonical_xfrm, stderr=""
+                ),
+            ),
+        ):
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111",
+                ue_ip="10.20.20.8",
+            )
+
+        self.assertEqual((port_pc, port_ps), (63193, 61008))
+
+    def test_resolve_protected_ports_single_ue_global_pair_confirmed_by_xfrm(
+        self,
+    ) -> None:
+        """Single-UE global-fallback pair is kept when live xfrm confirms it.
+
+        When every Security-Client line agrees on the same pair (single-UE
+        log whose REGISTER block omits the UE IP), the resolver cross-checks
+        the pair against live xfrm SAs. Here the UE's installed sports
+        contain {8100, 8101}, so the Security-Client pair is trusted and
+        returned as-is — xfrm's dport ordering is not used to recompute it.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        security_client_log = (
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+            "mod=trans;port-c=8100;port-s=8101;prot=esp;spi-c=1;spi-s=2\n"
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+            "mod=trans;port-c=8100;port-s=8101;prot=esp;spi-c=5;spi-s=6\n"
+        )
+        # UE sports agree with the Security-Client pair (8100, 8101) — but the
+        # dport ordering would yield (8101, 8100) if Strategy 2 ran, so a
+        # passing assertion proves the Security-Client pair won.
+        confirming_xfrm = (
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8100 dport 5100\n"
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 8101 dport 6100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=security_client_log, stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=confirming_xfrm, stderr=""
+                ),
+            ),
+        ):
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111",
+                ue_ip="10.20.20.8",
+            )
+
+        self.assertEqual((port_pc, port_ps), (8100, 8101))
+
+    def test_resolve_protected_ports_stale_global_pair_overridden_by_xfrm(
+        self,
+    ) -> None:
+        """A stale single Security-Client pair loses to the live xfrm SA.
+
+        If the UE rekeyed within the log window, the old Security-Client
+        line still parses to a single pair via the global fallback, but the
+        kernel's installed sports no longer contain it (zero overlap). The
+        cross-check distrusts the stale pair and Strategy 2 resolves the
+        live non-adjacent pair (63193, 61008) from xfrm instead.
+        """
+        resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
+        stale_security_client_log = (
+            "<script>: Security-Client=ipsec-3gpp;alg=hmac-md5-96;ealg=null;"
+            "mod=trans;port-c=9000;port-s=9001;prot=esp;spi-c=1;spi-s=2\n"
+        )
+        live_xfrm = (
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 61008 dport 5100\n"
+            "src 10.20.20.8 dst 172.22.0.21\n"
+            "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
+            "\tsel src 10.20.20.8/32 dst 172.22.0.21/32 sport 63193 dport 6100\n"
+        )
+        with patch(
+            "volte_mutation_fuzzer.sender.real_ue.subprocess.run",
+            side_effect=(
+                subprocess.CompletedProcess(
+                    args=["docker"],
+                    returncode=0,
+                    stdout=stale_security_client_log,
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=["docker"], returncode=0, stdout=live_xfrm, stderr=""
+                ),
+            ),
+        ):
+            port_pc, port_ps = resolver.resolve_protected_ports(
+                "111111",
+                ue_ip="10.20.20.8",
+            )
+
+        self.assertEqual((port_pc, port_ps), (63193, 61008))
+
     def test_resolve_protected_ports_xfrm_reads_non_adjacent_pair_from_dport(
         self,
     ) -> None:
@@ -315,11 +455,14 @@ class RealUEDirectHelperTests(unittest.TestCase):
         The header gives the authoritative pair without any +1 estimation:
             Security-Client=ipsec-3gpp;...;port-c=63193;port-s=61008;...
 
-        Current implementation only parses `Term UE connection` lines and falls
-        through to Strategy 2. We deliberately mock Strategy 2 with a
-        *different* port pair (50000/50001) so that any implementation that
-        ignores the Security-Client header and falls back to xfrm parsing
-        yields a wrong answer instead of accidentally matching.
+        The single Security-Client pair takes the global fallback (no UE IP
+        in the log window), which is cross-checked against live xfrm. The
+        mocked xfrm SAs carry the *same* sports (63193, 61008) so the
+        cross-check confirms the pair — but their dport ordering would map
+        to the swapped tuple (61008, 63193) if Strategy 2 actually ran, so
+        any implementation that ignores the Security-Client header and falls
+        back to xfrm parsing yields the wrong answer instead of accidentally
+        matching.
         """
         resolver = RealUEDirectResolver(env={"VMF_REAL_UE_PCSCF_IP": "172.22.0.21"})
 
@@ -338,15 +481,17 @@ class RealUEDirectHelperTests(unittest.TestCase):
             "prot=esp;spi-c=200418294;spi-s=12070439\n"
         )
 
-        # Decoy xfrm output — different port pair so a fallback-only
-        # implementation returns (50000, 50001) and the assertion fails loudly.
+        # Decoy xfrm output — same sports as the Security-Client pair (so the
+        # cross-check confirms membership) but dport ordering that Strategy 2
+        # would map to the *swapped* tuple (61008, 63193). A fallback-only
+        # implementation returns that swap and the assertion fails loudly.
         decoy_xfrm = (
             "src 10.20.20.2 dst 172.22.0.21\n"
             "\tproto esp spi 0x00001000 reqid 4096 mode transport\n"
-            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 50001 dport 5100\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 63193 dport 5100\n"
             "src 10.20.20.2 dst 172.22.0.21\n"
             "\tproto esp spi 0x00001001 reqid 4097 mode transport\n"
-            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 50000 dport 6100\n"
+            "\tsel src 10.20.20.2/32 dst 172.22.0.21/32 sport 61008 dport 6100\n"
         )
 
         with patch(
