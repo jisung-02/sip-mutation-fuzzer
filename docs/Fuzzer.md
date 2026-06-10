@@ -96,7 +96,7 @@ Courier 계층은 아래 네 가지 기능을 지원해야함
 | --- | --- | --- |
 | `crash` | 대상 프로세스가 종료됨 | 프로세스 생존 확인 (`pgrep`) |
 | `timeout` | 응답 없음 (패킷 drop 또는 hang) | 소켓 타임아웃 |
-| `suspicious` | 비정상 응답 (5xx/6xx, 파싱 실패, 비정상 지연) | SIP 상태코드 + 응답 시간 분석 |
+| `suspicious` | 응답이 valid SIP 로 파싱되지 않음 (`invalid_response`) | SIP 파싱 실패 감지. 4xx/5xx well-formed 에러는 normal 로 처리 |
 | `stack_failure` | 스택 트레이스 감지 | stderr/로그 패턴 매칭 |
 | `normal` | 정상 동작 | 위 조건 미해당 |
 | `unknown` | 인프라 오류로 판정 불가 | 전송 자체 실패 |

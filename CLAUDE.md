@@ -201,11 +201,15 @@ export VMF_REAL_UE_PCSCF_IP=172.22.0.21
 
 | Verdict | 조건 |
 |---------|------|
-| **normal** | 180/200 응답, 프로세스 살아있음 |
-| **suspicious** | 4xx/5xx 에러, 비정상 응답 |  
+| **normal** | 파싱 가능한 SIP 응답을 받음 — 1xx/2xx 뿐 아니라 3xx/4xx/5xx/6xx 에러 응답도 포함. UE 가 malformed 입력을 well-formed 한 에러로 거부한 것은 스택이 정상 처리한 신호로 본다. peer 가 valid SIP *request* 로 응답한 경우(예: SMS delivery report)도 normal. 프로세스 살아있음 |
+| **suspicious** | 응답이 valid SIP 로 파싱되지 않음 (`invalid_response`). 4xx/5xx 같은 well-formed 에러는 여기 해당하지 않는다 |
 | **timeout** | 응답 없음 (timeout 초과) |
-| **crash** | 프로세스 종료 감지 |
+| **unknown** | send error / 인프라 실패 또는 executor 예외 (퍼징 결과 아님) |
+| **crash** | 프로세스 종료 감지 (process check) |
 | **stack_failure** | adb logcat 또는 iOS syslog/`.ips` 크래시 리포트에서 anomaly 감지 |
+| **infra_failure** | 캠페인 레벨 재분류 — timeout streak 중 IPsec SA 만료 감지 시 |
+
+> 참고: 4xx/5xx/6xx 응답을 normal 로 두는 것은 의도된 설계다. 이 퍼저가 잡으려는 신호는 well-formed 한 에러 거부가 아니라 `timeout`(스택 hang 가능성), `invalid_response`(파서 혼란), `crash`, `stack_failure` 다. 응답 코드 자체는 각 케이스의 `response_code` / `reason` 필드에 남으므로 post-hoc 으로 4xx/5xx 분포를 따로 필터링할 수 있다.
 
 ## 📝 최근 업데이트
 

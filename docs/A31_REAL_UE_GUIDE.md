@@ -154,11 +154,13 @@ uv run fuzzer campaign run \
 ### Verdict 해석
 | Verdict | 의미 | UE 상태 |
 |---------|------|----------|
-| **normal** | 180/200 응답 | 벨 울림 → 정상 처리 |
-| **suspicious** | 4xx/5xx 에러 | 파싱 실패 또는 거부 |
-| **timeout** | 무응답 | 패킷 drop 또는 무시 |
+| **normal** | 파싱 가능한 SIP 응답 (1xx/2xx 뿐 아니라 3xx/4xx/5xx/6xx 에러 응답도 포함) | 벨 울림 또는 well-formed 거부 → 스택이 정상 처리 |
+| **suspicious** | 응답이 valid SIP 로 파싱 안 됨 (`invalid_response`) | 파서 혼란 가능성. 4xx/5xx well-formed 에러는 여기 아님 |
+| **timeout** | 무응답 | 패킷 drop 또는 무시 (스택 hang 가능성) |
 | **crash** | 프로세스 종료 | **잠재적 취약점!** |
 | **stack_failure** | Stack trace 발견 | **잠재적 취약점!** |
+
+> 4xx/5xx 응답은 verdict 가 `normal` 로 남고 상태 코드는 `response_code` 필드에 기록된다. 거부 응답 분포를 보려면 `response_code` 로 따로 필터링한다.
 
 ### 처리 시간과 로그 수집 정책
 
@@ -264,9 +266,9 @@ grep "Via:" case_000001.pcap
 # 해결: --mt-local-port와 template Via 동기화 확인
 ```
 
-### ❌ suspicious (400/4xx 에러)
+### ⚠️ 4xx/5xx 에러 응답 (verdict 는 normal, response_code 가 4xx/5xx)
 
-**원인**: MT template 불완전
+**원인**: MT template 불완전. verdict 는 `normal` 로 남지만 UE 가 200/180 대신 4xx/5xx 로 거부한 것이므로, 벨이 울리길 기대했다면 비정상이다. `response_code` 로 걸러서 확인한다.
 ```bash
 # 확인: UE 응답
 grep -E "SIP/2\.0 [45]" case_000001.pcap

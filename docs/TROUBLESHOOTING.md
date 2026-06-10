@@ -40,7 +40,9 @@ tcpdump -r case_000001.pcap -A | grep "Via:"
 --mt-local-port 15100  # Via와 실제 bind port 일치 확인
 ```
 
-### ❌ suspicious (4xx/5xx 에러)
+### ⚠️ 4xx/5xx 에러 응답 (verdict 는 normal, response_code 가 4xx/5xx)
+
+> 4xx/5xx well-formed 에러 응답은 verdict 가 `normal` 로 남는다 (UE 스택이 정상적으로 거부한 것). 상태 코드는 `response_code` 필드에 기록되므로 거부 케이스는 그걸로 필터링한다. `suspicious` 는 응답이 valid SIP 로 파싱조차 안 될 때만 붙는다.
 
 #### 1. 불완전한 MT template
 **증상**: 400 Parsing Failed, 415 Unsupported Media Type
