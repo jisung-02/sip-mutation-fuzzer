@@ -1,0 +1,2324 @@
+import logging
+import json
+import os
+import random
+import re
+import sys
+import time
+import uuid
+from collections.abc import Iterator
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal, cast
+
+from volte_mutation_fuzzer.campaign.contracts import (
+    CampaignConfig,
+    CampaignResult,
+    CampaignSummary,
+    CaseResult,
+    CaseSpec,
+)
+from volte_mutation_fuzzer.capture.core import PcapCapture
+from volte_mutation_fuzzer.dialog.core import DialogOrchestrator
+from volte_mutation_fuzzer.dialog.scenarios import scenario_for_method
+from volte_mutation_fuzzer.generator.contracts import (
+    DialogContext,
+    GeneratorSettings,
+    RequestSpec,
+    ResponseSpec,
+)
+from volte_mutation_fuzzer.generator.core import SIPGenerator
+from volte_mutation_fuzzer.generator.real_ue_mt_template import (
+    build_default_slots,
+    load_mt_invite_template,
+    render_mt_invite,
+)
+from volte_mutation_fuzzer.mutator.contracts import (
+    MutationConfig,
+    MutatedCase,
+    MutatedWireCase,
+    PacketModel,
+)
+from volte_mutation_fuzzer.mutator.profile_catalog import (
+    SUPPORTED_STRATEGIES_BY_LAYER as _SUPPORTED_STRATEGIES,
+    profile_supports_strategy,
+)
+from volte_mutation_fuzzer.mutator.core import SIPMutator
+from volte_mutation_fuzzer.mutator.editable import parse_editable_from_wire
+from volte_mutation_fuzzer.oracle.contracts import OracleContext
+from volte_mutation_fuzzer.oracle.core import (
+    AdbOracle,
+    IosOracle,
+    LogOracle,
+    OracleEngine,
+)
+from volte_mutation_fuzzer.sender.contracts import (
+    SendArtifact,
+    SendReceiveResult,
+    TargetEndpoint,
+    TargetMode,
+    TransportProtocol,
+)
+from volte_mutation_fuzzer.sender.core import SIPSenderReactor
+from volte_mutation_fuzzer.sender.real_ue import (
+    RealUEDirectResolver,
+    check_ipsec_sa_alive,
+)
+from volte_mutation_fuzzer.sip.catalog import SIP_CATALOG
+from volte_mutation_fuzzer.sip.common import SIPMethod, SIPURI
+from volte_mutation_fuzzer.sip.completeness import (
+    PacketCompletionTier,
+    PacketRuntimePath,
+    get_packet_completion,
+)
+from volte_mutation_fuzzer.sip.render import render_packet
+from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
+from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
+from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
+from volte_mutation_fuzzer.campaign.report import HtmlReportGenerator
+
+_DEFAULT_PCSCF_IP: str = "172.22.0.21"
+_MT_TEMPLATE_FRAG_LIMIT: int = (
+    65535  # bytes; raised — Docker bridge IP reassembly works fine in practice
+)
+
+# INVITE teardown constants
+_CANCEL_MAX_RETRIES: int = 3
+_CANCEL_RETRY_INTERVAL: float = 0.5  # seconds between retries
+_CANCEL_TEARDOWN_TIMEOUT: float = 2.0  # extra cooldown when teardown fails
+
+logger = logging.getLogger(__name__)
+
+_DIALOG_RUNTIME_PATHS: frozenset[PacketRuntimePath] = frozenset(
+    {
+        PacketRuntimePath.invite_dialog,
+        PacketRuntimePath.invite_ack,
+        PacketRuntimePath.invite_cancel,
+        PacketRuntimePath.invite_prack,
+    }
+)
+
+
+# ``_SUPPORTED_STRATEGIES`` is sourced from ``mutator/profile_catalog`` (see
+# the top-level import). Previously this module kept its own hand-maintained
+# copy that had to be synced with the mutator catalog and the validator in
+# ``mutator/core.py``; forgetting to sync silently dropped every spec whose
+# strategy wasn't in the local copy, producing 0-case campaigns with no
+# error. Single source of truth eliminates that footgun.
+
+
+# ---------------------------------------------------------------------------
+# CaseGenerator
+# ---------------------------------------------------------------------------
+
+
+class CaseGenerator:
+    """Produces CaseSpec instances from direct method and response selections."""
+
+    def __init__(self, config: CampaignConfig) -> None:
+        self._config = config
+
+    def generate(self, skip_before: int = -1) -> Iterator[CaseSpec]:
+        config = self._config
+        seen: set[tuple[str, str, int | None, str | None, str, str]] = set()
+        combos: list[tuple[str, str, int | None, str | None, str, str]] = []
+
+        # MT mode: drop model layer (3GPP wire text used directly)
+        template_active = config.mt
+        # Packet-file mode: only byte layer makes sense (file is raw bytes; no
+        # SIP parsing). model/wire layers are filtered out so we don't emit
+        # combos that would be skipped at execute time.
+        packet_file_active = config.packet_file is not None
+
+        if packet_file_active:
+            # File is sent verbatim — layer config is ignored, always byte.
+            effective_layers = ("byte",)
+        elif template_active:
+            effective_layers = tuple(lyr for lyr in config.layers if lyr != "model")
+        else:
+            effective_layers = config.layers
+
+        for method in config.methods:
+            for profile in config.profiles:
+                for layer in effective_layers:
+                    for strategy in config.strategies:
+                        if strategy not in _SUPPORTED_STRATEGIES.get(
+                            layer, frozenset()
+                        ):
+                            continue
+                        if not profile_supports_strategy(profile, layer, strategy):
+                            continue
+                        key = (profile, method, None, None, layer, strategy)
+                        if key not in seen:
+                            seen.add(key)
+                            combos.append(key)
+
+        for response_code in config.response_codes:
+            response_definition = SIP_CATALOG.get_response(response_code)
+            related_methods = tuple(
+                method.value for method in response_definition.related_methods
+            ) or ("INVITE",)
+            for related_method in related_methods:
+                for profile in config.profiles:
+                    for layer in config.layers:
+                        for strategy in config.strategies:
+                            if strategy not in _SUPPORTED_STRATEGIES.get(
+                                layer, frozenset()
+                            ):
+                                continue
+                            if not profile_supports_strategy(profile, layer, strategy):
+                                continue
+                            key = (
+                                profile,
+                                related_method,
+                                response_code,
+                                related_method,
+                                layer,
+                                strategy,
+                            )
+                            if key not in seen:
+                                seen.add(key)
+                                combos.append(key)
+
+        # Build the recurring combo list (excludes identity baseline).
+        # Round 0 uses full combos (including identity if template_active),
+        # subsequent rounds use only recurring_combos.
+        recurring_combos = [
+            c
+            for c in combos
+            if not (
+                c[1] == "INVITE"
+                and c[2] is None
+                and c[3] is None
+                and c[4] == "wire"
+                and c[5] == "identity"
+            )
+        ]
+
+        unlimited = config.max_cases == 0
+        case_id = 0
+        round_num = 0
+        while True:
+            round_combos = combos if round_num == 0 else recurring_combos
+            for (
+                profile,
+                method,
+                response_code,
+                related_method,
+                layer,
+                strategy,
+            ) in round_combos:
+                if not unlimited and case_id >= config.max_cases:
+                    return
+                if case_id <= skip_before:
+                    case_id += 1
+                    continue
+                yield CaseSpec(
+                    case_id=case_id,
+                    seed=config.seed_start + case_id,
+                    profile=profile,
+                    method=method,
+                    layer=layer,
+                    strategy=strategy,
+                    response_code=response_code,
+                    related_method=related_method,
+                )
+                case_id += 1
+            round_num += 1
+            # Guard: if no recurring combos, stop after round 0
+            if not recurring_combos:
+                return
+
+
+# ---------------------------------------------------------------------------
+# ResultStore
+# ---------------------------------------------------------------------------
+
+
+class ResultStore:
+    """Appends CaseResult records to a JSON Lines file."""
+
+    _HEADER_TYPE = "header"
+    _CASE_TYPE = "case"
+    _FOOTER_TYPE = "footer"
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write_header(self, result: CampaignResult) -> None:
+        payload = {"type": self._HEADER_TYPE}
+        payload.update(result.model_dump(mode="json"))
+        with self._path.open("w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def append(self, result: CaseResult) -> None:
+        payload = {"type": self._CASE_TYPE}
+        payload.update(result.model_dump(mode="json"))
+        with self._path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def write_footer(self, result: CampaignResult) -> None:
+        payload = {"type": self._FOOTER_TYPE}
+        payload.update(result.model_dump(mode="json"))
+        with self._path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def find_checkpoint(
+        self,
+    ) -> tuple[int, CampaignSummary, str, str, "CampaignConfig"] | None:
+        """Return (last_case_id, summary, campaign_id, started_at, original_config) or None."""
+        if not self._path.exists():
+            return None
+        try:
+            header, cases = self.read_all()
+        except Exception:
+            return None
+        if not cases:
+            return None
+        last_id = max(c.case_id for c in cases)
+        counts: dict[str, int] = {
+            "normal": 0,
+            "suspicious": 0,
+            "timeout": 0,
+            "crash": 0,
+            "stack_failure": 0,
+            "infra_failure": 0,
+            "unknown": 0,
+        }
+        for c in cases:
+            if c.verdict in counts:
+                counts[c.verdict] += 1
+        summary = CampaignSummary(total=len(cases), **counts)
+        return last_id, summary, header.campaign_id, header.started_at, header.config
+
+    def write_resume_marker(self, resume_from_case_id: int) -> None:
+        """Append a resume_marker line without overwriting existing records."""
+        payload = {
+            "type": "resume_marker",
+            "resumed_at": datetime.now(timezone.utc).isoformat(),
+            "resume_from_case_id": resume_from_case_id,
+        }
+        with self._path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def read_all(self) -> tuple[CampaignResult, list[CaseResult]]:
+        lines = self._path.read_text(encoding="utf-8").splitlines()
+        header: CampaignResult | None = None
+        cases: list[CaseResult] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            obj = json.loads(line)
+            t = obj.pop("type", None)
+            if t == self._HEADER_TYPE:
+                header = CampaignResult.model_validate(obj)
+            elif t == self._FOOTER_TYPE:
+                header = CampaignResult.model_validate(obj)
+            elif t == self._CASE_TYPE:
+                cases.append(CaseResult.model_validate(obj))
+        if header is None:
+            raise ValueError(f"no header found in {self._path}")
+        return header, cases
+
+    def read_case(self, case_id: int) -> CaseResult | None:
+        _, cases = self.read_all()
+        for case in cases:
+            if case.case_id == case_id:
+                return case
+        return None
+
+
+# ---------------------------------------------------------------------------
+# CampaignExecutor
+# ---------------------------------------------------------------------------
+
+
+def _payload_to_text(payload: str | bytes | None) -> str | None:
+    """Decode the artifact-level payload for storage in case_result.raw_request.
+
+    Mutators emit either wire_text (str) or packet_bytes (bytes); this normalizes
+    to a single text representation so downstream tooling and the jsonl record
+    can show the request side symmetrically with raw_response.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        return payload
+    return payload.decode("utf-8", errors="replace")
+
+
+class CampaignExecutor:
+    """Sequential campaign loop: generate → mutate → send → judge → store."""
+
+    def __init__(
+        self,
+        config: CampaignConfig,
+        generator: SIPGenerator | None = None,
+        mutator: SIPMutator | None = None,
+        sender: SIPSenderReactor | None = None,
+        oracle: OracleEngine | None = None,
+        store: ResultStore | None = None,
+        campaign_dir: Path | None = None,
+    ) -> None:
+        # Resolve campaign directory — all output goes here
+        if campaign_dir is not None:
+            self._campaign_dir = campaign_dir
+        elif config.resume and config.output_name is not None:
+            # Resume: reuse existing campaign dir
+            self._campaign_dir = Path(config.results_dir) / config.output_name
+        else:
+            # Generate new campaign dir name
+            dir_name = config.output_name or self._generate_dir_name()
+            self._campaign_dir = Path(config.results_dir) / dir_name
+        self._campaign_dir.mkdir(parents=True, exist_ok=True)
+
+        # Derived paths
+        self._jsonl_path = self._campaign_dir / "campaign.jsonl"
+        self._pcap_dir = self._campaign_dir / "pcap"
+        self._crash_analysis_dir = self._campaign_dir / "crash_analysis"
+
+        # Resume: restore original config from JSONL
+        if config.resume and store is None and self._jsonl_path.exists():
+            _tmp_store = ResultStore(self._jsonl_path)
+            _checkpoint = _tmp_store.find_checkpoint()
+            if _checkpoint is not None:
+                _, _, _, _, _original_config = _checkpoint
+                config = _original_config.model_copy(
+                    update={
+                        "resume": True,
+                        "results_dir": config.results_dir,
+                        "output_name": config.output_name,
+                    }
+                )
+
+        self._config = config
+        _gen_settings = GeneratorSettings()
+        if config.target_msisdn is not None and config.mode == "real-ue-direct":
+            _gen_settings = _gen_settings.model_copy(
+                update={
+                    "to_user": config.target_msisdn,
+                    "request_uri_user": config.target_msisdn,
+                }
+            )
+        self._generator = generator or SIPGenerator(_gen_settings)
+        self._mutator = mutator or SIPMutator()
+        self._sender = sender or SIPSenderReactor()
+        self._adb_collector: Any | None = None
+        self._ios_collector: Any | None = None
+        self._ios_udid: str | None = config.ios_udid
+        self._ios_device_info: Any | None = None
+        # UTC start of the run; the finalize crash pull keeps only crashes whose
+        # timestamp falls in [start, now], so no pre-fuzz crash store is hoarded.
+        self._ios_run_start: datetime | None = None
+        _docker_mode = config.mode == "real-ue-direct"
+        if oracle is not None:
+            self._oracle = oracle
+        else:
+            log_oracle = LogOracle() if config.log_path is not None else None
+            adb_oracle = None
+            ios_oracle = None
+
+            if config.adb_enabled:
+                from volte_mutation_fuzzer.adb.contracts import AdbCollectorConfig
+                from volte_mutation_fuzzer.adb.core import (
+                    AdbAnomalyDetector,
+                    AdbLogCollector,
+                )
+
+                adb_cfg = AdbCollectorConfig(
+                    serial=config.adb_serial,
+                    buffers=config.adb_buffers,
+                )
+                # Persist every streamed logcat line to a single file at the
+                # campaign-dir top level so post-hoc analysis can correlate
+                # adb events with case-level jsonl entries without paging
+                # through per-case snapshots.
+                full_logcat_path = self._campaign_dir / "logcat_full.txt"
+                adb_collector = AdbLogCollector(
+                    adb_cfg,
+                    output_file=full_logcat_path,
+                )
+                adb_detector = AdbAnomalyDetector()
+                adb_oracle = AdbOracle(adb_collector, adb_detector)
+                self._adb_collector = adb_collector
+
+            if config.ios_enabled:
+                from volte_mutation_fuzzer.ios.contracts import IosCollectorConfig
+                from volte_mutation_fuzzer.ios.core import (
+                    IosAnomalyDetector,
+                    IosSyslogCollector,
+                )
+
+                ios_cfg = IosCollectorConfig(udid=self._ios_udid)
+                # Stream the full-period syslog to the campaign-dir top level,
+                # mirroring the ADB collector's logcat_full.txt.
+                ios_collector = IosSyslogCollector(
+                    ios_cfg,
+                    output_file=self._campaign_dir / "syslog_full.txt",
+                )
+                ios_detector = IosAnomalyDetector()
+                ios_oracle = IosOracle(ios_collector, ios_detector)
+                self._ios_collector = ios_collector
+
+            self._oracle = OracleEngine(
+                log_oracle=log_oracle,
+                adb_oracle=adb_oracle,
+                ios_oracle=ios_oracle,
+                docker_mode=_docker_mode,
+            )
+        self._store = store or ResultStore(self._jsonl_path)
+        target_port = config.target_port
+        if (
+            config.mode == "real-ue-direct"
+            and config.target_host is None
+            and config.target_msisdn is not None
+        ):
+            target_port = None
+        self._target = TargetEndpoint(
+            host=config.target_host,
+            port=target_port,
+            transport=cast(TransportProtocol, config.transport),
+            mode=cast(TargetMode, config.mode),
+            timeout_seconds=config.timeout_seconds,
+            msisdn=config.target_msisdn,
+            ipsec_mode=config.ipsec_mode,
+            source_ip=config.source_ip,
+            bind_container=config.bind_container,
+            pixel_mode=config.pixel_mode,
+            # Mirror sender/cli.py single-shot dispatch: null/bypass needs a
+            # fixed local UDP port so the rewritten Via sent-by matches the
+            # bound socket and the UE's reply lands on it instead of an
+            # ephemeral port the kernel already gave to a wildcard listener
+            # (e.g. kamailio :5060). native uses connect()-bound ephemeral on
+            # purpose so leave it None there.
+            bind_port=(
+                config.mt_local_port
+                if config.ipsec_mode in ("null", "bypass")
+                else None
+            ),
+        )
+        self._mt_template_text: str | None = (
+            load_mt_invite_template() if config.mt else None
+        )
+        # Pre-load packet_file once. Read as raw bytes — null bytes are
+        # preserved end-to-end. Empty file is rejected here (sending zero
+        # bytes is meaningless for a UDP/TCP probe).
+        self._packet_file_bytes: bytes | None = None
+        if config.packet_file is not None:
+            packet_path = Path(config.packet_file)
+            data = packet_path.read_bytes()
+            if not data:
+                raise ValueError(f"packet_file is empty: {config.packet_file}")
+            self._packet_file_bytes = data
+        self._ue_resolver = RealUEDirectResolver()
+
+        # Initialize crash analyzer
+        self._crash_analyzer = CampaignCrashAnalyzer(
+            output_dir=str(self._crash_analysis_dir),
+            enabled=config.crash_analysis,
+            source_name=str(self._jsonl_path),
+        )
+
+        # Initialize evidence collector
+        self._evidence = EvidenceCollector(
+            base_dir=self._campaign_dir,
+        )
+
+        # Call state checker for INVITE teardown verification
+        self._call_state_checker: "CallStateChecker | None" = None
+        if (
+            config.adb_enabled
+            and config.mt
+            and config.wait_idle_timeout_seconds > 0
+        ):
+            from volte_mutation_fuzzer.adb.call_state import CallStateChecker
+
+            self._call_state_checker = CallStateChecker(
+                serial=config.adb_serial,
+                wait_timeout=config.wait_idle_timeout_seconds,
+            )
+
+    @staticmethod
+    def _generate_dir_name() -> str:
+        return f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+    @staticmethod
+    def _case_wall_ms(case_started_monotonic: float) -> float:
+        return round((time.monotonic() - case_started_monotonic) * 1000, 3)
+
+    @property
+    def campaign_dir(self) -> Path:
+        return self._campaign_dir
+
+    def run(self) -> CampaignResult:
+        config = self._config
+        skip_before = -1
+
+        if config.resume:
+            checkpoint = self._store.find_checkpoint()
+            if checkpoint is not None:
+                last_id, summary, campaign_id, started_at, _ = checkpoint
+                skip_before = last_id
+                self._store.write_resume_marker(last_id + 1)
+                logger.info(
+                    "resuming campaign %s from case_id=%d",
+                    campaign_id,
+                    last_id + 1,
+                )
+            else:
+                # 파일 없거나 case 없음 → 새 캠페인처럼 시작
+                campaign_id = uuid.uuid4().hex[:12]
+                started_at = datetime.now(timezone.utc).isoformat()
+                summary = CampaignSummary()
+                _new_campaign = CampaignResult(
+                    campaign_id=campaign_id,
+                    started_at=started_at,
+                    status="running",
+                    config=config,
+                    summary=summary,
+                )
+                self._store.write_header(_new_campaign)
+        else:
+            campaign_id = uuid.uuid4().hex[:12]
+            started_at = datetime.now(timezone.utc).isoformat()
+            summary = CampaignSummary()
+            _new_campaign = CampaignResult(
+                campaign_id=campaign_id,
+                started_at=started_at,
+                status="running",
+                config=config,
+                summary=summary,
+            )
+            self._store.write_header(_new_campaign)
+
+        campaign = CampaignResult(
+            campaign_id=campaign_id,
+            started_at=started_at,
+            status="running",
+            config=config,
+            summary=summary,
+        )
+
+        reporter = ConsoleProgressReporter(
+            total_cases=config.max_cases,
+            campaign_id=campaign_id,
+            adb_enabled=bool(config.adb_enabled),
+            pcap_enabled=bool(config.pcap_enabled),
+            pcap_interface=config.pcap_interface,
+        )
+
+        if self._adb_collector is not None:
+            self._adb_collector.start()
+        if self._ios_collector is not None:
+            self._ensure_ios_device_info()
+            self._ios_run_start = datetime.now(timezone.utc)
+            self._ios_collector.start()
+        self._capture_ios_baseline()
+        consecutive_failures = 0
+        cb_threshold = config.circuit_breaker_threshold
+        # SA probe triggers at half the circuit breaker threshold (min 3)
+        sa_probe_threshold = max(3, cb_threshold // 2) if cb_threshold > 0 else 0
+        sa_checked_dead = False
+        sa_probed_this_streak = False
+        try:
+            for spec in CaseGenerator(config).generate(skip_before=skip_before):
+                case_result = self._execute_case(spec)
+
+                # Circuit breaker: abort on consecutive timeout/unknown streaks
+                if case_result.verdict in ("timeout", "unknown"):
+                    consecutive_failures += 1
+
+                    # SA health probe: on sustained timeouts in real-ue-direct mode,
+                    # check if IPsec SAs have expired.  If so, reclassify as
+                    # infra_failure so the user knows this is not a real fuzz result.
+                    # Only probe once per failure streak to avoid repeated docker exec.
+                    if (
+                        not sa_checked_dead
+                        and not sa_probed_this_streak
+                        and sa_probe_threshold > 0
+                        and consecutive_failures >= sa_probe_threshold
+                        and config.mode == "real-ue-direct"
+                        and config.ipsec_mode is not None
+                    ):
+                        sa_probed_this_streak = True
+                        sa_status = check_ipsec_sa_alive()
+                        if not sa_status.alive:
+                            sa_checked_dead = True
+                            # Reclassify current verdict
+                            case_result = case_result.model_copy(
+                                update={
+                                    "verdict": "infra_failure",
+                                    "reason": f"IPsec SA expired ({sa_status.detail}); "
+                                    f"original verdict: {case_result.verdict}",
+                                }
+                            )
+                        else:
+                            # SA alive but timeout streak — most likely cause is UE
+                            # re-register or IPsec rekey changing the UE IP / port_pc
+                            # / port_ps under us. The sender re-resolves on every
+                            # case anyway, but we add a short cooldown here so the
+                            # next iteration sees a stabilised xfrm state, plus a
+                            # marker on the verdict so post-mortem analysis can
+                            # tell "fuzzer-side stuck" apart from "UE rekeyed
+                            # mid-campaign". Once per streak only — clears when
+                            # the next normal verdict resets `consecutive_failures`.
+                            case_result = case_result.model_copy(
+                                update={
+                                    "reason": (
+                                        f"{case_result.reason or 'timeout'} "
+                                        f"(streak={consecutive_failures}; "
+                                        "suspected UE rekey or re-register — "
+                                        "applied 2s cooldown before next case)"
+                                    ),
+                                }
+                            )
+                            time.sleep(2.0)
+                else:
+                    consecutive_failures = 0
+                    sa_checked_dead = False
+                    sa_probed_this_streak = False
+
+                self._store.append(case_result)
+
+                # Real-time crash analysis
+                self._analyze_case_result(case_result)
+
+                self._update_summary(summary, case_result.verdict)
+
+                # Console progress reporting
+                adb_healthy: bool | None = None
+                if self._adb_collector is not None and hasattr(
+                    self._adb_collector, "is_healthy"
+                ):
+                    adb_healthy = self._adb_collector.is_healthy
+                    if not adb_healthy:
+                        dead = getattr(self._adb_collector, "dead_buffers", frozenset())
+                        if dead:
+                            reporter.on_adb_warning(dead)
+
+                reporter.on_case_complete(
+                    spec, case_result, summary, adb_healthy=adb_healthy
+                )
+
+                # SA expiry → immediate abort
+                if sa_checked_dead:
+                    reporter.on_circuit_breaker(
+                        "IPsec SA expired — re-register the UE and restart."
+                    )
+                    logger.error("circuit breaker tripped: IPsec SA expired")
+                    break
+
+                if cb_threshold > 0 and consecutive_failures >= cb_threshold:
+                    reporter.on_circuit_breaker(
+                        f"{consecutive_failures} consecutive timeout/unknown verdicts"
+                    )
+                    logger.error(
+                        "circuit breaker tripped after %d consecutive failures",
+                        consecutive_failures,
+                    )
+                    break
+
+                if config.cooldown_seconds > 0:
+                    time.sleep(config.cooldown_seconds)
+
+        except KeyboardInterrupt:
+            campaign = campaign.model_copy(
+                update={
+                    "status": "aborted",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "summary": summary,
+                }
+            )
+            self._store.write_footer(campaign)
+            reporter.finalize(summary, "aborted")
+            try:
+                HtmlReportGenerator(self._jsonl_path).generate()
+            except Exception:
+                pass
+            return campaign
+        finally:
+            post_grace = config.post_campaign_log_grace_seconds
+            if post_grace > 0 and (
+                self._adb_collector is not None or self._ios_collector is not None
+            ):
+                import time as _time
+
+                logger.info(
+                    "post-campaign log grace: collecting for %.0f s", post_grace
+                )
+                _time.sleep(post_grace)
+            if self._adb_collector is not None:
+                self._adb_collector.stop()
+            if self._ios_collector is not None:
+                # Collect new crashes before the device connection is torn down.
+                # The full-period syslog is streamed live to syslog_full.txt and
+                # is closed by stop().
+                self._capture_ios_new_crashes()
+                self._ios_collector.stop()
+
+            # Generate final crash analysis report
+            self._finalize_crash_analysis()
+            self._wait_for_pending_pcap_exports()
+
+        final_status = (
+            "aborted"
+            if sa_checked_dead
+            or (cb_threshold > 0 and consecutive_failures >= cb_threshold)
+            else "completed"
+        )
+        campaign = campaign.model_copy(
+            update={
+                "status": final_status,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "summary": summary,
+            }
+        )
+        self._store.write_footer(campaign)
+        reporter.finalize(summary, final_status)
+
+        # Generate HTML report
+        try:
+            report_path = HtmlReportGenerator(self._jsonl_path).generate()
+            print(f"[vmf campaign] report: {report_path}", file=sys.stderr)
+        except Exception as exc:
+            logger.warning("failed to generate HTML report: %s", exc)
+
+        return campaign
+
+    def _wait_for_pending_pcap_exports(self) -> None:
+        try:
+            PcapCapture.wait_for_pending_exports()
+        except Exception as exc:
+            logger.warning("failed to drain pending pcap txt exports: %s", exc)
+
+    def _dialog_scenario_for_runtime_method(self, method: str):
+        completion = get_packet_completion(SIPMethod(method))
+        if completion.tier is not PacketCompletionTier.runtime_complete:
+            return None
+        if completion.runtime_path not in _DIALOG_RUNTIME_PATHS:
+            return None
+        return scenario_for_method(method)
+
+    def _execute_case(self, spec: CaseSpec) -> CaseResult:
+        config = self._config
+        timestamp = time.time()
+        case_started_monotonic = time.monotonic()
+        error: str | None = None
+        capture: PcapCapture | None = None
+        pcap_path_saved: str | None = None
+        mutated: MutatedCase | None = None
+
+        try:
+            scenario = None
+            if spec.response_code is None:
+                scenario = self._dialog_scenario_for_runtime_method(spec.method)
+                if scenario is not None:
+                    return self._execute_dialog_case(
+                        spec, scenario, timestamp, case_started_monotonic
+                    )
+
+            # Packet-file path (real-ue-direct, file bytes sent verbatim).
+            # Checked before MT mode because the two are mutually exclusive
+            # (validated in CampaignConfig); this ordering is a safety belt in
+            # case both ever leak through.
+            if self._packet_file_bytes is not None and spec.response_code is None:
+                return self._execute_packet_file_case(
+                    spec, timestamp, case_started_monotonic
+                )
+
+            # MT template path (real-ue-direct with 3GPP format)
+            if self._mt_template_text is not None and spec.response_code is None:
+                return self._execute_mt_template_case(
+                    spec, timestamp, case_started_monotonic
+                )
+
+            packet = self._build_packet(spec)
+            mutated = self._mutator.mutate(
+                packet,
+                MutationConfig(
+                    seed=spec.seed,
+                    profile=spec.profile,
+                    strategy=spec.strategy,
+                    layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
+                    max_operations=config.mutations_per_case,
+                ),
+            )
+            artifact = self._artifact_from_mutated(mutated)
+            if config.pcap_enabled:
+                pcap_dir = self._pcap_dir
+                pcap_dir.mkdir(parents=True, exist_ok=True)
+                pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
+                capture = PcapCapture(pcap_path, interface=config.pcap_interface)
+                capture.start()
+            try:
+                send_result = self._sender.send_artifact(
+                    artifact,
+                    self._target,
+                    collect_all_responses=(spec.method == "INVITE"),
+                )
+            finally:
+                if capture is not None:
+                    pcap_path_saved = capture.stop()
+
+            sent_payload: str | bytes | None = (
+                send_result.sent_bytes.decode("utf-8", errors="replace")
+                if send_result.sent_bytes is not None
+                else artifact.wire_text or artifact.packet_bytes
+            )
+
+            context = OracleContext(
+                method=spec.related_method or spec.method,
+                timeout_threshold_ms=config.timeout_seconds * 1000,
+                log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                    spec.related_method or spec.method
+                ),
+            )
+            process_name = config.process_name if config.check_process else None
+            verdict = self._oracle.evaluate(
+                send_result,
+                context,
+                process_name=process_name,
+                log_path=config.log_path,
+                process_check_interval=10,
+            )
+            mutation_ops = tuple(
+                f"{r.operator}({r.target.path})" for r in mutated.records
+            )
+            resolved_profile = getattr(mutated, "profile", spec.profile)
+            resolved_strategy = getattr(mutated, "strategy", spec.strategy)
+            raw_response = self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            )
+            case_result = self._build_case_result(
+                spec,
+                verdict=verdict.verdict,
+                reason=verdict.reason,
+                response_code=verdict.response_code,
+                elapsed_ms=verdict.elapsed_ms,
+                process_alive=verdict.process_alive,
+                raw_request=_payload_to_text(sent_payload),
+                raw_response=raw_response,
+                reproduction_cmd=self._build_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                mutation_ops=mutation_ops,
+                error=error,
+                details=getattr(verdict, "details", {}) or {},
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                # Finalize after evidence.collect() so the metric includes persistence time.
+                case_wall_ms=0.0,
+            )
+
+            return self._persist_case_artifacts(
+                spec,
+                case_result,
+                sent_payload=sent_payload,
+                timestamp=timestamp,
+                case_started_monotonic=case_started_monotonic,
+            )
+
+        except Exception as exc:
+            error = str(exc)
+            resolved_profile = getattr(mutated, "profile", spec.profile)
+            resolved_strategy = getattr(mutated, "strategy", spec.strategy)
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"executor error: {error}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                error=error,
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+    def _resolve_ports_live(
+        self,
+        msisdn: str,
+        *,
+        ue_ip: str | None = None,
+    ) -> tuple[int, int]:
+        """Resolve (port_pc, port_ps) fresh on every call.
+
+        Caching was previously used to avoid docker-logs overhead per case,
+        but UEs re-register frequently (especially Samsung A16 / Pixel-class
+        spec-strict stacks during long campaigns). A stale cache silently
+        sends to the old protected ports for the rest of the run, which
+        masquerades as "all timeout" — indistinguishable from a real
+        non-responsive UE. The ~150 ms per case is worth the correctness.
+
+        ``ue_ip`` is forwarded so the resolver filters protected-port
+        candidates by the same generation of UE IP that the caller already
+        resolved. Without it, a re-registration between the caller's
+        ``resolve()`` and this call could land us on a port pair from a
+        newer or older generation than the host we are about to send to.
+        """
+        return self._ue_resolver.resolve_protected_ports(msisdn, ue_ip=ue_ip)
+
+    def _teardown_invite(
+        self,
+        wire_text: str,
+        mt_target: TargetEndpoint,
+        send_result: SendReceiveResult,
+        config: CampaignConfig,
+    ) -> list[str]:
+        """Send CANCEL to tear down an INVITE session with retry on failure.
+
+        RFC 3261 §9.1: CANCEL should only be sent after receiving a
+        provisional response.  We check whether any 1xx was received and
+        skip CANCEL entirely if none (the server never created transaction
+        state, so there is nothing to cancel).
+
+        Returns a list of observer events describing teardown outcome.
+        """
+        events: list[str] = []
+
+        # Check if we received at least one provisional response (1xx).
+        has_provisional = any(
+            obs.status_code is not None and 100 <= obs.status_code < 200
+            for obs in send_result.responses
+        )
+        has_final = any(
+            obs.status_code is not None and obs.status_code >= 200
+            for obs in send_result.responses
+        )
+
+        if not has_provisional and not has_final:
+            # No response at all (timeout) — server never saw the INVITE or
+            # didn't create transaction state.  CANCEL would be meaningless.
+            events.append("teardown:skipped:no-response")
+            return events
+
+        if has_final and not has_provisional:
+            # Got a final response without provisional (e.g. 486 Busy).
+            # Transaction is already terminated — no CANCEL needed.
+            events.append("teardown:skipped:final-only")
+            return events
+
+        # Build CANCEL from the actual INVITE wire text that was sent.
+        cancel_text = re.sub(r"^INVITE\b", "CANCEL", wire_text, count=1)
+        cancel_text = re.sub(
+            r"(?m)^(CSeq:\s*\d+)\s+INVITE\b",
+            r"\1 CANCEL",
+            cancel_text,
+            count=1,
+        )
+        cancel_artifact = SendArtifact(
+            wire_text=cancel_text,
+            preserve_via=config.preserve_via,
+            preserve_contact=config.preserve_contact,
+        )
+
+        teardown_ok = False
+        for attempt in range(_CANCEL_MAX_RETRIES):
+            try:
+                cancel_result = self._sender.send_artifact(
+                    cancel_artifact, mt_target, collect_all_responses=True
+                )
+                # 200 OK to CANCEL or 487 Request Terminated means success.
+                for obs in cancel_result.responses:
+                    if obs.status_code in (200, 487):
+                        teardown_ok = True
+                        break
+                if teardown_ok:
+                    events.append(
+                        f"teardown:cancel-ok:attempt={attempt + 1}"
+                        f":code={obs.status_code}"
+                    )
+                    break
+                # Got a response but not 200/487 — retry.
+                events.append(
+                    f"teardown:cancel-unexpected:attempt={attempt + 1}"
+                    f":codes={[o.status_code for o in cancel_result.responses]}"
+                )
+            except Exception as exc:
+                events.append(f"teardown:cancel-error:attempt={attempt + 1}:{exc}")
+
+            if attempt < _CANCEL_MAX_RETRIES - 1:
+                time.sleep(_CANCEL_RETRY_INTERVAL)
+
+        if not teardown_ok:
+            events.append(
+                f"teardown:cancel-failed:after={_CANCEL_MAX_RETRIES}-attempts"
+            )
+            # Extra cooldown to let the device's own timer expire the session.
+            time.sleep(_CANCEL_TEARDOWN_TIMEOUT)
+
+        return events
+
+    def _execute_mt_template_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        """Execute one MT INVOKE replay-template case against a real UE."""
+        config = self._config
+        assert self._mt_template_text is not None
+        assert config.target_msisdn is not None
+
+        error: str | None = None
+        capture: PcapCapture | None = None
+        pcap_path_saved: str | None = None
+        mutated_wire: MutatedWireCase | None = None
+
+        try:
+            # 1. Resolve UE IP and IMPI dynamically
+            ue_ip = config.target_host
+            impi = config.impi
+            if ue_ip is None:
+                resolved = self._ue_resolver.resolve(self._target, impi=impi)
+                ue_ip = resolved.host
+                if impi is None and resolved.impi is not None:
+                    impi = resolved.impi
+
+            if impi is None:
+                raise ValueError(
+                    "IMPI could not be determined. Specify --impi or set VMF_IMPI"
+                )
+
+            # 2. Resolve live port_pc / port_ps (no caching — UE re-registration
+            #    invalidates ports and stale values silently masquerade as timeouts).
+            #    Pass ue_ip so the protected-port lookup is filtered against the
+            #    same generation as the host we just resolved on the line above.
+            port_pc, port_ps = self._resolve_ports_live(
+                config.target_msisdn,
+                ue_ip=ue_ip,
+            )
+
+            # 3. Build baseline payload
+            pcscf_ip = os.environ.get("VMF_REAL_UE_PCSCF_IP", _DEFAULT_PCSCF_IP)
+            wire_text: str | None = None
+            packet_bytes: bytes | None = None
+
+            if spec.method == "INVITE":
+                # INVITE uses the proven file-based template
+                slots = build_default_slots(
+                    msisdn=config.target_msisdn,
+                    impi=impi,
+                    pcscf_ip=pcscf_ip,
+                    port_pc=port_pc,
+                    port_ps=port_ps,
+                    mo_contact_host=config.mo_contact_host,
+                    mo_contact_port_pc=config.mo_contact_port_pc,
+                    mo_contact_port_ps=config.mo_contact_port_ps,
+                    seed=spec.seed,
+                    from_msisdn=config.from_msisdn,
+                    ue_ip=ue_ip,
+                    local_port=config.mt_local_port,
+                )
+                wire_text = render_mt_invite(self._mt_template_text, slots)
+            elif spec.method == "MESSAGE":
+                # SMS-over-IP MESSAGE carries binary RP-DATA, so keep it off the
+                # UTF-8 wire_text path.
+                from volte_mutation_fuzzer.generator.mt_packet import (
+                    build_mt_packet_bytes,
+                )
+
+                packet_bytes = build_mt_packet_bytes(
+                    method=spec.method,
+                    impi=impi,
+                    msisdn=config.target_msisdn,
+                    ue_ip=ue_ip,
+                    port_pc=port_pc,
+                    port_ps=port_ps,
+                    seed=spec.seed,
+                    local_port=config.mt_local_port,
+                    from_msisdn=config.from_msisdn,
+                )
+            else:
+                # All other methods use the generic 3GPP builder
+                from volte_mutation_fuzzer.generator.mt_packet import build_mt_packet
+
+                wire_text = build_mt_packet(
+                    method=spec.method,
+                    impi=impi,
+                    msisdn=config.target_msisdn,
+                    ue_ip=ue_ip,
+                    port_pc=port_pc,
+                    port_ps=port_ps,
+                    seed=spec.seed,
+                    local_port=config.mt_local_port,
+                    from_msisdn=config.from_msisdn,
+                )
+
+            # 4. Fragmentation guard (plaintext UDP, host-direct only)
+            # bypass 모드(Docker 내부망)는 IP fragmentation이 허용된다.
+            # null 모드(호스트 직접)는 실제 LTE 경로로 가므로 fragmentation 제한 필요.
+            if (
+                self._target.transport.upper() == "UDP"
+                and config.ipsec_mode == "null"
+                and (
+                    len(packet_bytes)
+                    if packet_bytes is not None
+                    else len((wire_text or "").encode("utf-8"))
+                )
+                > _MT_TEMPLATE_FRAG_LIMIT
+            ):
+                return self._build_case_result(
+                    spec,
+                    verdict="unknown",
+                    reason=(
+                        f"template payload exceeds one-fragment UDP safety threshold "
+                        f"({_MT_TEMPLATE_FRAG_LIMIT} bytes)"
+                    ),
+                    elapsed_ms=0.0,
+                    reproduction_cmd=self._build_mt_template_reproduction_cmd(
+                        spec,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                    ),
+                    error="fragmentation-guard",
+                    timestamp=timestamp,
+                    case_wall_ms=self._case_wall_ms(case_started_monotonic),
+                )
+
+            if packet_bytes is not None:
+                # 5. Binary MESSAGE can only be mutated through the byte path
+                # without corrupting the RP-DATA body.
+                mutated_wire = self._mutator.mutate_packet_bytes(
+                    packet_bytes,
+                    MutationConfig(
+                        seed=spec.seed,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                        layer="byte",
+                        max_operations=config.mutations_per_case,
+                    ),
+                )
+            else:
+                assert wire_text is not None
+                # 5. Parse to EditableSIPMessage
+                editable = parse_editable_from_wire(wire_text)
+
+                # 6. Determine effective layer (model → downgrade to wire)
+                effective_layer = spec.layer
+                if effective_layer == "model":
+                    effective_layer = "wire"
+
+                # 7. Mutate
+                mutated_wire = self._mutator.mutate_editable(
+                    editable,
+                    MutationConfig(
+                        seed=spec.seed,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                        layer=cast(
+                            Literal["model", "wire", "byte", "auto"], effective_layer
+                        ),
+                        max_operations=config.mutations_per_case,
+                    ),
+                )
+
+            # 8. Build SendArtifact
+            if (
+                mutated_wire.final_layer == "wire"
+                and mutated_wire.wire_text is not None
+            ):
+                artifact = SendArtifact(
+                    wire_text=mutated_wire.wire_text,
+                    preserve_via=config.preserve_via,
+                    preserve_contact=config.preserve_contact,
+                )
+            else:
+                assert mutated_wire.packet_bytes is not None
+                artifact = SendArtifact(
+                    packet_bytes=mutated_wire.packet_bytes,
+                    preserve_via=config.preserve_via,
+                    preserve_contact=config.preserve_contact,
+                )
+
+            # 9. pcap + send
+            # 실제 송신은 port_pc로 간다. Plaintext UDP 경로라 ESP 정책 매칭이
+            # 아닌 단순 UDP 수신 포트가 port_pc다. bind_port는 슬롯에 주입한
+            # Via sent-by와 동일해야 응답 수신 가능하다.
+
+            # ipsec_mode에 따라 송신 방식 결정
+            target_update = {
+                "host": ue_ip,
+                "port": port_pc,
+                "ipsec_mode": config.ipsec_mode,
+                "source_ip": None,
+                "bind_container": "pcscf",
+                "bind_port": None
+                if config.ipsec_mode == "native"
+                else config.mt_local_port,
+            }
+
+            mt_target = self._target.model_copy(update=target_update)
+            if config.pcap_enabled:
+                pcap_dir = self._pcap_dir
+                pcap_dir.mkdir(parents=True, exist_ok=True)
+                pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
+                # MT packets use dynamic ports (port_pc/mt_local_port), not 5060
+                pcap_filter = f"host {ue_ip}"
+                capture = PcapCapture(
+                    pcap_path,
+                    interface=config.pcap_interface,
+                    filter_expr=pcap_filter,
+                )
+                capture.start()
+            is_invite = spec.method == "INVITE"
+            try:
+                send_result = self._sender.send_artifact(
+                    artifact, mt_target, collect_all_responses=is_invite
+                )
+            finally:
+                if capture is not None:
+                    pcap_path_saved = capture.stop()
+
+            sent_payload: str | bytes | None = (
+                send_result.sent_bytes.decode("utf-8", errors="replace")
+                if send_result.sent_bytes is not None
+                else artifact.wire_text or artifact.packet_bytes
+            )
+            sent_wire_text = self._artifact_wire_text(artifact) or wire_text or ""
+
+            # 9b. Reliable CANCEL teardown (INVITE only). Skippable so the UE
+            # can actually ring (baseline "does it ring" checks).
+            if is_invite and config.invite_teardown:
+                teardown_events = self._teardown_invite(
+                    sent_wire_text, mt_target, send_result, config
+                )
+                for te in teardown_events:
+                    logger.info("case %s: %s", spec.case_id, te)
+
+            # 9c. Wait for device to return to IDLE call state (INVITE only)
+            if is_invite and self._call_state_checker is not None:
+                idle_events = self._call_state_checker.wait_for_idle()
+                for ie in idle_events:
+                    logger.info("case %s: %s", spec.case_id, ie)
+
+            # 10. Oracle
+            context = OracleContext(
+                method=spec.method,
+                timeout_threshold_ms=config.timeout_seconds * 1000,
+                log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                    spec.method
+                ),
+            )
+            process_name = config.process_name if config.check_process else None
+            verdict = self._oracle.evaluate(
+                send_result,
+                context,
+                process_name=process_name,
+                log_path=config.log_path,
+                process_check_interval=10,
+            )
+
+            mutation_ops = tuple(
+                f"{r.operator}({r.target.path})" for r in mutated_wire.records
+            )
+            resolved_profile = getattr(mutated_wire, "profile", spec.profile)
+            resolved_strategy = getattr(mutated_wire, "strategy", spec.strategy)
+            raw_response = self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            )
+            case_result = self._build_case_result(
+                spec,
+                verdict=verdict.verdict,
+                reason=verdict.reason,
+                response_code=verdict.response_code,
+                elapsed_ms=verdict.elapsed_ms,
+                process_alive=verdict.process_alive,
+                raw_request=_payload_to_text(sent_payload),
+                raw_response=raw_response,
+                reproduction_cmd=self._build_mt_template_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                mutation_ops=mutation_ops,
+                error=error,
+                details=getattr(verdict, "details", {}) or {},
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                # Finalize after evidence.collect() so the metric includes persistence time.
+                case_wall_ms=0.0,
+            )
+
+            return self._persist_case_artifacts(
+                spec,
+                case_result,
+                sent_payload=sent_payload,
+                timestamp=timestamp,
+                case_started_monotonic=case_started_monotonic,
+            )
+
+        except Exception as exc:
+            error = str(exc)
+            resolved_profile = getattr(mutated_wire, "profile", spec.profile)
+            resolved_strategy = getattr(mutated_wire, "strategy", spec.strategy)
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"mt-template executor error: {error}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_mt_template_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                error=error,
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+    def _execute_packet_file_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        """Send a campaign case using bytes from --packet-file verbatim.
+
+        Mirrors the routing portion of ``_execute_mt_template_case`` (UE IP /
+        port_pc / port_ps live resolution, pcap, oracle, teardown) but skips
+        generator + mutator entirely: ``self._packet_file_bytes`` is wrapped
+        in ``SendArtifact.from_packet_bytes`` so the wire path returns the
+        bytes unmodified (see ``prepare_real_ue_direct_payload`` →
+        ``direct-normalization:bytes-unmodified``). Null bytes pass through.
+        """
+        config = self._config
+        assert self._packet_file_bytes is not None
+        assert config.target_msisdn is not None
+        assert config.packet_file is not None
+
+        error: str | None = None
+        capture: PcapCapture | None = None
+        pcap_path_saved: str | None = None
+
+        try:
+            # 1. Resolve UE IP and IMPI (IMPI is informational here — the file
+            #    already encodes whatever Request-URI / P-Preferred-Identity
+            #    the user authored — but the resolver still needs UE IP).
+            ue_ip = config.target_host
+            impi = config.impi
+            if ue_ip is None:
+                resolved = self._ue_resolver.resolve(self._target, impi=impi)
+                ue_ip = resolved.host
+                if impi is None and resolved.impi is not None:
+                    impi = resolved.impi
+
+            # 2. Live port_pc / port_ps lookup — same rationale as the MT
+            #    template path: stale ports masquerade as timeouts.
+            port_pc, _port_ps = self._resolve_ports_live(
+                config.target_msisdn,
+                ue_ip=ue_ip,
+            )
+
+            # 3. Fragmentation guard for null-mode plaintext UDP. Same threshold
+            #    as the MT template path; bypass mode (Docker bridge) tolerates
+            #    fragmentation and is exempt.
+            payload_bytes = self._packet_file_bytes
+            if (
+                self._target.transport.upper() == "UDP"
+                and config.ipsec_mode == "null"
+                and len(payload_bytes) > _MT_TEMPLATE_FRAG_LIMIT
+            ):
+                return self._build_case_result(
+                    spec,
+                    verdict="unknown",
+                    reason=(
+                        f"packet_file payload exceeds one-fragment UDP safety threshold "
+                        f"({_MT_TEMPLATE_FRAG_LIMIT} bytes)"
+                    ),
+                    elapsed_ms=0.0,
+                    reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                        spec,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                    ),
+                    error="fragmentation-guard",
+                    timestamp=timestamp,
+                    case_wall_ms=self._case_wall_ms(case_started_monotonic),
+                )
+
+            # 4. Build artifact directly from raw bytes. preserve_via /
+            #    preserve_contact are forced on so the sender's wire-text
+            #    rewriter never touches the buffer; ``from_packet_bytes``
+            #    already short-circuits the rewriter, but setting the flags
+            #    is defensive and matches user intent ("send the file as-is").
+            artifact = SendArtifact(
+                packet_bytes=payload_bytes,
+                preserve_via=True,
+                preserve_contact=True,
+            )
+
+            # 5. Target update — identical to MT template path.
+            target_update = {
+                "host": ue_ip,
+                "port": port_pc,
+                "ipsec_mode": config.ipsec_mode,
+                "source_ip": None,
+                "bind_container": "pcscf",
+                "bind_port": None
+                if config.ipsec_mode == "native"
+                else config.mt_local_port,
+            }
+            mt_target = self._target.model_copy(update=target_update)
+
+            if config.pcap_enabled:
+                pcap_dir = self._pcap_dir
+                pcap_dir.mkdir(parents=True, exist_ok=True)
+                pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
+                pcap_filter = f"host {ue_ip}"
+                capture = PcapCapture(
+                    pcap_path,
+                    interface=config.pcap_interface,
+                    filter_expr=pcap_filter,
+                )
+                capture.start()
+
+            is_invite = spec.method == "INVITE"
+            try:
+                send_result = self._sender.send_artifact(
+                    artifact, mt_target, collect_all_responses=is_invite
+                )
+            finally:
+                if capture is not None:
+                    pcap_path_saved = capture.stop()
+
+            sent_payload: str | bytes | None = (
+                send_result.sent_bytes.decode("utf-8", errors="replace")
+                if send_result.sent_bytes is not None
+                else artifact.packet_bytes
+            )
+
+            # 6. INVITE teardown reuses MT-template helper. _teardown_invite
+            #    needs a wire-text view of the request; decode best-effort with
+            #    errors='replace' since teardown only has to extract method +
+            #    Call-ID / CSeq (ASCII). Null bytes are tolerated by replace.
+            sent_wire_text = payload_bytes.decode("utf-8", errors="replace")
+            if is_invite:
+                teardown_events = self._teardown_invite(
+                    sent_wire_text, mt_target, send_result, config
+                )
+                for te in teardown_events:
+                    logger.info("case %s: %s", spec.case_id, te)
+
+            if is_invite and self._call_state_checker is not None:
+                idle_events = self._call_state_checker.wait_for_idle()
+                for ie in idle_events:
+                    logger.info("case %s: %s", spec.case_id, ie)
+
+            # 7. Oracle
+            context = OracleContext(
+                method=spec.method,
+                timeout_threshold_ms=config.timeout_seconds * 1000,
+                log_grace_seconds=config.oracle_log_grace_seconds_for_method(
+                    spec.method
+                ),
+            )
+            process_name = config.process_name if config.check_process else None
+            verdict = self._oracle.evaluate(
+                send_result,
+                context,
+                process_name=process_name,
+                log_path=config.log_path,
+                process_check_interval=10,
+            )
+
+            raw_response = self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            )
+            case_result = self._build_case_result(
+                spec,
+                verdict=verdict.verdict,
+                reason=verdict.reason,
+                response_code=verdict.response_code,
+                elapsed_ms=verdict.elapsed_ms,
+                process_alive=verdict.process_alive,
+                raw_request=_payload_to_text(sent_payload),
+                raw_response=raw_response,
+                reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                    spec,
+                    profile=spec.profile,
+                    strategy=spec.strategy,
+                ),
+                profile=spec.profile,
+                strategy=spec.strategy,
+                # No mutator runs in this path — operator list is always empty.
+                mutation_ops=(),
+                error=error,
+                details=getattr(verdict, "details", {}) or {},
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=0.0,
+            )
+
+            return self._persist_case_artifacts(
+                spec,
+                case_result,
+                sent_payload=sent_payload,
+                timestamp=timestamp,
+                case_started_monotonic=case_started_monotonic,
+            )
+
+        except Exception as exc:
+            error = str(exc)
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"packet-file executor error: {error}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                    spec,
+                    profile=spec.profile,
+                    strategy=spec.strategy,
+                ),
+                profile=spec.profile,
+                strategy=spec.strategy,
+                error=error,
+                timestamp=timestamp,
+                fuzz_response_code=spec.response_code,
+                fuzz_related_method=spec.related_method,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+    def _build_packet_file_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> str:
+        cfg = self._config
+        target_args = ""
+        if cfg.target_host is not None:
+            target_args = f" --target-host {cfg.target_host}"
+        elif cfg.target_msisdn is not None:
+            target_args = f" --target-msisdn {cfg.target_msisdn}"
+        profile_value = spec.profile if profile is None else profile
+        strategy_value = spec.strategy if strategy is None else strategy
+
+        reproduction_cmd = (
+            f"uv run fuzzer campaign run"
+            f" --mode real-ue-direct"
+            f"{target_args}"
+            f" --packet-file {cfg.packet_file}"
+            f" --ipsec-mode {cfg.ipsec_mode}"
+            f" --methods {spec.method}"
+            f" --profile {profile_value}"
+            f" --layer {spec.layer}"
+            f" --strategy {strategy_value}"
+            f" --seed-start {spec.seed}"
+            f" --max-cases 1"
+        )
+        if cfg.ipsec_mode != "native":
+            reproduction_cmd += f" --mt-local-port {cfg.mt_local_port}"
+        return reproduction_cmd
+
+    def _build_mt_template_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> str:
+        cfg = self._config
+        target_args = ""
+        if cfg.target_host is not None:
+            target_args = f" --target-host {cfg.target_host}"
+        elif cfg.target_msisdn is not None:
+            target_args = f" --target-msisdn {cfg.target_msisdn}"
+        profile_value = spec.profile if profile is None else profile
+        strategy_value = spec.strategy if strategy is None else strategy
+
+        # Mirror the campaign's multi-mutation count into the replay command
+        # so the reproduced run applies the same N rounds. Without this, MT
+        # template campaigns with mutations_per_case>1 were silently
+        # replayed single-shot and produced different packets.
+        mutations_arg = (
+            f" --mutations-per-case {cfg.mutations_per_case}"
+            if cfg.mutations_per_case > 1
+            else ""
+        )
+        reproduction_cmd = (
+            f"uv run fuzzer campaign run"
+            f" --mode real-ue-direct"
+            f"{target_args}"
+            f" --impi {cfg.impi}"
+            f" --mt"
+            f" --ipsec-mode {cfg.ipsec_mode}"
+            f"{' --preserve-via' if cfg.preserve_via else ''}"
+            f"{' --preserve-contact' if cfg.preserve_contact else ''}"
+            f" --methods {spec.method}"
+            f" --profile {profile_value}"
+            f" --layer {spec.layer}"
+            f" --strategy {strategy_value}"
+            f" --seed-start {spec.seed}"
+            f" --max-cases 1"
+            f"{mutations_arg}"
+            # note: port_pc/port_ps are re-queried live; may differ if UE re-registered
+        )
+        if cfg.ipsec_mode != "native":
+            reproduction_cmd += f" --mt-local-port {cfg.mt_local_port}"
+        return reproduction_cmd
+
+    def _artifact_wire_text(self, artifact: SendArtifact) -> str | None:
+        if artifact.wire_text is not None:
+            return artifact.wire_text
+        if artifact.packet is not None:
+            return render_packet(artifact.packet)
+        if artifact.packet_bytes is not None:
+            return artifact.packet_bytes.decode("utf-8", errors="replace")
+        return None
+
+    def _build_replay_target_args(self) -> str:
+        cfg = self._config
+        if cfg.mode == "real-ue-direct":
+            if cfg.target_msisdn is not None:
+                return f" --target-msisdn {cfg.target_msisdn}"
+            if cfg.target_host is not None:
+                return f" --target-host {cfg.target_host}"
+            return ""
+        if cfg.target_host is not None:
+            return f" --target-host {cfg.target_host}"
+        return ""
+
+    def _execute_dialog_case(
+        self,
+        spec: CaseSpec,
+        scenario,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        orchestrator = DialogOrchestrator(self._generator, self._mutator, self._target)
+        mutation_config = MutationConfig(
+            seed=spec.seed,
+            profile=spec.profile,
+            strategy=spec.strategy,
+            layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
+            max_operations=self._config.mutations_per_case,
+        )
+        config = self._config
+        capture: PcapCapture | None = None
+        pcap_path_saved: str | None = None
+        try:
+            if config.pcap_enabled:
+                pcap_dir = self._pcap_dir
+                pcap_dir.mkdir(parents=True, exist_ok=True)
+                pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
+                capture = PcapCapture(pcap_path, interface=config.pcap_interface)
+                capture.start()
+            try:
+                exchange = orchestrator.execute(scenario, mutation_config)
+            finally:
+                if capture is not None:
+                    pcap_path_saved = capture.stop()
+        except Exception as exc:
+            # Capture exception class even when ``str(exc)`` is empty so the
+            # post-mortem reason isn't a bare ``dialog executor error:`` —
+            # observed on PRACK/BYE campaigns where the underlying setup
+            # exception has no message (e.g. ``socket.timeout()``).
+            exc_type = type(exc).__name__
+            exc_msg = str(exc) or "(no message)"
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"dialog executor error: {exc_type}: {exc_msg}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_reproduction_cmd(spec),
+                error=f"{exc_type}: {exc_msg}",
+                timestamp=timestamp,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        if not exchange.setup_succeeded:
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"dialog setup failed: {exchange.error or 'unknown'}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_reproduction_cmd(spec),
+                error=exchange.error,
+                timestamp=timestamp,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        fuzz_result = exchange.fuzz_result
+        send_result = fuzz_result.send_result if fuzz_result is not None else None
+        resolved_profile = (
+            getattr(fuzz_result, "profile", spec.profile)
+            if fuzz_result is not None
+            else spec.profile
+        )
+        resolved_strategy = (
+            getattr(fuzz_result, "strategy", spec.strategy)
+            if fuzz_result is not None
+            else spec.strategy
+        )
+
+        if send_result is None:
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason="dialog fuzz step produced no send result",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_reproduction_cmd(
+                    spec,
+                    profile=resolved_profile,
+                    strategy=resolved_strategy,
+                ),
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+                timestamp=timestamp,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        context = OracleContext(
+            method=spec.method,
+            timeout_threshold_ms=config.timeout_seconds * 1000,
+            log_grace_seconds=config.oracle_log_grace_seconds_for_method(spec.method),
+        )
+        process_name = config.process_name if config.check_process else None
+        verdict = self._oracle.evaluate(
+            send_result,
+            context,
+            process_name=process_name,
+            log_path=config.log_path,
+            process_check_interval=10,
+        )
+
+        raw_response = self._raw_response_from_send_result(verdict.verdict, send_result)
+
+        case_result = self._build_case_result(
+            spec,
+            verdict=verdict.verdict,
+            reason=verdict.reason,
+            response_code=verdict.response_code,
+            elapsed_ms=verdict.elapsed_ms,
+            process_alive=verdict.process_alive,
+            raw_response=raw_response,
+            reproduction_cmd=self._build_reproduction_cmd(
+                spec,
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+            ),
+            profile=resolved_profile,
+            strategy=resolved_strategy,
+            details=getattr(verdict, "details", {}) or {},
+            timestamp=timestamp,
+            pcap_path=pcap_path_saved,
+            case_wall_ms=0.0,
+        )
+
+        return self._persist_case_artifacts(
+            spec,
+            case_result,
+            sent_payload=None,
+            timestamp=timestamp,
+            case_started_monotonic=case_started_monotonic,
+        )
+
+    def _build_packet(self, spec: CaseSpec) -> PacketModel:
+        # Forward the per-case seed into baseline generation so identical
+        # (method, response_code, seed, mutations_per_case) inputs produce
+        # byte-exact identical wires. The dialog context is also seeded —
+        # otherwise its random ``call_id`` would override the generator's
+        # seeded path (the generator prefers ``context.call_id`` when a
+        # context is supplied) and silently re-break reproduction.
+        if spec.response_code is None:
+            context = (
+                self._synthetic_dialog_context(seed=spec.seed)
+                if self._config.with_dialog
+                else None
+            )
+            return self._generator.generate_request(
+                RequestSpec(method=SIPMethod(spec.method)),
+                context,
+                seed=spec.seed,
+            )
+
+        related_method = SIPMethod(spec.related_method or spec.method)
+        return self._generator.generate_response(
+            ResponseSpec(
+                status_code=spec.response_code,
+                related_method=related_method,
+            ),
+            self._synthetic_dialog_context(seed=spec.seed),
+            seed=spec.seed,
+        )
+
+    def _synthetic_dialog_context(self, seed: int | None = None) -> DialogContext:
+        # When ``seed`` is supplied, derive a deterministic call-id from it
+        # so seeded baseline generation (``_build_packet``) is reproducible
+        # end-to-end. The generator prefers ``context.call_id`` over its
+        # own seeded path, so leaving this random would silently re-break
+        # reproduction even after generator-side seed plumbing landed.
+        if seed is None:
+            call_id = f"campaign-{uuid.uuid4().hex}"
+        else:
+            call_id_hex = f"{random.Random(seed).getrandbits(128):032x}"
+            call_id = f"campaign-{call_id_hex}"
+        # In real-ue-direct mode host is None (resolved from MSISDN at send
+        # time).  SIPURI requires a non-None host, so fall back to a
+        # placeholder that keeps validation happy for context-only uses such
+        # as response generation and reproduction command building.
+        host = self._target.host or (
+            f"{self._config.target_msisdn}.ims.local"
+            if self._config.target_msisdn
+            else "ue.local"
+        )
+        return DialogContext(
+            call_id=call_id,
+            local_tag="campaign-local",
+            remote_tag="campaign-remote",
+            local_cseq=1,
+            remote_cseq=1,
+            request_uri=SIPURI(
+                user="target",
+                host=host,
+                port=self._target.port,
+            ),
+        )
+
+    def _artifact_from_mutated(self, mutated: MutatedCase) -> SendArtifact:
+        if mutated.final_layer == "wire" and mutated.wire_text is not None:
+            return SendArtifact.from_wire_text(mutated.wire_text)
+        if mutated.final_layer == "byte" and mutated.packet_bytes is not None:
+            return SendArtifact.from_packet_bytes(mutated.packet_bytes)
+        packet = mutated.mutated_packet or mutated.original_packet
+        return SendArtifact.from_packet(packet)
+
+    def _build_case_result(
+        self,
+        spec: CaseSpec,
+        *,
+        verdict: str,
+        reason: str,
+        elapsed_ms: float,
+        reproduction_cmd: str | None = None,
+        profile: str | None = None,
+        strategy: str | None = None,
+        mutation_ops: tuple[str, ...] = (),
+        response_code: int | None = None,
+        process_alive: bool | None = None,
+        raw_request: str | None = None,
+        raw_response: str | None = None,
+        error: str | None = None,
+        details: dict[str, object] | None = None,
+        timestamp: float,
+        fuzz_response_code: int | None = None,
+        fuzz_related_method: str | None = None,
+        pcap_path: str | None = None,
+        case_wall_ms: float | None = None,
+    ) -> CaseResult:
+        resolved_profile = spec.profile if profile is None else profile
+        resolved_strategy = spec.strategy if strategy is None else strategy
+        resolved_reproduction_cmd = (
+            reproduction_cmd
+            if reproduction_cmd is not None
+            else self._build_reproduction_cmd(
+                spec,
+                profile=resolved_profile,
+                strategy=resolved_strategy,
+            )
+        )
+        return CaseResult(
+            case_id=spec.case_id,
+            seed=spec.seed,
+            method=spec.method,
+            profile=resolved_profile,
+            layer=spec.layer,
+            strategy=resolved_strategy,
+            mutation_ops=mutation_ops,
+            verdict=verdict,
+            reason=reason,
+            response_code=response_code,
+            elapsed_ms=elapsed_ms,
+            process_alive=process_alive,
+            raw_request=raw_request,
+            raw_response=raw_response,
+            reproduction_cmd=resolved_reproduction_cmd,
+            error=error,
+            details=details or {},
+            timestamp=timestamp,
+            fuzz_response_code=fuzz_response_code,
+            fuzz_related_method=fuzz_related_method,
+            pcap_path=pcap_path,
+            case_wall_ms=case_wall_ms,
+        )
+
+    def _build_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        profile: str | None = None,
+        strategy: str | None = None,
+    ) -> str:
+        cfg = self._config
+        target_args = self._build_replay_target_args()
+        profile_value = spec.profile if profile is None else profile
+        strategy_value = spec.strategy if strategy is None else strategy
+
+        parts = [
+            "uv run fuzzer campaign run",
+            f"--mode {cfg.mode}",
+        ]
+        parts.append(target_args.strip())
+        if cfg.target_port != 5060:
+            parts.append(f"--target-port {cfg.target_port}")
+        if cfg.transport.upper() != "UDP":
+            parts.append(f"--transport {cfg.transport}")
+        if cfg.ipsec_mode:
+            parts.append(f"--ipsec-mode {cfg.ipsec_mode}")
+        parts.append(f"--methods {spec.method}")
+        parts.append(f"--profile {profile_value}")
+        parts.append(f"--layer {spec.layer}")
+        parts.append(f"--strategy {strategy_value}")
+        if cfg.mutations_per_case > 1:
+            parts.append(f"--mutations-per-case {cfg.mutations_per_case}")
+        parts.append(f"--seed-start {spec.seed}")
+        parts.append("--max-cases 1")
+        if cfg.timeout_seconds != 5.0:
+            parts.append(f"--timeout {cfg.timeout_seconds}")
+        if cfg.cooldown_seconds != 0.2:
+            parts.append(f"--cooldown {cfg.cooldown_seconds}")
+        if cfg.oracle_log_grace_seconds is not None:
+            parts.append(f"--oracle-log-grace {cfg.oracle_log_grace_seconds}")
+        if cfg.wait_idle_timeout_seconds != 10.0:
+            parts.append(f"--wait-idle-timeout {cfg.wait_idle_timeout_seconds}")
+        if cfg.circuit_breaker_threshold != 10:
+            parts.append(f"--circuit-breaker {cfg.circuit_breaker_threshold}")
+        if not cfg.pcap_enabled:
+            parts.append("--no-pcap")
+        if cfg.impi is not None:
+            parts.append(f"--impi {cfg.impi}")
+        if cfg.mt_local_port != 15100:
+            parts.append(f"--mt-local-port {cfg.mt_local_port}")
+
+        # response_code cases (dialog fuzzing) keep the pipe form — campaign run
+        # cannot replay a mid-dialog response without dialog context.
+        if spec.response_code is not None:
+            context = json.dumps(
+                self._synthetic_dialog_context().model_dump(mode="json"),
+                ensure_ascii=False,
+            )
+            related_method = spec.related_method or spec.method
+            transport_arg = (
+                f" --transport {cfg.transport}"
+                if cfg.transport.upper() != "UDP"
+                else ""
+            )
+            ipsec_arg = f" --ipsec-mode {cfg.ipsec_mode}" if cfg.ipsec_mode else ""
+            max_ops_arg = (
+                f" --mutations-per-case {cfg.mutations_per_case}"
+                if cfg.mutations_per_case > 1
+                else ""
+            )
+            return (
+                f"uv run fuzzer mutate response {spec.response_code} {related_method}"
+                f" --context '{context}'"
+                f" --profile {profile_value}"
+                f" --strategy {strategy_value}"
+                f" --layer {spec.layer}"
+                f" --seed {spec.seed}"
+                f"{max_ops_arg}"
+                f" | uv run fuzzer send packet"
+                f" --mode {cfg.mode}"
+                f"{target_args}"
+                f" --target-port {cfg.target_port}"
+                f"{transport_arg}"
+                f"{ipsec_arg}"
+            )
+
+        return " ".join(p for p in parts if p)
+
+    @staticmethod
+    def _update_summary(summary: CampaignSummary, verdict: str) -> None:
+        summary.total += 1
+        match verdict:
+            case "normal":
+                summary.normal += 1
+            case "suspicious":
+                summary.suspicious += 1
+            case "timeout":
+                summary.timeout += 1
+            case "crash":
+                summary.crash += 1
+            case "stack_failure":
+                summary.stack_failure += 1
+            case "infra_failure":
+                summary.infra_failure += 1
+            case _:
+                summary.unknown += 1
+
+    @staticmethod
+    def _snapshot_profile_for_verdict(verdict: str) -> Literal["light", "full"]:
+        if verdict in ("suspicious", "crash", "stack_failure"):
+            return "full"
+        return "light"
+
+    def _capture_adb_snapshot(
+        self,
+        spec: CaseSpec,
+        *,
+        timestamp: float,
+        verdict: str,
+        snapshot_until: float | None = None,
+    ) -> str | None:
+        config = self._config
+        if not config.adb_enabled:
+            return None
+
+        try:
+            from volte_mutation_fuzzer.adb.core import AdbConnector
+
+            snapshot_until = (
+                snapshot_until if snapshot_until is not None else time.time()
+            )
+            adb_snapshot_dir = str(
+                self._campaign_dir / "adb_snapshots" / f"case_{spec.case_id}"
+            )
+            AdbConnector(serial=config.adb_serial).take_snapshot(
+                adb_snapshot_dir,
+                collector=self._adb_collector,
+                log_since=timestamp,
+                log_until=snapshot_until,
+                profile=self._snapshot_profile_for_verdict(verdict),
+            )
+            return adb_snapshot_dir
+        except Exception as exc:
+            logger.warning(
+                "failed to capture adb snapshot for case %s: %s",
+                spec.case_id,
+                exc,
+            )
+            return None
+
+    def _capture_ios_baseline(self) -> None:
+        config = self._config
+        if not config.ios_enabled:
+            return
+
+        try:
+            baseline_dir = self._campaign_dir / "ios_baseline"
+            baseline_dir.mkdir(parents=True, exist_ok=True)
+            device_info_path = baseline_dir / "device_info.json"
+            if device_info_path.exists():
+                return
+
+            info = self._ensure_ios_device_info()
+            payload = info.model_dump(mode="json")
+            payload["captured_at"] = datetime.now(timezone.utc).isoformat()
+            device_info_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("failed to capture ios baseline: %s", exc)
+
+    def _capture_ios_new_crashes(self) -> None:
+        """Keep only crashes whose timestamp falls within this run's window.
+
+        Pulls the device crash store once, keeps reports timestamped between the
+        run start and now, and deletes the rest — so no pre-fuzz crash history is
+        hoarded and ``ios_crashes/`` holds only crashes from this campaign.
+        """
+        config = self._config
+        if not config.ios_enabled or self._ios_run_start is None:
+            return
+        try:
+            from volte_mutation_fuzzer.ios.core import IosConnector
+            from volte_mutation_fuzzer.ios.crash_report import (
+                describe_new_crashes,
+                iter_crash_files,
+            )
+
+            crashes_dir = self._campaign_dir / "ios_crashes"
+            IosConnector(udid=self._ios_udid).pull_crashes(str(crashes_dir))
+
+            start = self._ios_run_start
+            end = datetime.now(timezone.utc)
+            records = describe_new_crashes(crashes_dir)
+            in_window = [
+                r
+                for r in records
+                if r.timestamp is not None and start <= r.timestamp <= end
+            ]
+            undated = sum(1 for r in records if r.timestamp is None)
+            keep = {r.name for r in in_window}
+
+            # Drop everything outside the run window (pre-existing crashes and
+            # undateable reports), leaving only this run's crashes on disk.
+            for path in iter_crash_files(crashes_dir):
+                if path.name not in keep:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+
+            (crashes_dir / "new_crashes.json").write_text(
+                json.dumps(
+                    {
+                        "run_start": start.isoformat(),
+                        "run_end": end.isoformat(),
+                        "new_count": len(in_window),
+                        "undated_skipped": undated,
+                        "new_crashes": [r.to_dict() for r in in_window],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            logger.info(
+                "ios crashes in run window: %d (%d undated skipped)",
+                len(in_window),
+                undated,
+            )
+        except Exception as exc:
+            logger.warning("failed to capture ios new crashes: %s", exc)
+
+    def _capture_ios_snapshot(
+        self,
+        spec: CaseSpec,
+        *,
+        timestamp: float,
+        snapshot_until: float | None = None,
+    ) -> str | None:
+        config = self._config
+        if not config.ios_enabled or self._ios_collector is None:
+            return None
+
+        try:
+            from volte_mutation_fuzzer.ios.core import IosAnomalyDetector, IosConnector
+
+            snapshot_until = (
+                snapshot_until if snapshot_until is not None else time.time()
+            )
+            ios_snapshot_dir = str(
+                self._campaign_dir / "ios_snapshots" / f"case_{spec.case_id}"
+            )
+            IosConnector(udid=self._ios_udid).take_snapshot(
+                ios_snapshot_dir,
+                collector=self._ios_collector,
+                syslog_since=timestamp,
+                syslog_until=snapshot_until,
+                detector=IosAnomalyDetector(),
+                run_diagnostics=config.ios_run_diagnostics,
+            )
+            return ios_snapshot_dir
+        except Exception as exc:
+            logger.warning(
+                "failed to capture ios snapshot for case %s: %s",
+                spec.case_id,
+                exc,
+            )
+            return None
+
+    def _ensure_ios_device_info(self) -> Any:
+        config = self._config
+        if not config.ios_enabled:
+            raise RuntimeError("iOS collection is not enabled")
+        if self._ios_device_info is not None:
+            return self._ios_device_info
+
+        from volte_mutation_fuzzer.ios.core import IosConnector
+
+        info = IosConnector(udid=self._ios_udid).check_device()
+        if info.error is not None and not info.error.startswith("ideviceinfo "):
+            raise RuntimeError(f"iOS device check failed: {info.error}")
+
+        self._ios_udid = info.udid
+        self._ios_device_info = info
+        if self._ios_collector is not None:
+            self._ios_collector._config = self._ios_collector._config.model_copy(
+                update={"udid": info.udid}
+            )
+        return info
+
+    def _persist_case_artifacts(
+        self,
+        spec: CaseSpec,
+        case_result: CaseResult,
+        *,
+        sent_payload: str | bytes | None,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        snapshot_until = time.time()
+        adb_snapshot_dir = self._capture_adb_snapshot(
+            spec,
+            timestamp=timestamp,
+            verdict=case_result.verdict,
+            snapshot_until=snapshot_until,
+        )
+        ios_snapshot_dir = self._capture_ios_snapshot(
+            spec,
+            timestamp=timestamp,
+            snapshot_until=snapshot_until,
+        )
+        self._evidence.collect(
+            case_result,
+            sent_payload=sent_payload,
+            pcap_path=case_result.pcap_path,
+            adb_snapshot_dir=adb_snapshot_dir,
+            ios_snapshot_dir=ios_snapshot_dir,
+        )
+        return case_result.model_copy(
+            update={"case_wall_ms": self._case_wall_ms(case_started_monotonic)}
+        )
+
+    def _raw_response_from_send_result(
+        self, verdict: str, send_result: SendReceiveResult
+    ) -> str | None:
+        final_response = send_result.final_response
+        if final_response is None:
+            return None
+        if self._config.ipsec_mode == "native":
+            return final_response.raw_text or None
+        if verdict in ("suspicious", "crash", "stack_failure"):
+            return final_response.raw_text or None
+        return None
+
+    def _analyze_case_result(self, case_result: CaseResult) -> None:
+        try:
+            self._crash_analyzer.analyze_case_immediately(case_result)
+        except Exception as exc:
+            logger.warning(
+                "crash analysis failed for case %s: %s",
+                case_result.case_id,
+                exc,
+            )
+
+    def _finalize_crash_analysis(self) -> None:
+        try:
+            self._crash_analyzer.generate_final_report()
+        except Exception as exc:
+            logger.warning("failed to generate crash analysis report: %s", exc)
