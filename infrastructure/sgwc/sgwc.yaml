@@ -1,0 +1,18 @@
+logger:
+    file:
+      path: /open5gs/install/var/log/open5gs/sgwc.log
+
+global:
+  max:
+    ue: MAX_NUM_UE
+
+sgwc:
+    gtpc:
+      server:
+        - address: SGWC_IP
+    pfcp:
+      server:
+        - address: SGWC_IP
+      client:
+        sgwu:
+          - address: SGWU_IP
