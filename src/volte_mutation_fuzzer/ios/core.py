@@ -1,0 +1,487 @@
+import json
+import re
+import subprocess
+import threading
+import time
+from collections import deque
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, Protocol, cast
+
+from volte_mutation_fuzzer.adb.contracts import AnomalySeverity
+from volte_mutation_fuzzer.ios.contracts import (
+    IosAnomalyEvent,
+    IosCollectorConfig,
+    IosDeviceInfo,
+    IosSnapshotResult,
+    IosSyslogLine,
+)
+from volte_mutation_fuzzer.ios.patterns import IOS_ANOMALY_PATTERNS, IOS_NOISE_PATTERNS
+from volte_mutation_fuzzer.adb.patterns import AnomalyPattern
+
+_TELEPHONY_ASSERTION_PROCESSES = frozenset(
+    {"CommCenter", "identityservicesd", "imagent"}
+)
+
+
+# idevicesyslog line formats (both seen in the wild):
+#   with hostname:    Apr 15 10:32:17 iPhone CommCenter[127] <Notice>: [IMS] Reg
+#   without hostname: Jun  7 03:46:41 CommCenter(libARIServer.dylib)[101] <Notice>: ari
+# The hostname field is optional, and the process token may carry a
+# "(libFoo.dylib)" / "(AppleARMPlatform)" suffix that must be stripped so the
+# bare process name ("CommCenter") matches the process filter.
+_SYSLOG_LINE = re.compile(
+    r"^(?P<device_ts>\w{3}\s+\d+\s+\d+:\d+:\d+)\s+"
+    r"(?:\S+\s+)??"  # optional hostname (lazy so it yields to the process token)
+    r"(?P<process>[\w.-]+)(?:\([^)]*\))?\[(?P<pid>\d+)\]\s+"
+    r"(?:<(?P<level>\w+)>:?)?\s*"
+    r"(?P<message>.*)$"
+)
+
+
+class _PopenLike(Protocol):
+    stdout: Iterable[str] | None
+
+    def wait(self, timeout: int | float | None = None) -> object: ...
+
+    def kill(self) -> object: ...
+
+
+def _parse_syslog_line(line: str, host_ts: float) -> IosSyslogLine:
+    match = _SYSLOG_LINE.match(line)
+    if match is None:
+        return IosSyslogLine(host_ts=host_ts, line=line[:2000])
+    return IosSyslogLine(
+        host_ts=host_ts,
+        device_ts=match.group("device_ts"),
+        process=match.group("process") or "unknown",
+        level=match.group("level"),
+        line=line[:2000],
+    )
+
+
+class IosConnector:
+    def __init__(self, udid: str | None = None) -> None:
+        self._udid = udid
+
+    def _cmd(self, binary: str, *args: str) -> list[str]:
+        base = [binary]
+        if self._udid:
+            base.extend(["-u", self._udid])
+        base.extend(args)
+        return base
+
+    def check_device(self) -> IosDeviceInfo:
+        try:
+            result = subprocess.run(
+                ["idevice_id", "-l"], capture_output=True, text=True, timeout=10
+            )
+        except FileNotFoundError:
+            return IosDeviceInfo(udid="unknown", error="libimobiledevice not found")
+        except Exception as exc:
+            return IosDeviceInfo(udid="unknown", error=f"idevice_id failed: {exc}")
+
+        udids = [u.strip() for u in result.stdout.splitlines() if u.strip()]
+        if not udids:
+            return IosDeviceInfo(
+                udid=self._udid or "unknown", error="no device connected"
+            )
+
+        if self._udid is None and len(udids) > 1:
+            return IosDeviceInfo(
+                udid="unknown",
+                error="multiple devices connected; pass --ios-udid",
+            )
+
+        target = self._udid or udids[0]
+        if self._udid and self._udid not in udids:
+            return IosDeviceInfo(udid=target, error="requested udid not connected")
+
+        first_error: str | None = None
+
+        def _query(key: str) -> str | None:
+            nonlocal first_error
+            try:
+                result = subprocess.run(
+                    ["ideviceinfo", "-u", target, "-k", key],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except Exception as exc:
+                if first_error is None:
+                    first_error = f"ideviceinfo {key} failed: {exc}"
+                return None
+            if result.returncode != 0:
+                if first_error is None:
+                    message = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or "non-zero exit"
+                    )
+                    first_error = f"ideviceinfo {key} failed: {message}"
+                return None
+            value = result.stdout.strip()
+            return value or None
+
+        return IosDeviceInfo(
+            udid=target,
+            product_type=_query("ProductType"),
+            product_version=_query("ProductVersion"),
+            build_version=_query("BuildVersion"),
+            device_name=_query("DeviceName"),
+            error=first_error,
+        )
+
+    def pull_crashes(self, output_dir: str) -> tuple[tuple[str, ...], list[str]]:
+        """Run idevicecrashreport to pull new .ips files. Returns (new_files, errors)."""
+        errors: list[str] = []
+        target = Path(output_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        before = {p.name for p in target.rglob("*") if p.is_file()}
+
+        try:
+            result = subprocess.run(
+                self._cmd("idevicecrashreport", "-k", "-e", str(target)),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                message = (
+                    result.stderr.strip() or result.stdout.strip() or "unknown error"
+                )
+                errors.append(f"idevicecrashreport failed: {message}")
+        except FileNotFoundError:
+            errors.append("idevicecrashreport not found")
+        except Exception as exc:
+            errors.append(f"idevicecrashreport failed: {exc}")
+
+        after = {p.name for p in target.rglob("*") if p.is_file()}
+        new_files = tuple(sorted(after - before))
+        return new_files, errors
+
+    def run_diagnostics(self, output_path: str) -> tuple[str | None, str | None]:
+        """Dump idevicediagnostics output. Returns (path, error_message)."""
+        try:
+            result = subprocess.run(
+                self._cmd("idevicediagnostics", "diagnostics", "All"),
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except FileNotFoundError:
+            return None, "idevicediagnostics not found"
+        except Exception as exc:
+            return None, f"idevicediagnostics failed: {exc}"
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip() or "non-zero exit"
+            return None, f"idevicediagnostics failed: {message}"
+        if not result.stdout:
+            return None, "idevicediagnostics returned empty output"
+        Path(output_path).write_text(result.stdout, encoding="utf-8")
+        return output_path, None
+
+    def take_snapshot(
+        self,
+        output_dir: str,
+        *,
+        collector: "IosSyslogCollector",
+        syslog_since: float,
+        syslog_until: float,
+        detector: "IosAnomalyDetector | None" = None,
+        run_diagnostics: bool = False,
+    ) -> IosSnapshotResult:
+        base_dir = Path(output_dir)
+        base_dir.mkdir(parents=True, exist_ok=True)
+        errors: list[str] = []
+
+        lines = collector.slice(syslog_since, syslog_until)
+        syslog_path = base_dir / "syslog.txt"
+        syslog_path.write_text(
+            "\n".join(x.line for x in lines) + ("\n" if lines else ""),
+            encoding="utf-8",
+        )
+
+        def _filter_write(filename: str, processes: set[str]) -> str:
+            path = base_dir / filename
+            matched = [x for x in lines if x.process in processes]
+            path.write_text(
+                "\n".join(x.line for x in matched) + ("\n" if matched else ""),
+                encoding="utf-8",
+            )
+            return str(path)
+
+        commcenter_path = _filter_write("syslog_commcenter.txt", {"CommCenter"})
+        springboard_path = _filter_write("syslog_springboard.txt", {"SpringBoard"})
+
+        diagnostics_path: str | None = None
+        if run_diagnostics:
+            diagnostics_path, diag_error = self.run_diagnostics(
+                str(base_dir / "diagnostics.json")
+            )
+            if diag_error is not None:
+                errors.append(diag_error)
+
+        anomalies_path: str | None = None
+        if detector is not None:
+            events = detector.feed_lines(lines)
+            anomalies_path = str(base_dir / "anomalies.json")
+            Path(anomalies_path).write_text(
+                json.dumps(
+                    [e.model_dump() for e in events], ensure_ascii=False, indent=2
+                ),
+                encoding="utf-8",
+            )
+
+        return IosSnapshotResult(
+            syslog_path=str(syslog_path),
+            syslog_commcenter_path=commcenter_path,
+            syslog_springboard_path=springboard_path,
+            crashes_dir=None,
+            new_crash_files=(),
+            diagnostics_path=diagnostics_path,
+            anomalies_path=anomalies_path,
+            errors=tuple(errors),
+        )
+
+
+class IosSyslogCollector:
+    def __init__(
+        self,
+        config: IosCollectorConfig | None = None,
+        *,
+        max_reconnect_attempts: int = 5,
+        reconnect_delay: float = 5.0,
+        max_lines: int = 200_000,
+        output_file: Path | None = None,
+    ) -> None:
+        self._config = config or IosCollectorConfig()
+        self._proc: subprocess.Popen[str] | None = None
+        self._thread: threading.Thread | None = None
+        self._running = threading.Event()
+        self._lines: deque[IosSyslogLine] = deque(maxlen=max_lines)
+        self._lock = threading.Lock()
+        self._max_reconnect_attempts = max_reconnect_attempts
+        self._reconnect_delay = reconnect_delay
+        self._dead = False
+        # Optional persistent dump: every streamed line is also appended here as
+        # it arrives (line-buffered), mirroring the ADB collector's logcat_full
+        # capture. Unlike a finalize-time buffer dump this survives a mid-run
+        # crash and is not bounded by the in-memory ring.
+        self._output_path = output_file
+        self._output_fp: Any | None = None
+
+    def _cmd(self) -> list[str]:
+        # No "-p" process filter: capture the entire device syslog. The crash /
+        # IMS anomaly patterns must see every process (kernel panic, jetsam from
+        # the kernel, ReportCrash, etc.).
+        base = ["idevicesyslog"]
+        if self._config.udid:
+            base.extend(["-u", self._config.udid])
+        return base
+
+    def start(self) -> None:
+        self.stop()
+        if self._output_path is not None:
+            self._output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Line-buffered text mode: every "\n" is flushed so the file is safe
+            # to tail mid-campaign and is not truncated if the run is killed.
+            self._output_fp = open(
+                self._output_path,
+                "w",
+                buffering=1,
+                encoding="utf-8",
+                errors="replace",
+            )
+        try:
+            proc = subprocess.Popen(
+                self._cmd(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except Exception:
+            # Popen failed (e.g. idevicesyslog missing) — leave _running
+            # cleared and flag the collector dead so is_healthy reports False.
+            with self._lock:
+                self._dead = True
+            raise
+        self._running.set()
+        self._proc = proc
+        thread = threading.Thread(target=self._reader_loop, args=(proc,), daemon=True)
+        self._thread = thread
+        thread.start()
+
+    def stop(self) -> None:
+        self._running.clear()
+        proc = self._proc
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self._proc = None
+        self._thread = None
+        with self._lock:
+            self._dead = False
+            if self._output_fp is not None:
+                try:
+                    self._output_fp.flush()
+                    self._output_fp.close()
+                except Exception:
+                    pass
+                self._output_fp = None
+
+    def _reader_loop(self, proc: object) -> None:
+        current = cast(_PopenLike, proc)
+        consecutive_failures = 0
+
+        while self._running.is_set():
+            got_data = False
+            if current.stdout is not None:
+                try:
+                    for raw in current.stdout:
+                        if not self._running.is_set():
+                            return
+                        line = raw.rstrip("\n")
+                        parsed = _parse_syslog_line(line, time.time())
+                        got_data = True
+                        # Keep every line: the buffer feeds the anomaly detector
+                        # (which must see all processes) and the per-case slices,
+                        # and the output_file is the full device syslog.
+                        with self._lock:
+                            self._lines.append(parsed)
+                            if self._output_fp is not None:
+                                try:
+                                    self._output_fp.write(parsed.line + "\n")
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
+            if not self._running.is_set():
+                return
+
+            if got_data:
+                consecutive_failures = 0
+
+            consecutive_failures += 1
+            if consecutive_failures > self._max_reconnect_attempts:
+                with self._lock:
+                    self._dead = True
+                return
+
+            try:
+                current.wait(timeout=1)
+            except Exception:
+                try:
+                    current.kill()
+                except Exception:
+                    pass
+
+            for _ in range(int(self._reconnect_delay * 10)):
+                if not self._running.is_set():
+                    return
+                time.sleep(0.1)
+
+            if not self._running.is_set():
+                return
+
+            try:
+                new_proc = subprocess.Popen(
+                    self._cmd(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                with self._lock:
+                    if not self._running.is_set():
+                        try:
+                            new_proc.kill()
+                        except Exception:
+                            pass
+                        return
+                    self._proc = new_proc
+                current = new_proc
+            except Exception:
+                pass
+
+    def slice(self, since_ts: float, until_ts: float) -> list[IosSyslogLine]:
+        with self._lock:
+            return [x for x in self._lines if since_ts < x.host_ts <= until_ts]
+
+    @property
+    def is_running(self) -> bool:
+        return self._running.is_set()
+
+    @property
+    def is_healthy(self) -> bool:
+        with self._lock:
+            return self._running.is_set() and not self._dead
+
+
+class IosAnomalyDetector:
+    def __init__(
+        self,
+        patterns: tuple[AnomalyPattern, ...] | None = None,
+        max_events: int = 10_000,
+        noise_patterns: tuple[re.Pattern[str], ...] | None = None,
+    ) -> None:
+        self._patterns = patterns or IOS_ANOMALY_PATTERNS
+        self._noise_patterns = (
+            IOS_NOISE_PATTERNS if noise_patterns is None else noise_patterns
+        )
+        self._events: deque[IosAnomalyEvent] = deque(maxlen=max_events)
+        self._lock = threading.Lock()
+
+    def _effective_severity(
+        self,
+        pattern: AnomalyPattern,
+        entry: IosSyslogLine,
+    ) -> AnomalySeverity:
+        if (
+            pattern.name == "assertion_failed"
+            and entry.process in _TELEPHONY_ASSERTION_PROCESSES
+        ):
+            return "warning"
+        return pattern.severity
+
+    def feed_line(self, entry: IosSyslogLine) -> IosAnomalyEvent | None:
+        if any(noise.search(entry.line) for noise in self._noise_patterns):
+            return None
+        for pattern in self._patterns:
+            if pattern.compiled.search(entry.line):
+                event = IosAnomalyEvent(
+                    timestamp=entry.host_ts,
+                    severity=self._effective_severity(pattern, entry),
+                    category=pattern.category,
+                    pattern_name=pattern.name,
+                    matched_pattern=pattern.regex,
+                    matched_line=entry.line[:500],
+                    process=entry.process,
+                )
+                with self._lock:
+                    self._events.append(event)
+                return event
+        return None
+
+    def feed_lines(self, lines: list[IosSyslogLine]) -> list[IosAnomalyEvent]:
+        results: list[IosAnomalyEvent] = []
+        for entry in lines:
+            event = self.feed_line(entry)
+            if event is not None:
+                results.append(event)
+        return results
+
+    def drain_events(self) -> list[IosAnomalyEvent]:
+        with self._lock:
+            events = list(self._events)
+            self._events.clear()
+            return events
