@@ -1,0 +1,2055 @@
+import re
+import unittest
+
+from volte_mutation_fuzzer.generator import (
+    DialogContext,
+    GeneratorSettings,
+    RequestSpec,
+    ResponseSpec,
+    SIPGenerator,
+)
+from volte_mutation_fuzzer.mutator.contracts import (
+    MutationConfig,
+    MutationRecord,
+    MutationTarget,
+)
+from volte_mutation_fuzzer.mutator.core import SIPMutator
+from volte_mutation_fuzzer.mutator.editable import (
+    EditableSIPMessage,
+    EditableStartLine,
+    parse_editable_from_wire,
+)
+from volte_mutation_fuzzer.mutator.profile_catalog import PIXEL_IMS_HEADER_NAMES
+from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
+from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
+from volte_mutation_fuzzer.sip.requests import SIPRequestDefinition
+from volte_mutation_fuzzer.sip.responses import SIPResponseDefinition
+
+REALISTIC_CALL_ID = "a84b4c76e66710@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_MUTATED_CALL_ID = "b7f2a1d43caa9f1d@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_CONTEXT_CALL_ID = "d93f7c440f8b11ef@pcscf.ims.mnc001.mcc001.3gppnetwork.org"
+REALISTIC_LOCAL_TAG = "9fxced76sl"
+REALISTIC_CONTEXT_LOCAL_TAG = "a73kszlfl"
+REALISTIC_REMOTE_TAG = "873294202"
+REALISTIC_REQUEST_URI_USER = "001010000123511"
+REALISTIC_REQUEST_URI_HOST = "10.20.20.8"
+REALISTIC_MESSAGE_START_LINE = "MESSAGE sip:222222@10.20.20.9:31800 SIP/2.0"
+
+
+class SIPMutatorTestCase(unittest.TestCase):
+    alias_pattern = re.compile(
+        r"alias=(?P<host>[^~;>]+)~(?P<port_a>\d+)(?:~(?P<port_b>\d+))?(?P<suffix>~1)"
+    )
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.generator = SIPGenerator(GeneratorSettings())
+
+    def build_request(self):
+        return self.generator.generate_request(RequestSpec(method=SIPMethod.OPTIONS))
+
+    def build_response(self):
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+        return self.generator.generate_response(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+        )
+
+    def build_response_with_contact_alias(
+        self,
+        alias_value: str = "10.20.20.9~31800~31100~1",
+    ):
+        packet = self.build_response()
+        assert packet.contact is not None
+        original_contact = packet.contact[0]
+        assert isinstance(original_contact, NameAddress)
+
+        aliased_contact = NameAddress(
+            display_name=original_contact.display_name,
+            uri=original_contact.uri.model_copy(
+                update={"parameters": {"alias": alias_value}}
+            ),
+            parameters=original_contact.parameters,
+        )
+        return packet.model_copy(update={"contact": [aliased_contact]})
+
+    def build_pixel_invite_message(self) -> EditableSIPMessage:
+        body = (
+            "v=0\r\n"
+            "o=rue 3251 3251 IN IP4 172.22.0.16\r\n"
+            "s=-\r\n"
+            "c=IN IP4 172.22.0.16\r\n"
+            "t=0 0\r\n"
+            "m=audio 49196 RTP/AVP 107 106 105 104 101 102\r\n"
+            "b=AS:41\r\n"
+            "a=rtpmap:107 AMR/8000\r\n"
+            "a=fmtp:107 mode-set=0,1,2,3,4,5,6,7;mode-change-capability=2\r\n"
+            "a=rtpmap:101 telephone-event/8000\r\n"
+            "a=fmtp:101 0-15\r\n"
+            "a=curr:qos local none\r\n"
+            "a=curr:qos remote none\r\n"
+            "a=des:qos mandatory local sendrecv\r\n"
+            "a=des:qos optional remote sendrecv\r\n"
+            "a=rtcp:49197\r\n"
+            "a=ptime:20\r\n"
+            "a=maxptime:240\r\n"
+            "a=sendrecv\r\n"
+        )
+        wire = (
+            "INVITE sip:001010000123511@10.20.20.8:61008 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 172.22.0.21:15100;branch=z9hG4bK-pixel\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            'Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"\r\n'
+            "P-Asserted-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=0010100000000001\r\n"
+            "P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel\r\n"
+            "P-Early-Media: supported\r\n"
+            "P-Charging-Vector: icid-value=pixel-fuzz-1;orig-ioi=ims.mnc001.mcc001.3gppnetwork.org\r\n"
+            "Session-Expires: 1800;refresher=uac\r\n"
+            "Min-SE: 90\r\n"
+            "Supported: timer,100rel\r\n"
+            "Require: timer\r\n"
+            "Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK,NOTIFY,MESSAGE,REFER\r\n"
+            "Accept: application/sdp,application/3gpp-ims+xml\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(body.encode('utf-8'))}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+        return parse_editable_from_wire(wire)
+
+    def build_iphone_invite_message(self) -> EditableSIPMessage:
+        body = (
+            "v=0\r\n"
+            "o=rue 3251 3251 IN IP4 172.22.0.16\r\n"
+            "s=-\r\n"
+            "c=IN IP4 172.22.0.16\r\n"
+            "t=0 0\r\n"
+            "m=audio 49196 RTP/AVP 107 106 105 104 101 102\r\n"
+            "b=AS:41\r\n"
+            "a=rtpmap:107 AMR-WB/16000\r\n"
+            "a=fmtp:107 octet-align=1;mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:105 AMR/8000\r\n"
+            "a=fmtp:105 mode-change-capability=2;max-red=0\r\n"
+            "a=rtpmap:101 telephone-event/16000\r\n"
+            "a=fmtp:101 0-15\r\n"
+            "a=curr:qos local none\r\n"
+            "a=curr:qos remote none\r\n"
+            "a=des:qos mandatory local sendrecv\r\n"
+            "a=des:qos optional remote sendrecv\r\n"
+            "a=rtcp:49197\r\n"
+            "a=ptime:20\r\n"
+            "a=maxptime:240\r\n"
+            "a=sendrecv\r\n"
+        )
+        wire = (
+            "INVITE sip:001010000123512@10.20.20.2:63193 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 172.22.0.21:5100;branch=z9hG4bK-iphone\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            'Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"\r\n'
+            "P-Called-Party-ID: <tel:222222;phone-context=ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Asserted-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Preferred-Identity: <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>\r\n"
+            "P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=0010100000000001\r\n"
+            "P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel\r\n"
+            "P-Charging-Vector: icid-value=iphone-fuzz-1;orig-ioi=ims.mnc001.mcc001.3gppnetwork.org\r\n"
+            "Privacy: none\r\n"
+            "Security-Verify: ipsec-3gpp;q=0.1;prot=esp;mod=trans;spi-c=200418294;spi-s=12070439;port-c=63193;port-s=61008;alg=hmac-sha-1-96;ealg=aes-cbc\r\n"
+            "Supported: 100rel,precondition,timer,sec-agree\r\n"
+            "Require: precondition,sec-agree\r\n"
+            "Proxy-Require: sec-agree\r\n"
+            "Allow: INVITE,ACK,OPTIONS,BYE,CANCEL,UPDATE,INFO,PRACK\r\n"
+            "Accept: application/sdp,application/3gpp-ims+xml\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(body.encode('utf-8'))}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+        return parse_editable_from_wire(wire)
+
+    def build_context(self) -> DialogContext:
+        return DialogContext(
+            call_id=REALISTIC_CONTEXT_CALL_ID,
+            local_tag=REALISTIC_CONTEXT_LOCAL_TAG,
+            remote_tag=REALISTIC_REMOTE_TAG,
+            local_cseq=3,
+            remote_cseq=4,
+            request_uri=SIPURI(
+                scheme="sip",
+                user=REALISTIC_REQUEST_URI_USER,
+                host=REALISTIC_REQUEST_URI_HOST,
+            ),
+            is_registered=True,
+        )
+
+    def path_value(self, packet, path: str):
+        current = packet
+        for segment in path.split("."):
+            if isinstance(current, dict):
+                current = current[segment]
+            else:
+                current = getattr(current, segment)
+        return current
+
+    def packet_payload(self, packet):
+        return packet.model_dump(mode="python")
+
+    def extract_alias_parts(self, value: str):
+        match = self.alias_pattern.search(value)
+        self.assertIsNotNone(match, msg=f"expected alias in value: {value}")
+        assert match is not None
+        return match.groupdict()
+
+    def assert_content_length_matches_body(self, wire_text: str | None) -> None:
+        self.assertIsNotNone(wire_text)
+        assert wire_text is not None
+        header_text, _, body = wire_text.partition("\r\n\r\n")
+        self.assertTrue(body, msg="expected SIP body")
+        match = re.search(r"(?im)^Content-Length:\s*(\d+)$", header_text)
+        self.assertIsNotNone(match, msg=wire_text)
+        assert match is not None
+        self.assertEqual(int(match.group(1)), len(body.encode("utf-8")))
+
+    def assert_record_matches_packet_values(
+        self, original_packet, mutated_packet, record
+    ):
+        self.assertEqual(
+            self.path_value(original_packet, record.target.path), record.before
+        )
+        self.assertEqual(
+            self.path_value(mutated_packet, record.target.path), record.after
+        )
+        self.assertNotEqual(record.before, record.after)
+
+
+class SIPMutatorInitTests(SIPMutatorTestCase):
+    def test_init_uses_default_catalog(self) -> None:
+        mutator = SIPMutator()
+
+        self.assertIs(mutator.catalog, SIP_CATALOG)
+
+    def test_init_accepts_custom_catalog(self) -> None:
+        custom_catalog = SIPCatalog(
+            request_definitions=SIP_CATALOG.request_definitions,
+            response_definitions=SIP_CATALOG.response_definitions,
+        )
+
+        mutator = SIPMutator(catalog=custom_catalog)
+
+        self.assertIs(mutator.catalog, custom_catalog)
+
+
+class SIPMutatorDefinitionResolutionTests(SIPMutatorTestCase):
+    def test_resolve_packet_definition_returns_request_definition(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        definition = mutator._resolve_packet_definition(packet)
+        assert isinstance(definition, SIPRequestDefinition)
+
+        self.assertEqual(definition.method, SIPMethod.OPTIONS)
+        self.assertEqual(definition.model_name, packet.__class__.__name__)
+
+    def test_resolve_packet_definition_returns_response_definition(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+
+        definition = mutator._resolve_packet_definition(packet)
+        assert isinstance(definition, SIPResponseDefinition)
+
+        self.assertEqual(definition.status_code, 200)
+        self.assertEqual(definition.model_name, packet.__class__.__name__)
+
+
+class SIPMutatorReproducibilityHelperTests(SIPMutatorTestCase):
+    def test_rng_from_seed_returns_reproducible_sequence(self) -> None:
+        mutator = SIPMutator()
+
+        first_rng = mutator._rng_from_seed(19)
+        second_rng = mutator._rng_from_seed(19)
+
+        self.assertEqual(
+            [first_rng.randrange(1000) for _ in range(4)],
+            [second_rng.randrange(1000) for _ in range(4)],
+        )
+
+    def test_record_mutation_creates_normalized_model_record(self) -> None:
+        mutator = SIPMutator()
+        target = MutationTarget(layer="model", path="call_id")
+
+        record = mutator._record_mutation(
+            target=target,
+            operator="replace_text",
+            before=REALISTIC_CALL_ID,
+            after=REALISTIC_MUTATED_CALL_ID,
+            note=" generated in helper ",
+        )
+
+        self.assertIsInstance(record, MutationRecord)
+        self.assertEqual(record.layer, "model")
+        self.assertEqual(record.target.path, "call_id")
+        self.assertEqual(record.operator, "replace_text")
+        self.assertEqual(record.before, REALISTIC_CALL_ID)
+        self.assertEqual(record.after, REALISTIC_MUTATED_CALL_ID)
+        self.assertEqual(record.note, "generated in helper")
+
+    def test_snapshot_context_returns_none_for_missing_context(self) -> None:
+        mutator = SIPMutator()
+
+        self.assertIsNone(mutator._snapshot_context(None))
+
+    def test_snapshot_context_returns_copy_without_mutating_source(self) -> None:
+        mutator = SIPMutator()
+        context = self.build_context()
+
+        snapshot = mutator._snapshot_context(context)
+
+        self.assertIsInstance(snapshot, dict)
+        assert snapshot is not None
+        self.assertEqual(snapshot["call_id"], REALISTIC_CONTEXT_CALL_ID)
+        self.assertEqual(snapshot["local_cseq"], 3)
+        self.assertEqual(snapshot["request_uri"]["host"], REALISTIC_REQUEST_URI_HOST)
+
+        snapshot["local_cseq"] = 99
+        snapshot["request_uri"]["host"] = "mutated.example.net"
+
+        self.assertEqual(context.local_cseq, 3)
+        request_uri = context.request_uri
+        assert isinstance(request_uri, SIPURI)
+        self.assertEqual(request_uri.host, REALISTIC_REQUEST_URI_HOST)
+
+
+class SIPMutatorModelMutationTests(SIPMutatorTestCase):
+    def test_mutate_request_returns_model_case_for_requested_operations(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        original_payload = self.packet_payload(packet)
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=11, layer="model", max_operations=2),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(case.seed, 11)
+        self.assertEqual(case.strategy, "default")
+        self.assertEqual(len(case.records), 2)
+        self.assertEqual(len({record.target.path for record in case.records}), 2)
+        self.assertEqual(self.packet_payload(case.original_packet), original_payload)
+        self.assertEqual(self.packet_payload(packet), original_payload)
+
+        for record in case.records:
+            self.assert_record_matches_packet_values(packet, mutated_packet, record)
+
+        self.assertNotEqual(self.packet_payload(mutated_packet), original_payload)
+
+    def test_mutate_response_returns_model_case_for_state_breaker_strategy(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+        original_payload = self.packet_payload(packet)
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=7, layer="model", strategy="state_breaker"),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+        record = case.records[0]
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(case.strategy, "state_breaker")
+        self.assertEqual(len(case.records), 1)
+        self.assertIn(
+            record.target.path,
+            {
+                "call_id",
+                "cseq.sequence",
+                "from_.parameters.tag",
+                "to.parameters.tag",
+                "request_uri.host",
+            },
+        )
+        self.assert_record_matches_packet_values(packet, mutated_packet, record)
+        self.assertEqual(self.packet_payload(packet), original_payload)
+        self.assertNotEqual(self.packet_payload(mutated_packet), original_payload)
+
+    def test_mutate_field_normalizes_alias_and_only_changes_requested_field(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        original_payload = self.packet_payload(packet)
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(layer="model", path="Call-ID"),
+            MutationConfig(seed=5, layer="model"),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+        record = case.records[0]
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "call_id")
+        self.assert_record_matches_packet_values(packet, mutated_packet, record)
+        self.assertNotEqual(mutated_packet.call_id, packet.call_id)
+        self.assertEqual(mutated_packet.cseq.sequence, packet.cseq.sequence)
+        self.assertEqual(
+            self.path_value(mutated_packet, "request_uri.host"),
+            self.path_value(packet, "request_uri.host"),
+        )
+        self.assertEqual(self.packet_payload(packet), original_payload)
+
+    def test_mutate_field_supports_response_specific_reason_phrase_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+        original_payload = self.packet_payload(packet)
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(layer="model", path="reason-phrase"),
+            MutationConfig(seed=41, layer="model"),
+        )
+
+        mutated_packet = case.mutated_packet
+        assert mutated_packet is not None
+        record = case.records[0]
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "reason_phrase")
+        self.assert_record_matches_packet_values(packet, mutated_packet, record)
+        self.assertEqual(mutated_packet.call_id, packet.call_id)
+        self.assertEqual(mutated_packet.cseq.sequence, packet.cseq.sequence)
+        self.assertEqual(self.packet_payload(packet), original_payload)
+
+    def test_same_seed_produces_same_model_mutation(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config = MutationConfig(seed=23, layer="model", max_operations=2)
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        first_mutated_packet = first_case.mutated_packet
+        second_mutated_packet = second_case.mutated_packet
+        assert first_mutated_packet is not None
+        assert second_mutated_packet is not None
+
+        self.assertEqual(
+            first_mutated_packet.model_dump(mode="python"),
+            second_mutated_packet.model_dump(mode="python"),
+        )
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_mutate_does_not_mutate_original_context(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        context = self.build_context()
+
+        mutator.mutate(
+            packet,
+            MutationConfig(seed=13, layer="model"),
+            context=context,
+        )
+
+        self.assertEqual(context.call_id, REALISTIC_CONTEXT_CALL_ID)
+        self.assertEqual(context.local_tag, REALISTIC_CONTEXT_LOCAL_TAG)
+        self.assertEqual(context.remote_tag, REALISTIC_REMOTE_TAG)
+        self.assertEqual(context.local_cseq, 3)
+        request_uri = context.request_uri
+        assert isinstance(request_uri, SIPURI)
+        self.assertEqual(request_uri.host, REALISTIC_REQUEST_URI_HOST)
+
+
+class SIPMutatorWireMutationTests(SIPMutatorTestCase):
+    def test_to_editable_message_converts_request_packet(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        editable_message = mutator._to_editable_message(packet)
+
+        self.assertIsInstance(editable_message, EditableSIPMessage)
+        self.assertEqual(
+            editable_message.start_line.text,
+            (
+                f"{packet.method} "
+                f"sip:{packet.request_uri.user}@{packet.request_uri.host} "
+                f"{packet.sip_version}"
+            ),
+        )
+        header_names = [header.name for header in editable_message.headers]
+        self.assertIn("Call-ID", header_names)
+        self.assertIn("CSeq", header_names)
+        self.assertIn("From", header_names)
+        self.assertIn("To", header_names)
+        self.assertIn("Content-Length", header_names)
+        self.assertEqual(editable_message.body, "")
+        self.assertEqual(
+            editable_message.declared_content_length, packet.content_length
+        )
+
+    def test_to_editable_message_converts_response_packet(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response()
+
+        editable_message = mutator._to_editable_message(packet)
+
+        self.assertEqual(
+            editable_message.start_line.text,
+            f"{packet.sip_version} {packet.status_code} {packet.reason_phrase}",
+        )
+        header_names = [header.name for header in editable_message.headers]
+        self.assertIn("Call-ID", header_names)
+        self.assertIn("Contact", header_names)
+        self.assertIn("Server", header_names)
+
+    def test_mutate_wire_returns_wire_case(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=17, layer="wire", strategy="default", max_operations=2),
+        )
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertIsNone(case.mutated_packet)
+        self.assertIsNotNone(case.wire_text)
+        self.assertGreaterEqual(len(case.records), 1)
+        assert case.wire_text is not None
+        self.assertTrue(case.wire_text.startswith("OPTIONS "))
+
+    def test_mutate_resolves_profile_default_strategy_for_wire_case(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config = MutationConfig(
+            seed=102,
+            layer="wire",
+            profile="parser_breaker",
+            strategy="default",
+        )
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        self.assertEqual(first_case.profile, "parser_breaker")
+        self.assertEqual(second_case.profile, "parser_breaker")
+        self.assertIn(
+            first_case.strategy,
+            {"final_crlf_loss", "duplicate_content_length_conflict"},
+        )
+        self.assertEqual(first_case.strategy, second_case.strategy)
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_mutate_editable_resolves_profile_default_strategy_for_wire_case(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+        config = MutationConfig(
+            seed=102,
+            layer="wire",
+            profile="parser_breaker",
+            strategy="default",
+        )
+
+        first_case = mutator.mutate_editable(message, config)
+        second_case = mutator.mutate_editable(message, config)
+
+        self.assertEqual(first_case.profile, "parser_breaker")
+        self.assertEqual(second_case.profile, "parser_breaker")
+        self.assertIn(
+            first_case.strategy,
+            {"final_crlf_loss", "duplicate_content_length_conflict"},
+        )
+        self.assertEqual(first_case.strategy, second_case.strategy)
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_ims_specific_default_falls_back_when_contact_alias_is_missing(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="ims_specific",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "ims_specific")
+        self.assertEqual(case.strategy, "safe")
+        self.assertEqual(case.final_layer, "wire")
+        self.assertIsNotNone(case.wire_text)
+        self.assertGreaterEqual(len(case.records), 1)
+
+    def test_mutate_editable_delivery_preserving_default_wire_keeps_via_intact(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=1,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "delivery_preserving")
+        # OPTIONS has no SDP body, so SDP-aware pool entries are skipped
+        # and the resolver falls back to one of the body-agnostic
+        # delivery_preserving wire defaults.
+        self.assertIn(case.strategy, {"safe", "header_whitespace_noise"})
+        self.assertEqual(case.final_layer, "wire")
+        assert case.wire_text is not None
+        self.assertIn(
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1",
+            case.wire_text,
+        )
+
+    def test_mutate_editable_ims_specific_default_byte_stays_inside_ims_headers(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=2,
+                layer="byte",
+                profile="ims_specific",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "ims_specific")
+        self.assertEqual(case.strategy, "header_targeted")
+        self.assertEqual(case.final_layer, "byte")
+        self.assertIsNotNone(case.packet_bytes)
+        self.assertGreaterEqual(len(case.records), 1)
+
+        header_ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "ims_specific",
+        )
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(
+            any(start <= byte_index < end for _name, start, end in header_ranges)
+        )
+
+    def test_mutate_editable_ims_specific_default_byte_falls_back_without_ims_headers(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=2,
+                layer="byte",
+                profile="ims_specific",
+                strategy="default",
+            ),
+        )
+
+        self.assertEqual(case.profile, "ims_specific")
+        self.assertEqual(case.strategy, "header_targeted")
+        self.assertEqual(case.final_layer, "byte")
+        self.assertEqual(len(case.records), 1)
+        self.assertIsNotNone(case.packet_bytes)
+
+        generic_ranges = mutator._collect_header_byte_ranges(
+            message.render().encode("utf-8")
+        )
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(
+            any(
+                start <= byte_index < end for _header_name, start, end in generic_ranges
+            )
+        )
+
+    def test_pixel_ims_profile_advertises_pixel_strategies(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            profile_supports_strategy,
+            resolve_effective_strategy,
+        )
+
+        for strategy in (
+            "pixel_sdp_media_negotiation",
+            "pixel_session_timer_skew",
+            "pixel_p_header_pressure",
+            "pixel_capability_header_pressure",
+        ):
+            with self.subTest(strategy=strategy):
+                self.assertTrue(
+                    profile_supports_strategy("pixel_ims", "wire", strategy)
+                )
+                self.assertFalse(profile_supports_strategy("legacy", "wire", strategy))
+        self.assertTrue(
+            profile_supports_strategy("pixel_ims", "byte", "header_targeted")
+        )
+        self.assertFalse(profile_supports_strategy("pixel_ims", "model", "default"))
+        self.assertIn("p-access-network-info", PIXEL_IMS_HEADER_NAMES)
+
+        first = resolve_effective_strategy("pixel_ims", "wire", "default", 7)
+        second = resolve_effective_strategy("pixel_ims", "wire", "default", 7)
+        self.assertEqual(first, second)
+        self.assertIn(
+            first,
+            {
+                "pixel_sdp_media_negotiation",
+                "pixel_session_timer_skew",
+                "pixel_p_header_pressure",
+                "pixel_capability_header_pressure",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+                "alias_port_desync",
+                "safe",
+                "header_whitespace_noise",
+            },
+        )
+
+    def test_pixel_sdp_media_negotiation_mutates_sdp_and_updates_content_length(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_sdp_media_negotiation",
+                seed=11,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_sdp_media_negotiation")
+        self.assertEqual(case.records[0].operator, "pixel_sdp_media_negotiation")
+        self.assertRegex(case.records[0].target.path, r"^body:sdp:")
+        self.assert_content_length_matches_body(case.wire_text)
+
+    def test_pixel_session_timer_skew_mutates_timer_headers(self) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_session_timer_skew",
+                seed=12,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_session_timer_skew")
+        self.assertEqual(case.records[0].operator, "pixel_session_timer_skew")
+        self.assertRegex(case.records[0].target.path, r"^header")
+
+    def test_pixel_p_header_pressure_mutates_p_headers(self) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_p_header_pressure",
+                seed=13,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_p_header_pressure")
+        self.assertEqual(case.records[0].operator, "pixel_p_header_pressure")
+        before_name, _before_value = case.records[0].before
+        self.assertIn(before_name.casefold(), PIXEL_IMS_HEADER_NAMES)
+
+    def test_pixel_capability_header_pressure_mutates_capability_headers(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_pixel_invite_message(),
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="pixel_capability_header_pressure",
+                seed=17,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "pixel_capability_header_pressure")
+        self.assertEqual(case.records[0].operator, "pixel_capability_header_pressure")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), PIXEL_IMS_HEADER_NAMES)
+        self.assertNotEqual(before_value, after_value)
+
+    def test_pixel_sdp_media_negotiation_can_mutate_qos_preconditions(self) -> None:
+        for seed in range(80):
+            case = SIPMutator().mutate_editable(
+                self.build_pixel_invite_message(),
+                MutationConfig(
+                    profile="pixel_ims",
+                    layer="wire",
+                    strategy="pixel_sdp_media_negotiation",
+                    seed=seed,
+                ),
+            )
+            if case.records[0].note == "variant=qos_precondition":
+                self.assertRegex(str(case.records[0].before), r"a=(curr|des):qos")
+                self.assertRegex(str(case.records[0].after), r"a=(curr|des|conf):qos")
+                self.assert_content_length_matches_body(case.wire_text)
+                return
+        self.fail("pixel_sdp_media_negotiation did not select qos_precondition")
+
+    def test_pixel_sdp_media_negotiation_can_mutate_amr_fmtp_params(self) -> None:
+        for seed in range(80):
+            case = SIPMutator().mutate_editable(
+                self.build_pixel_invite_message(),
+                MutationConfig(
+                    profile="pixel_ims",
+                    layer="wire",
+                    strategy="pixel_sdp_media_negotiation",
+                    seed=seed,
+                ),
+            )
+            if case.records[0].note == "variant=fmtp_amr_param":
+                self.assertRegex(
+                    str(case.records[0].after),
+                    r"(octet-align|mode-change-capability|mode-change-period|"
+                    r"mode-change-neighbor|crc|robust-sorting|interleaving|max-red)=",
+                )
+                self.assert_content_length_matches_body(case.wire_text)
+                return
+        self.fail("pixel_sdp_media_negotiation did not select fmtp_amr_param")
+
+    def test_pixel_ims_default_wire_skips_missing_prerequisites(self) -> None:
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = SIPMutator().mutate_editable(
+            message,
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="default",
+                seed=1,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertIn(case.strategy, {"safe", "header_whitespace_noise"})
+        self.assertEqual(case.final_layer, "wire")
+
+    def test_pixel_ims_default_wire_skips_sdp_without_media_targets(self) -> None:
+        body = "v=0\r\ns=-\r\n"
+        message = parse_editable_from_wire(
+            "INVITE sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Type: application/sdp\r\n"
+            f"Content-Length: {len(body.encode('utf-8'))}\r\n"
+            "\r\n"
+            f"{body}"
+        )
+
+        case = SIPMutator().mutate_editable(
+            message,
+            MutationConfig(
+                profile="pixel_ims",
+                layer="wire",
+                strategy="default",
+                seed=2,
+            ),
+        )
+
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertNotEqual(case.strategy, "pixel_sdp_media_negotiation")
+        self.assertEqual(case.final_layer, "wire")
+
+    def test_pixel_ims_byte_targeting_prefers_pixel_headers(self) -> None:
+        mutator = SIPMutator()
+        message = self.build_pixel_invite_message()
+
+        ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "pixel_ims",
+        )
+
+        self.assertTrue(ranges)
+        self.assertTrue(
+            all(
+                name.casefold() in PIXEL_IMS_HEADER_NAMES
+                for name, _start, _end in ranges
+            )
+        )
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                profile="pixel_ims",
+                layer="byte",
+                strategy="default",
+                seed=14,
+            ),
+        )
+        self.assertEqual(case.profile, "pixel_ims")
+        self.assertEqual(case.strategy, "header_targeted")
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(any(start <= byte_index < end for _name, start, end in ranges))
+        self.assertNotEqual(case.packet_bytes, message.render().encode("utf-8"))
+
+    def test_iphone_ims_profile_advertises_iphone_strategies(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+            profile_supports_strategy,
+            resolve_effective_strategy,
+        )
+
+        for strategy in (
+            "iphone_sdp_media_negotiation",
+            "iphone_security_agreement_pressure",
+            "iphone_identity_privacy_pressure",
+            "iphone_option_tag_negotiation",
+            "iphone_capability_negotiation_pressure",
+        ):
+            with self.subTest(strategy=strategy):
+                self.assertTrue(
+                    profile_supports_strategy("iphone_ims", "wire", strategy)
+                )
+                self.assertFalse(profile_supports_strategy("legacy", "wire", strategy))
+                self.assertFalse(
+                    profile_supports_strategy("pixel_ims", "wire", strategy)
+                )
+        self.assertTrue(
+            profile_supports_strategy("iphone_ims", "byte", "header_targeted")
+        )
+        self.assertFalse(profile_supports_strategy("iphone_ims", "model", "default"))
+        self.assertIn("security-verify", IPHONE_IMS_HEADER_NAMES)
+        self.assertIn("p-called-party-id", IPHONE_IMS_HEADER_NAMES)
+
+        first = resolve_effective_strategy("iphone_ims", "wire", "default", 7)
+        second = resolve_effective_strategy("iphone_ims", "wire", "default", 7)
+        self.assertEqual(first, second)
+        self.assertIn(
+            first,
+            {
+                "iphone_sdp_media_negotiation",
+                "iphone_security_agreement_pressure",
+                "iphone_identity_privacy_pressure",
+                "iphone_option_tag_negotiation",
+                "iphone_capability_negotiation_pressure",
+                "sdp_struct_only",
+                "sdp_byte_edit",
+                "safe",
+                "header_whitespace_noise",
+            },
+        )
+
+    def test_iphone_sdp_media_negotiation_mutates_sdp_and_updates_content_length(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_sdp_media_negotiation",
+                seed=21,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_sdp_media_negotiation")
+        self.assertEqual(case.records[0].operator, "iphone_sdp_media_negotiation")
+        self.assertRegex(case.records[0].target.path, r"^body:sdp:")
+        self.assert_content_length_matches_body(case.wire_text)
+
+    def test_iphone_security_agreement_pressure_mutates_security_headers(
+        self,
+    ) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+        )
+
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_security_agreement_pressure",
+                seed=22,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_security_agreement_pressure")
+        self.assertEqual(
+            case.records[0].operator,
+            "iphone_security_agreement_pressure",
+        )
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), IPHONE_IMS_HEADER_NAMES)
+        self.assertNotEqual(before_value, after_value)
+
+    def test_iphone_security_agreement_pressure_can_mutate_security_parameter(
+        self,
+    ) -> None:
+        for seed in range(160):
+            case = SIPMutator().mutate_editable(
+                self.build_iphone_invite_message(),
+                MutationConfig(
+                    profile="iphone_ims",
+                    layer="wire",
+                    strategy="iphone_security_agreement_pressure",
+                    seed=seed,
+                ),
+            )
+            if ".param." not in case.records[0].target.path:
+                continue
+
+            self.assertEqual(case.strategy, "iphone_security_agreement_pressure")
+            self.assertRegex(
+                case.records[0].target.path,
+                r"^header\[\d+\]\.param\."
+                r"(q|prot|mod|spi-c|spi-s|port-c|port-s|alg|ealg)$",
+            )
+            self.assertRegex(
+                case.records[0].note or "",
+                r"variant=security_param\."
+                r"(q|prot|mod|spi-c|spi-s|port-c|port-s|alg|ealg)",
+            )
+            before_name, before_value = case.records[0].before
+            _after_name, after_value = case.records[0].after
+            self.assertEqual(before_name.casefold(), "security-verify")
+            self.assertIn("ipsec-3gpp", before_value)
+            self.assertIn("ipsec-3gpp", after_value)
+            self.assertNotEqual(before_value, after_value)
+            return
+        self.fail("iphone_security_agreement_pressure did not mutate a parameter")
+
+    def test_iphone_security_agreement_parameter_mutation_is_not_noop(self) -> None:
+        for seed in range(80):
+            case = SIPMutator().mutate_editable(
+                self.build_iphone_invite_message(),
+                MutationConfig(
+                    profile="iphone_ims",
+                    layer="wire",
+                    strategy="iphone_security_agreement_pressure",
+                    seed=seed,
+                ),
+            )
+
+            before_name, before_value = case.records[0].before
+            _after_name, after_value = case.records[0].after
+            self.assertEqual(before_name.casefold(), "security-verify")
+            self.assertNotEqual(before_value, after_value, msg=f"seed={seed}")
+
+    def test_iphone_option_tag_negotiation_mutates_option_tag_headers(self) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_option_tag_negotiation",
+                seed=25,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_option_tag_negotiation")
+        self.assertEqual(case.records[0].operator, "iphone_option_tag_negotiation")
+        self.assertRegex(case.records[0].target.path, r"^header\[\d+\]\.option_tag")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), {"supported", "require", "proxy-require"})
+        self.assertNotEqual(before_value, after_value)
+        self.assertRegex(
+            case.records[0].note or "",
+            r"variant=option_tag\.(sec_agree|precondition|reliability|timer)",
+        )
+
+    def test_iphone_capability_negotiation_pressure_mutates_capability_headers(
+        self,
+    ) -> None:
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_capability_negotiation_pressure",
+                seed=26,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_capability_negotiation_pressure")
+        self.assertEqual(
+            case.records[0].operator,
+            "iphone_capability_negotiation_pressure",
+        )
+        self.assertRegex(case.records[0].target.path, r"^header\[\d+\]\.capability")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(
+            before_name.casefold(),
+            {"contact", "accept-contact", "allow", "accept", "content-type"},
+        )
+        self.assertNotEqual(before_value, after_value)
+        self.assertRegex(
+            case.records[0].note or "",
+            r"variant=capability\.(contact|accept_contact|allow|accept|content_type)",
+        )
+
+    def test_iphone_identity_privacy_pressure_mutates_identity_headers(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+        )
+
+        case = SIPMutator().mutate_editable(
+            self.build_iphone_invite_message(),
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="iphone_identity_privacy_pressure",
+                seed=23,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "iphone_identity_privacy_pressure")
+        self.assertEqual(case.records[0].operator, "iphone_identity_privacy_pressure")
+        before_name, before_value = case.records[0].before
+        _after_name, after_value = case.records[0].after
+        self.assertIn(before_name.casefold(), IPHONE_IMS_HEADER_NAMES)
+        self.assertNotEqual(before_value, after_value)
+
+    def test_iphone_ims_default_wire_skips_missing_prerequisites(self) -> None:
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123512@10.20.20.2 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = SIPMutator().mutate_editable(
+            message,
+            MutationConfig(
+                profile="iphone_ims",
+                layer="wire",
+                strategy="default",
+                seed=1,
+            ),
+        )
+
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertIn(case.strategy, {"safe", "header_whitespace_noise"})
+        self.assertEqual(case.final_layer, "wire")
+
+    def test_iphone_ims_byte_targeting_prefers_iphone_headers(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            IPHONE_IMS_HEADER_NAMES,
+        )
+
+        mutator = SIPMutator()
+        message = self.build_iphone_invite_message()
+
+        ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "iphone_ims",
+        )
+
+        self.assertTrue(ranges)
+        self.assertTrue(
+            all(
+                name.casefold() in IPHONE_IMS_HEADER_NAMES
+                for name, _start, _end in ranges
+            )
+        )
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                profile="iphone_ims",
+                layer="byte",
+                strategy="default",
+                seed=24,
+            ),
+        )
+        self.assertEqual(case.profile, "iphone_ims")
+        self.assertEqual(case.strategy, "header_targeted")
+        record = case.records[0]
+        self.assertRegex(record.target.path, r"^byte\[\d+\]$")
+        byte_index = int(record.target.path[5:-1])
+        self.assertTrue(any(start <= byte_index < end for _name, start, end in ranges))
+        self.assertNotEqual(case.packet_bytes, message.render().encode("utf-8"))
+
+    def test_same_seed_produces_same_wire_mutation(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config = MutationConfig(seed=29, layer="wire", strategy="default")
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_mutate_field_supports_wire_header_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(
+                layer="wire",
+                path="header:Call-ID",
+                operator_hint="remove_header",
+            ),
+            MutationConfig(seed=3, layer="wire"),
+        )
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(case.records[0].target.path, "header:Call-ID")
+        assert case.wire_text is not None
+        self.assertNotIn("\r\nCall-ID:", case.wire_text)
+
+    def test_mutate_field_supports_wire_header_index_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        editable_message = mutator._to_editable_message(packet)
+        original_first_header = editable_message.headers[0]
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(
+                layer="wire",
+                path="header[0]",
+                operator_hint="duplicate_header",
+            ),
+            MutationConfig(seed=7, layer="wire"),
+        )
+
+        self.assertEqual(case.records[0].target.path, "header[0]")
+        assert case.wire_text is not None
+        self.assertEqual(
+            case.wire_text.count(
+                f"\r\n{original_first_header.name}: {original_first_header.value}\r\n"
+            ),
+            1,
+        )
+        self.assertGreaterEqual(
+            case.wire_text.count(
+                f"{original_first_header.name}: {original_first_header.value}"
+            ),
+            2,
+        )
+
+    def test_mutate_field_normalizes_wire_start_line_alias(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(layer="wire", path="start-line"),
+            MutationConfig(seed=5, layer="wire"),
+        )
+
+        self.assertEqual(case.records[0].target.path, "start_line")
+        assert case.wire_text is not None
+        self.assertIn("MUT-", case.wire_text.split("\r\n", 1)[0])
+
+    def test_mutate_field_supports_wire_content_length_target(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate_field(
+            packet,
+            MutationTarget(
+                layer="wire",
+                path="content-length",
+                operator_hint="mismatch_content_length",
+            ),
+            MutationConfig(seed=9, layer="wire"),
+        )
+
+        self.assertEqual(case.records[0].target.path, "content_length")
+        assert case.wire_text is not None
+        self.assertIn("\r\nContent-Length: ", case.wire_text)
+        self.assertNotIn("\r\nContent-Length: 0\r\n", case.wire_text)
+
+    def test_header_whitespace_noise_mutates_separator_without_touching_value(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=101,
+                layer="wire",
+                strategy="header_whitespace_noise",
+            ),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.operator, "header_whitespace_noise")
+        self.assertRegex(record.target.path, r"^header\[\d+\]$")
+        self.assertEqual(record.before["name"], record.after["name"])
+        self.assertEqual(record.before["value"], record.after["value"])
+        self.assertNotEqual(record.before["separator"], record.after["separator"])
+        self.assertIn(
+            (
+                f"{record.after['name']}"
+                f"{record.after['separator']}"
+                f"{record.after['value']}"
+            ),
+            case.wire_text,
+        )
+
+    def test_final_crlf_loss_drops_one_terminal_line_break(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=102, layer="wire", strategy="final_crlf_loss"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "message:final_blank_line")
+        self.assertEqual(record.operator, "final_crlf_loss")
+        self.assertEqual(record.before, "\r\n\r\n")
+        self.assertEqual(record.after, "\r\n")
+        self.assertTrue(case.wire_text.endswith("\r\n"))
+        self.assertFalse(case.wire_text.endswith("\r\n\r\n"))
+
+    def test_final_crlf_loss_normalizes_multiple_blank_lines_to_single_crlf(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        message = mutator._to_editable_message(packet).model_copy(
+            update={"extra_blank_lines_after_headers": 2}
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(seed=104, layer="wire", strategy="final_crlf_loss"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(record.target.path, "message:final_blank_line")
+        self.assertEqual(record.before, "\r\n\r\n\r\n\r\n")
+        self.assertEqual(record.after, "\r\n")
+        self.assertTrue(case.wire_text.endswith("\r\n"))
+        self.assertFalse(case.wire_text.endswith("\r\n\r\n"))
+
+    def test_duplicate_content_length_conflict_adds_second_conflicting_header(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=103,
+                layer="wire",
+                strategy="duplicate_content_length_conflict",
+            ),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        content_length_values = [
+            line.split(":", 1)[1].strip()
+            for line in case.wire_text.split("\r\n")
+            if line.startswith("Content-Length:")
+        ]
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(record.target.path, "header:Content-Length")
+        self.assertEqual(record.operator, "duplicate_content_length_conflict")
+        self.assertEqual(len(content_length_values), 2)
+        self.assertNotEqual(content_length_values[0], content_length_values[1])
+        self.assertEqual(record.before, (content_length_values[0],))
+        self.assertEqual(record.after, tuple(content_length_values))
+
+    def test_duplicate_content_length_conflict_preserves_declared_zero_without_header(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = EditableSIPMessage(
+            start_line=EditableStartLine(text=REALISTIC_MESSAGE_START_LINE),
+            headers=(),
+            body="hello",
+            declared_content_length=0,
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(
+                seed=114,
+                layer="wire",
+                strategy="duplicate_content_length_conflict",
+            ),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        content_length_values = [
+            line.split(":", 1)[1].strip()
+            for line in case.wire_text.split("\r\n")
+            if line.startswith("Content-Length:")
+        ]
+
+        self.assertEqual(content_length_values[0], "0")
+        self.assertEqual(record.before, ("0",))
+        self.assertEqual(record.after, tuple(content_length_values))
+        self.assertNotEqual(content_length_values[1], "0")
+
+    def test_deterministic_wire_strategies_are_reproducible_by_seed(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        configs = (
+            MutationConfig(
+                seed=111,
+                layer="wire",
+                strategy="header_whitespace_noise",
+            ),
+            MutationConfig(
+                seed=112,
+                layer="wire",
+                strategy="final_crlf_loss",
+            ),
+            MutationConfig(
+                seed=113,
+                layer="wire",
+                strategy="duplicate_content_length_conflict",
+            ),
+        )
+
+        for config in configs:
+            with self.subTest(strategy=config.strategy):
+                first_case = mutator.mutate(packet, config)
+                second_case = mutator.mutate(packet, config)
+
+                self.assertEqual(first_case.wire_text, second_case.wire_text)
+                self.assertEqual(
+                    tuple(
+                        record.model_dump(mode="python")
+                        for record in first_case.records
+                    ),
+                    tuple(
+                        record.model_dump(mode="python")
+                        for record in second_case.records
+                    ),
+                )
+
+    def test_alias_port_desync_rewrites_contact_alias_ports_but_keeps_shape(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "INVITE sip:001010000123511@10.20.20.8:8100;alias=10.20.20.8~8101~1 SIP/2.0\r\n"
+            "Contact: <sip:222222@10.20.20.9:31800;alias=10.20.20.9~31800~31100~1>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        case = mutator.mutate_editable(
+            message,
+            MutationConfig(seed=301, layer="wire", strategy="alias_port_desync"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(record.operator, "alias_port_desync")
+        self.assertRegex(record.target.path, r"^header\[\d+\]$")
+        before_alias = self.extract_alias_parts(record.before)
+        after_alias = self.extract_alias_parts(record.after)
+        self.assertEqual(before_alias["host"], after_alias["host"])
+        self.assertEqual(before_alias["suffix"], after_alias["suffix"])
+        self.assertNotEqual(before_alias["port_a"], after_alias["port_a"])
+        self.assertNotEqual(before_alias["port_b"], after_alias["port_b"])
+        self.assertIn(f"Contact: {record.after}", case.wire_text)
+        self.assertNotEqual(record.before, record.after)
+        self.assertEqual(
+            record.note,
+            (
+                "contact_alias="
+                "alias=10.20.20.9~31800~31100~1"
+                " -> "
+                f"alias={after_alias['host']}~{after_alias['port_a']}~"
+                f"{after_alias['port_b']}{after_alias['suffix']}"
+            ),
+        )
+
+    def test_alias_port_desync_supports_regular_wire_mutate_path(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response_with_contact_alias()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=302, layer="wire", strategy="alias_port_desync"),
+        )
+
+        record = case.records[0]
+        assert case.wire_text is not None
+        before_alias = self.extract_alias_parts(record.before)
+        after_alias = self.extract_alias_parts(record.after)
+
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(record.operator, "alias_port_desync")
+        self.assertRegex(record.target.path, r"^header\[\d+\]$")
+        self.assertEqual(before_alias["host"], after_alias["host"])
+        self.assertEqual(before_alias["suffix"], after_alias["suffix"])
+        self.assertNotEqual(before_alias["port_a"], after_alias["port_a"])
+        self.assertNotEqual(before_alias["port_b"], after_alias["port_b"])
+        self.assertIn(f"Contact: {record.after}", case.wire_text)
+
+    def test_alias_port_desync_is_reproducible_by_seed(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_response_with_contact_alias()
+        config = MutationConfig(seed=303, layer="wire", strategy="alias_port_desync")
+
+        first_case = mutator.mutate(packet, config)
+        second_case = mutator.mutate(packet, config)
+
+        self.assertEqual(first_case.wire_text, second_case.wire_text)
+        self.assertEqual(
+            tuple(record.model_dump(mode="python") for record in first_case.records),
+            tuple(record.model_dump(mode="python") for record in second_case.records),
+        )
+
+    def test_mutate_with_auto_still_returns_model_case(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=31, layer="auto"),
+        )
+
+        self.assertEqual(case.final_layer, "model")
+        self.assertIsNotNone(case.mutated_packet)
+        self.assertIsNone(case.wire_text)
+
+    def test_ims_specific_profiles_prefer_ims_headers_for_wire_and_byte_targets(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        message = parse_editable_from_wire(
+            "OPTIONS sip:001010000123511@10.20.20.8 SIP/2.0\r\n"
+            "Via: SIP/2.0/UDP 10.20.20.1:5060;branch=z9hG4bK-1\r\n"
+            "Contact: <sip:001010000123511@10.20.20.8:31800>\r\n"
+            "Record-Route: <sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr>\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        )
+
+        wire_targets = mutator._collect_profile_wire_targets(
+            message,
+            mutator._collect_wire_targets(message),
+            "ims_specific",
+        )
+        byte_ranges = mutator._collect_profile_header_byte_ranges(
+            message.render().encode("utf-8"),
+            "ims_specific",
+        )
+
+        self.assertTrue(wire_targets)
+        self.assertTrue(any(target.path == "header:Contact" for target in wire_targets))
+        self.assertTrue(
+            any(target.path == "header:Record-Route" for target in wire_targets)
+        )
+        self.assertFalse(any(target.path == "header:Via" for target in wire_targets))
+        self.assertEqual(
+            {header_name for header_name, _start, _end in byte_ranges},
+            {"Contact", "Record-Route"},
+        )
+
+
+class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
+    def test_mutate_rejects_unsupported_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported mutation strategy"):
+            mutator.mutate(packet, MutationConfig(strategy="header_chaos"))
+
+
+class SIPMutatorCatalogFailureTests(SIPMutatorTestCase):
+    def test_mutate_field_rejects_reason_phrase_for_request_packets(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "model target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="reason_phrase"),
+                MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_missing_to_tag_on_request_packets(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "model target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="To.tag"),
+                MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_unsupported_target_path(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported model target path"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="via.host"),
+                MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_reason_phrase_alias_before_mutation_for_requests(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "model target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="model", path="reason-phrase"),
+                MutationConfig(layer="model"),
+            )
+
+    def test_mutate_field_rejects_explicit_targets_for_non_legacy_profiles(
+        self,
+    ) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "profile-scoped mutation does not support explicit targets",
+        ):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="wire", path="header:Via"),
+                MutationConfig(profile="ims_specific", layer="wire"),
+            )
+
+
+class SIPMutatorWireAndByteFailureTests(SIPMutatorTestCase):
+    def test_mutate_rejects_unsupported_wire_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported wire mutation strategy"):
+            mutator.mutate(
+                packet,
+                MutationConfig(layer="wire", strategy="state_breaker"),
+            )
+
+    def test_mutate_field_rejects_missing_wire_header_name(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "wire target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="wire", path="header:Does-Not-Exist"),
+                MutationConfig(layer="wire"),
+            )
+
+    def test_mutate_field_rejects_out_of_bounds_wire_header_index(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "wire target is not available"):
+            mutator.mutate_field(
+                packet,
+                MutationTarget(layer="wire", path="header[999]"),
+                MutationConfig(layer="wire"),
+            )
+
+    def test_mutate_rejects_unsupported_byte_strategy(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaisesRegex(ValueError, "unsupported byte mutation strategy"):
+            mutator.mutate(
+                packet,
+                MutationConfig(layer="byte", strategy="state_breaker"),
+            )
+
+
+class SIPMutatorMultiMutationTests(SIPMutatorTestCase):
+    """Verify ``max_operations`` stacks deterministic strategies across N rounds.
+
+    Single-shot strategies (null_byte_only, boundary_only, byte_edit_only)
+    historically applied one mutation per case. ``max_operations`` was wired
+    into wire/byte deterministic dispatch so a single case can carry multiple
+    mutations. Default ``max_operations=1`` must keep the legacy single-shot
+    behaviour byte-for-byte.
+    """
+
+    def test_default_max_operations_emits_single_record(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="null_byte_only",
+            ),
+        )
+
+        # Default max_operations=1 keeps legacy single-shot semantics.
+        self.assertEqual(len(case.records), 1)
+        self.assertEqual(case.records[0].operator, "null_byte_only")
+
+    def test_max_operations_n_stacks_null_byte_only(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        for n in (2, 3, 5):
+            with self.subTest(n=n):
+                case = mutator.mutate(
+                    packet,
+                    MutationConfig(
+                        seed=0,
+                        layer="wire",
+                        profile="delivery_preserving",
+                        strategy="null_byte_only",
+                        max_operations=n,
+                    ),
+                )
+                self.assertEqual(len(case.records), n)
+                for record in case.records:
+                    self.assertEqual(record.operator, "null_byte_only")
+
+    def test_max_operations_n_stacks_boundary_only(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="boundary_only",
+                max_operations=4,
+            ),
+        )
+        self.assertEqual(len(case.records), 4)
+        for record in case.records:
+            self.assertEqual(record.operator, "boundary_only")
+
+    def test_max_operations_n_stacks_byte_edit_only(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="byte_edit_only",
+                max_operations=3,
+            ),
+        )
+        self.assertEqual(len(case.records), 3)
+        for record in case.records:
+            self.assertEqual(record.operator, "byte_edit_only")
+
+    def test_max_operations_byte_layer_deterministic_strategy_stacks(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        # ``tail_chop_1`` is a deterministic byte-layer strategy. Repeated
+        # rounds chop one byte off the buffer each time, so we expect N
+        # records when N is small enough that bytes remain to chop.
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="byte",
+                profile="parser_breaker",
+                strategy="tail_chop_1",
+                max_operations=3,
+            ),
+        )
+        self.assertEqual(len(case.records), 3)
+        for record in case.records:
+            self.assertEqual(record.operator, "tail_chop_1")
+
+    def test_max_operations_breaks_when_strategy_returns_none(self) -> None:
+        # ``boundary_only`` requires at least one header value. If the
+        # implementation ever runs out of mutable headers mid-stack it
+        # should stop early instead of crashing — verified here by asking
+        # for an absurdly large ``max_operations`` and asserting we get
+        # *up to* that many records, never more, and no exception.
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="delivery_preserving",
+                strategy="null_byte_only",
+                max_operations=1000,
+            ),
+        )
+        self.assertGreaterEqual(len(case.records), 1)
+        self.assertLessEqual(len(case.records), 1000)
+
+    def test_max_operations_one_matches_legacy_byte_for_byte(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        config_default = MutationConfig(
+            seed=42,
+            layer="wire",
+            profile="delivery_preserving",
+            strategy="null_byte_only",
+        )
+        config_explicit_one = config_default.model_copy(update={"max_operations": 1})
+
+        case_default = mutator.mutate(packet, config_default)
+        case_explicit = mutator.mutate(packet, config_explicit_one)
+
+        # Same seed + same max_operations=1 must yield identical wire text.
+        self.assertEqual(case_default.wire_text, case_explicit.wire_text)
+        self.assertEqual(len(case_default.records), len(case_explicit.records))
+
+
+class SIPMutatorEdgeBoundaryTests(SIPMutatorTestCase):
+    """Cover the 8 edge_boundary variants and their wire rendering."""
+
+    EXPECTED_VARIANTS = {
+        "trailing_backslash",
+        "bare_cr",
+        "bare_lf",
+        "double_crlf",
+        "crlf_header_smuggle",
+        "tab_fold",
+        "format_string",
+        "space_before_colon",
+    }
+
+    def _collect_variants(self, n_seeds: int = 400) -> dict[str, tuple[str, str]]:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        seen: dict[str, tuple[str, str]] = {}
+        for seed in range(n_seeds):
+            case = mutator.mutate(
+                packet,
+                MutationConfig(
+                    seed=seed,
+                    layer="wire",
+                    profile="parser_breaker",
+                    strategy="edge_boundary",
+                ),
+            )
+            self.assertEqual(len(case.records), 1)
+            record = case.records[0]
+            self.assertEqual(record.operator, "edge_boundary")
+            variant = str((record.note or "").removeprefix("variant="))
+            if variant not in seen:
+                _, after_value = record.after
+                assert case.wire_text is not None
+                assert isinstance(after_value, str)
+                seen[variant] = (case.wire_text, after_value)
+            if set(seen) >= self.EXPECTED_VARIANTS:
+                break
+        return seen
+
+    def test_all_eight_variants_reachable(self) -> None:
+        seen = self._collect_variants()
+        self.assertEqual(set(seen.keys()), self.EXPECTED_VARIANTS)
+
+    def test_trailing_backslash_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["trailing_backslash"]
+        # A header line ends with a literal '\' just before the CRLF.
+        self.assertRegex(wire, r"\\\r\n")
+
+    def test_bare_cr_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["bare_cr"]
+        # value\r + \r\n line terminator → three consecutive bytes \r\r\n
+        self.assertIn("\r\r\n", wire)
+
+    def test_bare_lf_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["bare_lf"]
+        # value\n + \r\n line terminator → \n\r\n (bare LF before the CRLF)
+        self.assertIn("\n\r\n", wire)
+
+    def test_double_crlf_terminator_lands_on_wire(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["double_crlf"]
+        # value + \r\n\r\n + line CRLF → \r\n\r\n\r\n (three CRLFs in a row)
+        self.assertIn("\r\n\r\n\r\n", wire)
+
+    def test_crlf_header_smuggle_injects_fake_header(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["crlf_header_smuggle"]
+        self.assertRegex(wire, r"\r\nX-Smuggled-[0-9a-f]{8}: pwn\r\n")
+
+    def test_tab_fold_injects_continuation(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["tab_fold"]
+        self.assertRegex(wire, r"\r\n\tfolded-[0-9a-f]{8}\r\n")
+
+    def test_format_string_replaces_value_with_percent_token(self) -> None:
+        seen = self._collect_variants()
+        _, after_value = seen["format_string"]
+        self.assertIn("%", after_value)
+
+    def test_space_before_colon_uses_3char_separator(self) -> None:
+        seen = self._collect_variants()
+        wire, _ = seen["space_before_colon"]
+        # Default separator is ': ' (2 chars). This variant emits ' : '.
+        self.assertIn(" : ", wire)
+
+    def test_max_operations_stacks(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        case = mutator.mutate(
+            packet,
+            MutationConfig(
+                seed=0,
+                layer="wire",
+                profile="parser_breaker",
+                strategy="edge_boundary",
+                max_operations=3,
+            ),
+        )
+        self.assertEqual(len(case.records), 3)
+        for record in case.records:
+            self.assertEqual(record.operator, "edge_boundary")
+
+    def test_profiles_advertise_edge_boundary(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            profile_supports_strategy,
+        )
+
+        for profile in ("legacy", "delivery_preserving", "parser_breaker"):
+            with self.subTest(profile=profile):
+                self.assertTrue(
+                    profile_supports_strategy(profile, "wire", "edge_boundary")
+                )
+
+    def test_ims_specific_profile_does_not_advertise_edge_boundary(self) -> None:
+        from volte_mutation_fuzzer.mutator.profile_catalog import (
+            profile_supports_strategy,
+        )
+
+        # ims_specific deliberately stays narrow (alias_port_desync + sdp_*),
+        # so edge_boundary must not leak in.
+        self.assertFalse(
+            profile_supports_strategy("ims_specific", "wire", "edge_boundary")
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

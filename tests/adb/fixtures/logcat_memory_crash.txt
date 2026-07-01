@@ -1,0 +1,12 @@
+04-25 10:00:00.000 F/libc    ( 9999): Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 9999 (com.sec.imsservice)
+04-25 10:00:00.100 F/DEBUG   (10000): *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+04-25 10:00:00.100 F/DEBUG   (10000): pid: 9999, tid: 9999, name: com.sec.imsservice  >>> com.sec.imsservice <<<
+04-25 10:00:01.000 E/AddressSanitizer( 9999): AddressSanitizer: heap-buffer-overflow on address 0xdeadbeef
+04-25 10:00:01.500 E/HWAddressSanitizer( 9999): HWAddressSanitizer: tag-mismatch on address 0xdeadbeef
+04-25 10:00:02.000 E/libc    ( 9999): double free or corruption (out)
+04-25 10:00:02.500 F/libc    ( 9999): malloc(): unsorted double linked list corrupted
+04-25 10:00:03.000 F/libc    ( 9999): *** stack smashing detected ***: terminated
+04-25 10:00:03.500 E/libc    ( 9999): use-after-free detected in IMS audio buffer
+04-25 10:00:04.000 E/AndroidRuntime(9999): java.lang.OutOfMemoryError: Failed to allocate a 1048576 byte allocation with 524288 free bytes
+04-25 10:00:04.500 E/AndroidRuntime(9999): java.lang.UnsatisfiedLinkError: libims_native.so: cannot find symbol
+04-25 10:00:05.000 I/kernel  (    0): Out of memory: Killed process 9999 (com.sec.imsservice) total-vm:512000kB

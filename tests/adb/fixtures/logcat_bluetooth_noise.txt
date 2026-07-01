@@ -1,0 +1,9 @@
+04-25 09:07:29.436 W/system_server( 1601): Long monitor contention with owner binder:1601_A
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): Cannot acquire BluetoothActivityEnergyInfo
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): java.util.concurrent.ExecutionException: java.lang.RuntimeException: error: 11
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): 	at java.util.concurrent.CompletableFuture.reportGet(CompletableFuture.java:372)
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): 	at java.util.concurrent.CompletableFuture.get(CompletableFuture.java:2072)
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): 	at com.android.server.power.stats.BluetoothPowerStatsCollector.collectStats
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): 	at android.os.Looper.loop(Looper.java:363)
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): 	at android.os.HandlerThread.run(HandlerThread.java:85)
+04-25 09:07:29.457 E/BluetoothPowerStatsCollector( 1601): Caused by: java.lang.RuntimeException: error: 11

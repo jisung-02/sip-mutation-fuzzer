@@ -1,0 +1,4 @@
+04-25 09:07:28.898 I/SIPMSG[0,2]( 2815): [-->] SIP/2.0 500 Server Internal Error [CSeq: 1 MESSAGE]
+04-25 09:09:18.975 I/SIPMSG[0,2]( 2815): [-->] SIP/2.0 500 Server Internal Error [CSeq: 1 MESSAGE]
+04-25 09:09:23.110 I/SIPMSG[0,2]( 2815): [-->] SIP/2.0 400 Bad Request(Multiple values in single-value header Content-Length) [CSeq: 1 MESSAGE]
+04-25 09:10:16.480 I/SIPMSG[0,2]( 2815): [-->] SIP/2.0 408 Request Timeout [CSeq: 1 MESSAGE]
