@@ -434,6 +434,7 @@ def send_via_native_ipsec(
     transport: Literal["UDP", "TCP"] = "UDP",
     alt_src_port: int = 0,
     alt_dst_port: int = 0,
+    ipsec_mode: Literal["native", "null"] = "native",
 ) -> NativeIPsecSendResult:
     driver_script = _UDP_DRIVER_SCRIPT if transport == "UDP" else _TCP_DRIVER_SCRIPT
     driver = [
@@ -457,6 +458,20 @@ def send_via_native_ipsec(
     if transport == "UDP" and (alt_src_port or alt_dst_port):
         driver.extend([str(alt_src_port), str(alt_dst_port)])
     stdin_data = len(payload).to_bytes(4, "big") + payload
+
+    # null mode: temporarily switch outbound SA encryption to NULL so the
+    # packet travels inside a well-formed ESP header (honoring SPD/xfrm
+    # policy) but the payload is plaintext — observable in pcap. The
+    # original ealg is captured first and restored after the send so the
+    # UE's SA is not permanently weakened.
+    saved_ealg: str | None = None
+    if ipsec_mode == "null":
+        saved_ealg = _save_and_null_outbound_ealg(
+            container=container,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+        )
+
     try:
         proc = subprocess.run(
             driver,
@@ -468,10 +483,20 @@ def send_via_native_ipsec(
             check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        if saved_ealg is not None:
+            _restore_outbound_ealg(
+                container=container, src_ip=src_ip, dst_ip=dst_ip, ealg=saved_ealg
+            )
         raise NativeIPsecError(
             f"native IPsec injector failed: {exc}",
             observer_events=(f"native-ipsec:send:failed:{type(exc).__name__}",),
         ) from exc
+
+    if saved_ealg is not None:
+        _restore_outbound_ealg(
+            container=container, src_ip=src_ip, dst_ip=dst_ip, ealg=saved_ealg
+        )
+
     if proc.returncode != 0:
         stderr_text = _normalize_optional_text(
             (proc.stderr or b"").decode("utf-8", errors="replace")[:200]
@@ -487,6 +512,11 @@ def send_via_native_ipsec(
         f"native-ipsec:send:transport:{transport.lower()}",
         f"native-ipsec:tuple:{src_ip}:{src_port}->{dst_ip}:{dst_port}",
     ]
+    if ipsec_mode == "null":
+        if saved_ealg is not None:
+            observer_events.append(f"native-ipsec:null-mode:ealg-saved:{saved_ealg}")
+        else:
+            observer_events.append("native-ipsec:null-mode:no-ealg-found")
     if response_bytes is not None:
         observer_events.append(
             f"native-ipsec:recv:ok:{peer_host}:{peer_port}:{len(response_bytes)}B"
@@ -658,6 +688,168 @@ def observe_pcscf_log_responses(
                 return tuple(observations)
         time.sleep(poll_interval_seconds)
     return tuple(observations)
+
+
+def _save_and_null_outbound_ealg(
+    *,
+    container: str,
+    src_ip: str,
+    dst_ip: str,
+) -> str | None:
+    """Temporarily set the P-CSCF→UE outbound SA encryption to NULL.
+
+    Queries ``ip xfrm state`` for the SA matching ``src <src_ip> dst
+    <dst_ip>`` (direction P-CSCF → UE), captures the current ``ealg``
+    value, then replaces it with ``ealg null`` via ``ip xfrm state update``.
+
+    Returns the original ealg string (e.g. ``aes-cbc``) so the caller can
+    restore it after the send, or ``None`` if no matching SA was found.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "exec", container, "ip", "xfrm", "state"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+
+    # Parse xfrm state to find the SA matching src=src_ip dst=dst_ip and
+    # extract its SPI + current ealg. xfrm state output groups blocks by
+    # blank lines; each block starts with "src X dst Y" and contains a
+    # "spi 0x..." line and an "ealg" (or "enc") line.
+    spi: str | None = None
+    original_ealg: str | None = None
+    in_target_block = False
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            in_target_block = False
+            continue
+        if stripped.startswith("src ") and " dst " in stripped:
+            parts = stripped.split()
+            in_target_block = (
+                len(parts) >= 4 and parts[1] == src_ip and parts[3] == dst_ip
+            )
+            continue
+        if not in_target_block:
+            continue
+        if stripped.startswith("spi "):
+            spi = stripped.split()[1]
+        if stripped.startswith("ealg ") or stripped.startswith("enc "):
+            # "ealg aes-cbc" or "enc aes-cbc" — capture the algorithm name.
+            original_ealg = stripped.split(None, 1)[1].strip()
+
+    if spi is None or original_ealg is None:
+        return None
+
+    # Update the SA to use null encryption. The SPI must be passed as-is
+    # (hex string), and both src/dst must match the original SA.
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                container,
+                "ip",
+                "xfrm",
+                "state",
+                "update",
+                "src",
+                src_ip,
+                "dst",
+                dst_ip,
+                "proto",
+                "esp",
+                "spi",
+                spi,
+                "enc",
+                "null",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    return original_ealg
+
+
+def _restore_outbound_ealg(
+    *,
+    container: str,
+    src_ip: str,
+    dst_ip: str,
+    ealg: str,
+) -> None:
+    """Restore the original encryption algorithm on the P-CSCF→UE SA."""
+    try:
+        result = subprocess.run(
+            ["docker", "exec", container, "ip", "xfrm", "state"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return
+    if result.returncode != 0:
+        return
+
+    spi: str | None = None
+    in_target_block = False
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            in_target_block = False
+            continue
+        if stripped.startswith("src ") and " dst " in stripped:
+            parts = stripped.split()
+            in_target_block = (
+                len(parts) >= 4 and parts[1] == src_ip and parts[3] == dst_ip
+            )
+            continue
+        if not in_target_block:
+            continue
+        if stripped.startswith("spi "):
+            spi = stripped.split()[1]
+
+    if spi is None:
+        return
+
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                container,
+                "ip",
+                "xfrm",
+                "state",
+                "update",
+                "src",
+                src_ip,
+                "dst",
+                dst_ip,
+                "proto",
+                "esp",
+                "spi",
+                spi,
+                "enc",
+                ealg,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
 
 
 __all__ = [

@@ -285,7 +285,7 @@ class SIPSenderReactor:
         resolved_port = resolved.port
         port_pc_for_alt: int | None = None
         pixel_request_uri: str | None = None
-        if target.ipsec_mode == "native" and target.msisdn is not None:
+        if target.ipsec_mode in ("native", "null") and target.msisdn is not None:
             _port_pc, port_ps = resolver.resolve_protected_ports(
                 target.msisdn,
                 ue_ip=resolved.host,
@@ -320,7 +320,7 @@ class SIPSenderReactor:
                 f"pixel-mode:rewrite-request-uri:{pixel_request_uri}"
             )
 
-        if target.ipsec_mode == "native":
+        if target.ipsec_mode in ("native", "null"):
             return self._send_via_native_ipsec(
                 artifact=artifact,
                 target=target,
@@ -541,6 +541,7 @@ class SIPSenderReactor:
                 transport=target.transport,
                 alt_src_port=alt_src,
                 alt_dst_port=alt_dst,
+                ipsec_mode=target.ipsec_mode if target.ipsec_mode else "native",
             )
             observer_events.extend(native_result.observer_events)
 
