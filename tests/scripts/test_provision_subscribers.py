@@ -124,5 +124,119 @@ class ProvisionOpen5gsTests(unittest.TestCase):
         self.assertIn("updated", output)
 
 
+class ProvisionPyhssTests(unittest.TestCase):
+    def _subscribers(self) -> list[dict]:
+        return [
+            {
+                "imsi": "001010000000001",
+                "ki": "00112233445566778899AABBCCDDEEFF",
+                "opc": "FFEEDDCCBBAA99887766554433221100",
+                "msisdn": "222222",
+            }
+        ]
+
+    def test_success_flow_resolves_auc_id_from_upsert_response(self) -> None:
+        put_results = [
+            (200, b"{}"),  # apn internet
+            (200, b"{}"),  # apn ims
+            (200, b'{"auc_id": 7}'),  # auc
+            (200, b"{}"),  # subscriber
+            (200, b"{}"),  # ims_subscriber
+        ]
+        with (
+            mock.patch.object(
+                provision_subscribers_script,
+                "put_json",
+                side_effect=put_results,
+            ) as put_mock,
+            mock.patch.object(
+                provision_subscribers_script, "get_json", return_value=(0, b"")
+            ) as get_mock,
+        ):
+            with _capture_stdout() as stdout:
+                provision_subscribers_script.provision_pyhss({}, self._subscribers())
+        self.assertEqual(put_mock.call_count, 5)
+        self.assertEqual(get_mock.call_count, 0)
+        subscriber_payload = put_mock.call_args_list[3].args[1]
+        self.assertEqual(subscriber_payload["auc_id"], 7)
+        self.assertIn("Done", stdout.getvalue())
+
+    def test_unreachable_pyhss_exits_nonzero(self) -> None:
+        # The upsert statuses used to be discarded entirely: with PyHSS
+        # down the script still printed "APNs ready"/"Complete!".
+        with (
+            mock.patch.object(
+                provision_subscribers_script,
+                "put_json",
+                return_value=(0, b""),
+            ),
+            mock.patch.object(
+                provision_subscribers_script, "get_json", return_value=(0, b"")
+            ),
+        ):
+            with _capture_stdout() as stdout:
+                with self.assertRaises(SystemExit) as ctx:
+                    provision_subscribers_script.provision_pyhss(
+                        {}, self._subscribers()
+                    )
+        self.assertEqual(ctx.exception.code, 1)
+        output = stdout.getvalue()
+        self.assertIn("apn:internet", output)
+        self.assertIn("PyHSS provisioning failed", output)
+        self.assertNotIn("Done", output)
+
+    def test_unresolved_auc_id_exits_without_subscriber_write(self) -> None:
+        # The old code fell back to the loop index as auc_id, silently
+        # writing a wrong reference into the subscriber row.
+        put_results = [
+            (200, b"{}"),  # apn internet
+            (200, b"{}"),  # apn ims
+            (200, b"{}"),  # auc upsert "succeeded" but exposes no id
+        ]
+        with (
+            mock.patch.object(
+                provision_subscribers_script,
+                "put_json",
+                side_effect=put_results,
+            ) as put_mock,
+            mock.patch.object(
+                provision_subscribers_script,
+                "get_json",
+                return_value=(200, b"{}"),
+            ) as get_mock,
+        ):
+            with _capture_stdout() as stdout:
+                with self.assertRaises(SystemExit) as ctx:
+                    provision_subscribers_script.provision_pyhss(
+                        {}, self._subscribers()
+                    )
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertEqual(put_mock.call_count, 3)
+        self.assertEqual(get_mock.call_count, 1)
+        self.assertIn("auc_id", stdout.getvalue())
+
+
+class CheckEpcRunningTests(unittest.TestCase):
+    def _run_with_containers(self, names: str) -> bool:
+        result = mock.MagicMock()
+        result.stdout = names
+        with mock.patch.object(
+            provision_subscribers_script.subprocess, "run", return_value=result
+        ):
+            return provision_subscribers_script.check_epc_running()
+
+    def test_all_required_containers_running(self) -> None:
+        self.assertTrue(self._run_with_containers("hss\nmongo\npyhss\n"))
+
+    def test_missing_containers_fail_check(self) -> None:
+        # Only checking "hss" let provisioning start with mongo/pyhss down
+        # and fail halfway through.
+        with _capture_stdout() as stdout:
+            result = self._run_with_containers("hss\n")
+        self.assertFalse(result)
+        self.assertIn("mongo", stdout.getvalue())
+        self.assertIn("pyhss", stdout.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

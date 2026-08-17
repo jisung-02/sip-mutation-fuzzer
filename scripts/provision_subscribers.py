@@ -32,7 +32,14 @@ def check_epc_running() -> bool:
         capture_output=True,
         text=True,
     )
-    return "hss" in result.stdout.splitlines()
+    running = set(result.stdout.splitlines())
+    # 프로비저닝에 필요한 컨테이너 전부: Open5GS HSS(dbctl), mongo(mongosh),
+    # PyHSS(HTTP). hss 하나만 검사하면 나머지가 죽어 있을 때 중반에 실패한다.
+    missing = {"hss", "mongo", "pyhss"} - running
+    if missing:
+        print(f"Missing containers: {', '.join(sorted(missing))}")
+        return False
+    return True
 
 
 def docker_exec(container: str, *cmd: str) -> tuple[int, str, str]:
@@ -232,31 +239,31 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
     print("-" * 40)
 
     base_url = env.get("VMF_REAL_UE_PYHSS_URL", "http://localhost:8080")
+    failures: list[str] = []
 
-    # APN 생성 (이미 있으면 무시)
+    # APN 생성 (이미 있으면 무시). upsert 결과를 검사한다 — 예전에는
+    # 반환 status를 전부 폐기해 PyHSS가 죽어 있어도 성공처럼 진행했다.
     print("  Creating APNs...")
-    upsert_pyhss(
-        base_url,
-        "apn",
-        {"apn": "internet", "apn_ambr_dl": 0, "apn_ambr_ul": 0},
-        "apn",
-        "internet",
-    )
-    upsert_pyhss(
-        base_url,
-        "apn",
-        {"apn": "ims", "apn_ambr_dl": 0, "apn_ambr_ul": 0},
-        "apn",
-        "ims",
-    )
-    print("    APNs ready (internet, ims)")
+    for apn in ("internet", "ims"):
+        status, _ = upsert_pyhss(
+            base_url,
+            "apn",
+            {"apn": apn, "apn_ambr_dl": 0, "apn_ambr_ul": 0},
+            "apn",
+            apn,
+        )
+        if not (200 <= status < 300):
+            print(f"    FAILED (apn:{apn}): PyHSS returned status {status}")
+            failures.append(f"apn:{apn}")
+    if not failures:
+        print("    APNs ready (internet, ims)")
 
     mnc = env.get("MNC", "01").zfill(3)
     mcc = env.get("MCC", "001")
     ims_domain = f"ims.mnc{mnc}.mcc{mcc}.3gppnetwork.org"
     scscf_uri = f"sip:scscf.{ims_domain}:6060"
 
-    for i, ue in enumerate(subscribers, start=1):
+    for ue in subscribers:
         imsi = ue["imsi"]
         ki = ue["ki"]
         opc = ue["opc"]
@@ -264,7 +271,7 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
         print(f"  Adding IMSI: {imsi} (MSISDN: {msisdn})")
 
         # AUC 생성 또는 업데이트 (업데이트 시 sqn 리셋 금지 — IMS 인증 깨짐)
-        _, auc = upsert_pyhss(
+        status, auc = upsert_pyhss(
             base_url,
             "auc",
             {"ki": ki, "opc": opc, "amf": "8000", "sqn": 0, "imsi": imsi},
@@ -272,10 +279,26 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
             imsi,
             update_data={"ki": ki, "opc": opc, "amf": "8000", "imsi": imsi},
         )
-        auc_id = auc.get("auc_id", i)
+        auc_id = auc.get("auc_id") if 200 <= status < 300 else None
+        if auc_id is None:
+            # upsert 응답에 id가 없으면 자연키 조회로 폴백
+            get_status, get_body = get_json(f"{base_url}/auc/imsi/{imsi}")
+            if get_status == 200:
+                try:
+                    record = json.loads(get_body)
+                except Exception:
+                    record = None
+                if isinstance(record, dict) and "Result" not in record:
+                    auc_id = record.get("auc_id")
+        if auc_id is None:
+            # 인덱스 폴백 금지: 기존 auc 행이 있는 테이블에서 루프 인덱스를
+            # auc_id로 쓰면 잘못된 참조가 조용히 기록된다.
+            print(f"    FAILED ({imsi}): could not resolve auc_id")
+            failures.append(imsi)
+            continue
 
         # Subscriber 생성 또는 업데이트
-        _, sub = upsert_pyhss(
+        status, _ = upsert_pyhss(
             base_url,
             "subscriber",
             {
@@ -291,11 +314,15 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
             "imsi",
             imsi,
         )
+        if not (200 <= status < 300):
+            print(f"    FAILED ({imsi}): subscriber upsert status {status}")
+            failures.append(imsi)
+            continue
 
         # IMS Subscriber 생성 또는 업데이트
         # ifc_path 필수 — null이면 S-CSCF MAR에서 403 반환
         scscf_peer = f"scscf.{ims_domain}"
-        upsert_pyhss(
+        status, _ = upsert_pyhss(
             base_url,
             "ims_subscriber",
             {
@@ -311,7 +338,14 @@ def provision_pyhss(env: dict, subscribers: list[dict]) -> None:
             "imsi",
             imsi,
         )
+        if not (200 <= status < 300):
+            print(f"    FAILED ({imsi}): ims_subscriber upsert status {status}")
+            failures.append(imsi)
 
+    if failures:
+        print(f"\n  PyHSS provisioning failed for: {', '.join(failures)}")
+        print("  Fix the errors above and re-run")
+        sys.exit(1)
     print("  Done\n")
 
 
