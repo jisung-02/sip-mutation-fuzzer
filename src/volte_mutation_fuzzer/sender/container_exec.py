@@ -1,8 +1,10 @@
 """Legacy sender for Docker container network namespaces.
 
 This module remains as the compatibility path for ``bind_container``-based
-real-UE workflows such as the current ``null`` and ``bypass`` IPsec modes.
-The native IPsec path is preferred for default real-UE campaigns.
+real-UE workflows such as the current ``bypass`` IPsec mode.
+The native IPsec path (``send_via_native_ipsec``) handles both ``native``
+and ``null`` modes; this container-exec path is used only when IPsec is
+bypassed or when an explicit host-side spoofed source IP is not configured.
 
 The :func:`send_via_container` helper delegates UDP/TCP SIP transmission to a
 minimal Python driver that runs inside the target container via ``docker exec -i``.
