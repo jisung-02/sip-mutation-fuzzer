@@ -122,15 +122,13 @@ class SIPSenderCLITests(unittest.TestCase):
             with self.subTest(ipsec_mode=ipsec_mode):
                 with patch(
                     "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_packet",
-                    side_effect=lambda _packet, target, **_kwargs: (
-                        SendReceiveResult(
-                            target=target,
-                            artifact_kind="packet",
-                            bytes_sent=0,
-                            outcome="success",
-                            send_started_at=0.0,
-                            send_completed_at=0.0,
-                        )
+                    side_effect=lambda _packet, target, **_kwargs: SendReceiveResult(
+                        target=target,
+                        artifact_kind="packet",
+                        bytes_sent=0,
+                        outcome="success",
+                        send_started_at=0.0,
+                        send_completed_at=0.0,
                     ),
                 ) as mock_send_packet:
                     result = self.runner.invoke(
@@ -166,15 +164,13 @@ class SIPSenderCLITests(unittest.TestCase):
             with self.subTest(ipsec_mode=ipsec_mode):
                 with patch(
                     "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                    side_effect=lambda artifact, target, **_kwargs: (
-                        SendReceiveResult(
-                            target=target,
-                            artifact_kind=artifact.artifact_kind,
-                            bytes_sent=0,
-                            outcome="success",
-                            send_started_at=0.0,
-                            send_completed_at=0.0,
-                        )
+                    side_effect=lambda artifact, target, **_kwargs: SendReceiveResult(
+                        target=target,
+                        artifact_kind=artifact.artifact_kind,
+                        bytes_sent=0,
+                        outcome="success",
+                        send_started_at=0.0,
+                        send_completed_at=0.0,
                     ),
                 ) as mock_send_artifact:
                     result = self.runner.invoke(
@@ -318,15 +314,13 @@ class SIPSenderCLITests(unittest.TestCase):
             with self.subTest(ipsec_mode=ipsec_mode):
                 with patch(
                     "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                    side_effect=lambda artifact, target, **_kwargs: (
-                        SendReceiveResult(
-                            target=target,
-                            artifact_kind=artifact.artifact_kind,
-                            bytes_sent=0,
-                            outcome="success",
-                            send_started_at=0.0,
-                            send_completed_at=0.0,
-                        )
+                    side_effect=lambda artifact, target, **_kwargs: SendReceiveResult(
+                        target=target,
+                        artifact_kind=artifact.artifact_kind,
+                        bytes_sent=0,
+                        outcome="success",
+                        send_started_at=0.0,
+                        send_completed_at=0.0,
                     ),
                 ) as mock_send_artifact:
                     result = self.runner.invoke(
@@ -517,15 +511,13 @@ class SIPSenderCLITests(unittest.TestCase):
             ),
             patch(
                 "volte_mutation_fuzzer.sender.core.SIPSenderReactor.send_artifact",
-                side_effect=lambda _artifact, target, **_kwargs: (
-                    SendReceiveResult(
-                        target=target,
-                        artifact_kind="wire",
-                        bytes_sent=0,
-                        outcome="success",
-                        send_started_at=0.0,
-                        send_completed_at=0.0,
-                    )
+                side_effect=lambda _artifact, target, **_kwargs: SendReceiveResult(
+                    target=target,
+                    artifact_kind="wire",
+                    bytes_sent=0,
+                    outcome="success",
+                    send_started_at=0.0,
+                    send_completed_at=0.0,
                 ),
             ) as mock_send_artifact,
         ):

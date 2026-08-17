@@ -135,7 +135,7 @@ Evidence sources:
 - `campaign.jsonl`
 - `pcap/`
 - `interesting/case_<id>/`
-- Android logcat/bugreport/screenshot snapshots
+- Android logcat/bugreport snapshots
 - iOS syslog/crash report snapshots
 - generated HTML report
 

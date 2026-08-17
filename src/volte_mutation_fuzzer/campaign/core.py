@@ -560,11 +560,7 @@ class CampaignExecutor:
 
         # Call state checker for INVITE teardown verification
         self._call_state_checker: "CallStateChecker | None" = None
-        if (
-            config.adb_enabled
-            and config.mt
-            and config.wait_idle_timeout_seconds > 0
-        ):
+        if config.adb_enabled and config.mt and config.wait_idle_timeout_seconds > 0:
             from volte_mutation_fuzzer.adb.call_state import CallStateChecker
 
             self._call_state_checker = CallStateChecker(
@@ -606,10 +602,7 @@ class CampaignExecutor:
                 # 파일 없거나 case 없음 → 새 캠페인처럼 시작. 단 파일이
                 # 존재하는데 읽을 수 없으면(헤더 손상 등) 새 헤더 기록이
                 # 기존 데이터를 통째로 지우므로 거부한다.
-                if (
-                    self._jsonl_path.exists()
-                    and self._jsonl_path.stat().st_size > 0
-                ):
+                if self._jsonl_path.exists() and self._jsonl_path.stat().st_size > 0:
                     try:
                         self._store.read_all()
                     except Exception as exc:

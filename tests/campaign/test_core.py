@@ -407,9 +407,7 @@ class CampaignResumeIntegrityTests(unittest.TestCase):
             timestamp=time.time(),
         )
 
-    def _seed_campaign_file(
-        self, tmpdir: str, case_count: int, torn: bool
-    ) -> Path:
+    def _seed_campaign_file(self, tmpdir: str, case_count: int, torn: bool) -> Path:
         config = CampaignConfig(
             target_host="127.0.0.1",
             methods=("OPTIONS",),
@@ -459,9 +457,7 @@ class CampaignResumeIntegrityTests(unittest.TestCase):
         """A torn trailing line is repaired; appends never merge with it."""
         with tempfile.TemporaryDirectory() as tmpdir:
             case_count = 5
-            path = self._seed_campaign_file(
-                tmpdir, case_count=case_count, torn=True
-            )
+            path = self._seed_campaign_file(tmpdir, case_count=case_count, torn=True)
 
             config = CampaignConfig(
                 target_host="127.0.0.1",

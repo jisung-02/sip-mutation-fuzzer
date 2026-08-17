@@ -486,9 +486,7 @@ def send_via_native_ipsec(
             container=container, src_ip=src_ip, dst_ip=dst_ip, swap=null_swap
         )
         if restored:
-            restore_events.append(
-                f"native-ipsec:null-mode:restore-ok:{null_swap.spi}"
-            )
+            restore_events.append(f"native-ipsec:null-mode:restore-ok:{null_swap.spi}")
         else:
             restore_events.append(
                 f"native-ipsec:null-mode:restore-failed:{null_swap.spi}"
@@ -843,7 +841,9 @@ def _save_and_null_outbound_ealg(
     if result.returncode != 0:
         return None
 
-    candidates = [sa for sa in _collect_outbound_sas(result.stdout, src_ip, dst_ip) if sa.enc_tail]
+    candidates = [
+        sa for sa in _collect_outbound_sas(result.stdout, src_ip, dst_ip) if sa.enc_tail
+    ]
     if not candidates:
         return None
     exact = [
@@ -895,9 +895,7 @@ def _save_and_null_outbound_ealg(
             check=False,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning(
-            "null mode: ealg swap failed for spi %s: %s", target.spi, exc
-        )
+        logger.warning("null mode: ealg swap failed for spi %s: %s", target.spi, exc)
         return None
     if null_result.returncode != 0:
         stderr_text = (null_result.stderr or null_result.stdout or "").strip()[:200]
