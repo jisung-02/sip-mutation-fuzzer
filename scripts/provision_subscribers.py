@@ -126,6 +126,7 @@ def provision_open5gs(env: dict, subscribers: list[dict]) -> None:
     print("[1/2] Open5GS HSS (MongoDB)")
     print("-" * 40)
 
+    failures: list[str] = []
     for ue in subscribers:
         imsi = ue["imsi"]
         ki = ue["ki"]
@@ -206,8 +207,23 @@ if (existing) {{
   print("inserted");
 }}
 """
-        docker_exec("mongo", "mongosh", "open5gs", "--quiet", "--eval", mongo_script)
+        rc, out, err = docker_exec(
+            "mongo", "mongosh", "open5gs", "--quiet", "--eval", mongo_script
+        )
+        if rc == 0 and ("inserted" in out or "updated" in out):
+            print(f"    {out.strip()}")
+        else:
+            # The mongosh result used to be discarded entirely: a failed
+            # run still printed "Done" and provisioning continued to PyHSS
+            # with a half-provisioned Open5GS and a false success report.
+            detail = err.strip() or out.strip() or f"mongosh exited with status {rc}"
+            print(f"    FAILED: {detail}")
+            failures.append(imsi)
 
+    if failures:
+        print(f"\n  Open5GS provisioning failed for: {', '.join(failures)}")
+        print("  PyHSS provisioning skipped — fix the errors above and re-run")
+        sys.exit(1)
     print("  Done\n")
 
 
