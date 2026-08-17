@@ -3750,14 +3750,16 @@ class PacketFileExecutionTests(unittest.TestCase):
         self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
         return tmp.name
 
-    def _build_executor(self, packet_bytes: bytes) -> tuple[CampaignExecutor, str]:
+    def _build_executor(
+        self, packet_bytes: bytes, method: str = "OPTIONS"
+    ) -> tuple[CampaignExecutor, str]:
         path = self._write_packet(packet_bytes)
         cfg = CampaignConfig(
             mode="real-ue-direct",
             target_host="10.20.20.8",
             target_msisdn="111111",
             packet_file=path,
-            methods=("OPTIONS",),
+            methods=(method,),
             layers=("byte",),
             strategies=("identity",),
             max_cases=1,
@@ -3877,6 +3879,42 @@ class PacketFileExecutionTests(unittest.TestCase):
 
         branch.assert_called_once()
         template_branch.assert_not_called()
+        self.assertIs(result, sentinel)
+
+    def test_packet_file_in_dialog_method_skips_dialog_router(self) -> None:
+        """A BYE packet file must be replayed verbatim, not intercepted.
+
+        BYE is one of the runtime-complete dialog methods. Before the
+        packet-file branch was hoisted above the dialog router, a BYE file
+        was silently replaced by a generator-built synthetic dialog and the
+        file bytes were never sent.
+        """
+        raw = b"BYE sip:user@host SIP/2.0\r\n\r\n"
+        executor, _ = self._build_executor(raw, method="BYE")
+        spec = CaseSpec(
+            case_id=0,
+            seed=0,
+            method="BYE",
+            layer="byte",
+            strategy="identity",
+        )
+        sentinel = SimpleNamespace(verdict="normal")
+
+        with (
+            unittest.mock.patch.object(
+                executor,
+                "_execute_packet_file_case",
+                return_value=sentinel,
+            ) as branch,
+            unittest.mock.patch.object(
+                executor,
+                "_execute_dialog_case",
+            ) as dialog_branch,
+        ):
+            result = executor._execute_case(spec)
+
+        branch.assert_called_once()
+        dialog_branch.assert_not_called()
         self.assertIs(result, sentinel)
 
     def test_case_generator_collapses_layers_to_byte_when_packet_file_set(self) -> None:

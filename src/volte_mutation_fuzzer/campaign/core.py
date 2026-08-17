@@ -810,6 +810,20 @@ class CampaignExecutor:
         mutated: MutatedCase | None = None
 
         try:
+            # Packet-file path (real-ue-direct, file bytes sent verbatim).
+            # Takes priority over the dialog router: the file's start-line
+            # method pins the campaign method set (CampaignConfig validation),
+            # so an in-dialog file (BYE/ACK/CANCEL/INFO/PRACK/REFER/UPDATE)
+            # must be replayed from its bytes instead of being swallowed by
+            # the synthetic dialog executor. Also checked before MT mode
+            # because the two are mutually exclusive (validated in
+            # CampaignConfig); this ordering is a safety belt in case both
+            # ever leak through.
+            if self._packet_file_bytes is not None and spec.response_code is None:
+                return self._execute_packet_file_case(
+                    spec, timestamp, case_started_monotonic
+                )
+
             scenario = None
             if spec.response_code is None:
                 scenario = self._dialog_scenario_for_runtime_method(spec.method)
@@ -817,15 +831,6 @@ class CampaignExecutor:
                     return self._execute_dialog_case(
                         spec, scenario, timestamp, case_started_monotonic
                     )
-
-            # Packet-file path (real-ue-direct, file bytes sent verbatim).
-            # Checked before MT mode because the two are mutually exclusive
-            # (validated in CampaignConfig); this ordering is a safety belt in
-            # case both ever leak through.
-            if self._packet_file_bytes is not None and spec.response_code is None:
-                return self._execute_packet_file_case(
-                    spec, timestamp, case_started_monotonic
-                )
 
             # MT template path (real-ue-direct with 3GPP format)
             if self._mt_template_text is not None and spec.response_code is None:
