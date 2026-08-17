@@ -520,7 +520,9 @@ class SIPMutator:
                     if candidate.path not in used_paths
                     and (
                         config.strategy != "safe"
-                        or not self._is_wire_target_protected(candidate)
+                        or not self._is_wire_target_protected(
+                            candidate, current_message
+                        )
                     )
                 ),
                 config.profile,
@@ -3413,21 +3415,29 @@ class SIPMutator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _is_wire_target_protected(target: MutationTarget) -> bool:
+    def _is_wire_target_protected(
+        target: MutationTarget,
+        editable_message: EditableSIPMessage,
+    ) -> bool:
         """Return True if *target* must not be mutated in safe strategy."""
         path = target.path
         if path in _SAFE_PROTECTED_WIRE_PATHS:
             return True
-        # header:Via, header:Call-ID, header:CSeq, header[N] for those
+        header_name: str | None = None
         if path.startswith("header:"):
             header_name = path[len("header:") :]
-            if header_name.lower() in _SAFE_PROTECTED_HEADER_NAMES:
+        elif (index_match := _HEADER_INDEX_PATTERN.fullmatch(path)) is not None:
+            # Indexed targets (header[3]) name the same physical headers as
+            # the named form (header:Via) — resolve the index against the
+            # current message, otherwise safe strategy mutated Via/Call-ID/
+            # CSeq through their index paths.
+            index = int(index_match.group(1))
+            if index >= len(editable_message.headers):
+                # Unresolvable index: block rather than guess in safe mode.
                 return True
-        if path.startswith("header["):
-            # Cannot determine header name from index alone at this level,
-            # so we don't block indexed targets — the named header filter
-            # already covers the common case.
-            pass
+            header_name = editable_message.headers[index].name
+        if header_name is not None:
+            return header_name.lower() in _SAFE_PROTECTED_HEADER_NAMES
         return False
 
     @staticmethod

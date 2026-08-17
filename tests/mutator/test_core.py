@@ -1720,6 +1720,79 @@ class SIPMutatorIdentityStrategyTests(SIPMutatorTestCase):
         self.assertIn("unsupported mutation strategy", str(ctx.exception))
 
 
+class SIPMutatorSafeStrategyTests(SIPMutatorTestCase):
+    @staticmethod
+    def _protected_header_lines(wire_text: str) -> list[str]:
+        return [
+            line
+            for line in wire_text.split("\r\n")
+            if line.split(":", 1)[0].strip().lower() in ("via", "call-id", "cseq")
+        ]
+
+    def test_wire_target_protection_covers_indexed_header_paths(self) -> None:
+        # _collect_wire_targets emits both header:<Name> and header[N] for
+        # the same physical headers; the safe filter must resolve the index
+        # against the message, not skip it (it used to, letting Via/Call-ID/
+        # CSeq mutate through their index paths).
+        mutator = SIPMutator()
+        message = mutator._to_editable_message(self.build_request())
+
+        for index, header in enumerate(message.headers):
+            expected = header.name.lower() in ("via", "call-id", "cseq")
+            indexed = mutator._is_wire_target_protected(
+                MutationTarget(layer="wire", path=f"header[{index}]"), message
+            )
+            self.assertEqual(
+                indexed,
+                expected,
+                f"header[{index}] ({header.name}) protection mismatch",
+            )
+            named = mutator._is_wire_target_protected(
+                MutationTarget(layer="wire", path=f"header:{header.name}"), message
+            )
+            self.assertEqual(
+                named,
+                expected,
+                f"header:{header.name} protection mismatch",
+            )
+
+        self.assertTrue(
+            mutator._is_wire_target_protected(
+                MutationTarget(layer="wire", path="header[9999]"), message
+            ),
+            "unresolvable index must be blocked in safe mode",
+        )
+
+    def test_safe_strategy_never_mutates_protected_headers(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+        baseline = self._protected_header_lines(
+            mutator._finalize_wire_message(mutator._to_editable_message(packet))
+        )
+
+        saw_mutation = False
+        for seed in range(100):
+            case = mutator.mutate(
+                packet,
+                MutationConfig(
+                    strategy="safe",
+                    layer="wire",
+                    seed=seed,
+                    max_operations=3,
+                ),
+            )
+            self.assertEqual(
+                self._protected_header_lines(case.wire_text or ""),
+                baseline,
+                f"seed {seed} mutated a protected header via {[r.target.path for r in case.records]}",
+            )
+            saw_mutation = saw_mutation or bool(case.records)
+
+        # Protection must not degenerate safe into a no-op: non-protected
+        # headers are still mutated.
+        self.assertTrue(saw_mutation)
+
+
 class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
     def test_mutate_rejects_unsupported_strategy(self) -> None:
         mutator = SIPMutator()
