@@ -274,6 +274,26 @@ class EnsureImsApnTests(unittest.TestCase):
                 self.manager._ensure_ims_apn("001010000000001")
         self.assertIn("failed to update IMS APN", str(ctx.exception))
 
+    def test_ims_apn_session_matches_provisioning_script(self) -> None:
+        # infra must produce the same IMS APN session data as
+        # scripts/provision_subscribers.py (type 1 = IPv4, IMS signalling
+        # ARP priority 1): diverging here silently rewrote subscriber data
+        # depending on which provisioner ran last.
+        run, calls = _install_fake_run(
+            mongo_results=[_completed(stdout="ims-apn-added\n")]
+        )
+        with mock.patch.object(subprocess, "run", side_effect=run):
+            self.manager._ensure_ims_apn("001010000000001")
+        script = next(
+            command[command.index("--eval") + 1]
+            for command in calls
+            if _is_mongo_command(command)
+        )
+        self.assertIn("type: 1", script)
+        self.assertIn("priority_level: 1", script)
+        self.assertNotIn("type: 3", script)
+        self.assertNotIn("priority_level: 8", script)
+
 
 class ProvisionPyhssSubscriberTests(InfraManagerTestCase):
     IMSI = "001010000000001"

@@ -369,9 +369,13 @@ for (const item of slices) {
 if (!imsPresent) {
   slices[0].sst = slices[0].sst ?? 1;
   slices[0].default_indicator = true;
+  // Session values must match scripts/provision_subscribers.py (type 1 =
+  // IPv4, IMS signalling ARP priority 1): the script's values are the
+  // ones validated against the real UE, and diverging here silently
+  // rewrote subscriber data depending on which provisioner ran last.
   slices[0].session.push({
     name: "ims",
-    type: 3,
+    type: 1,
     ambr: {
       uplink: {value: 1, unit: 3},
       downlink: {value: 1, unit: 3},
@@ -379,7 +383,7 @@ if (!imsPresent) {
     qos: {
       index: 5,
       arp: {
-        priority_level: 8,
+        priority_level: 1,
         pre_emption_capability: 1,
         pre_emption_vulnerability: 1,
       },
