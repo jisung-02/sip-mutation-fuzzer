@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import time
@@ -15,6 +16,8 @@ from volte_mutation_fuzzer.sender.real_ue import (
     RealUEDirectResolutionError,
     ResolvedNativeIPsecSession,
 )
+
+logger = logging.getLogger(__name__)
 
 _SIP_STATUS_PATTERN: Final[re.Pattern[str]] = re.compile(r"^SIP/2\.0\s+(\d{3})\s*(.*)$")
 # Earlier iterations of this module used SOCK_RAW + IP_HDRINCL to spoof the
@@ -461,16 +464,35 @@ def send_via_native_ipsec(
 
     # null mode: temporarily switch outbound SA encryption to NULL so the
     # packet travels inside a well-formed ESP header (honoring SPD/xfrm
-    # policy) but the payload is plaintext — observable in pcap. The
-    # original ealg is captured first and restored after the send so the
-    # UE's SA is not permanently weakened.
-    saved_ealg: str | None = None
+    # policy) but the payload is plaintext — observable in pcap. The swap
+    # records the exact SPI and the original ``enc`` tail (algorithm name
+    # plus key hex when the dump exposes it) so the restore after the send
+    # re-encrypts the same SA instead of an arbitrary one.
+    null_swap: NullEalgSwap | None = None
     if ipsec_mode == "null":
-        saved_ealg = _save_and_null_outbound_ealg(
+        null_swap = _save_and_null_outbound_ealg(
             container=container,
             src_ip=src_ip,
             dst_ip=dst_ip,
+            src_port=src_port,
+            dst_port=dst_port,
         )
+    restore_events: list[str] = []
+
+    def _restore_null_swap() -> None:
+        if null_swap is None:
+            return
+        restored = _restore_outbound_ealg(
+            container=container, src_ip=src_ip, dst_ip=dst_ip, swap=null_swap
+        )
+        if restored:
+            restore_events.append(
+                f"native-ipsec:null-mode:restore-ok:{null_swap.spi}"
+            )
+        else:
+            restore_events.append(
+                f"native-ipsec:null-mode:restore-failed:{null_swap.spi}"
+            )
 
     try:
         proc = subprocess.run(
@@ -483,19 +505,16 @@ def send_via_native_ipsec(
             check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-        if saved_ealg is not None:
-            _restore_outbound_ealg(
-                container=container, src_ip=src_ip, dst_ip=dst_ip, ealg=saved_ealg
-            )
+        _restore_null_swap()
         raise NativeIPsecError(
             f"native IPsec injector failed: {exc}",
-            observer_events=(f"native-ipsec:send:failed:{type(exc).__name__}",),
+            observer_events=(
+                f"native-ipsec:send:failed:{type(exc).__name__}",
+                *restore_events,
+            ),
         ) from exc
 
-    if saved_ealg is not None:
-        _restore_outbound_ealg(
-            container=container, src_ip=src_ip, dst_ip=dst_ip, ealg=saved_ealg
-        )
+    _restore_null_swap()
 
     if proc.returncode != 0:
         stderr_text = _normalize_optional_text(
@@ -513,10 +532,14 @@ def send_via_native_ipsec(
         f"native-ipsec:tuple:{src_ip}:{src_port}->{dst_ip}:{dst_port}",
     ]
     if ipsec_mode == "null":
-        if saved_ealg is not None:
-            observer_events.append(f"native-ipsec:null-mode:ealg-saved:{saved_ealg}")
+        if null_swap is not None:
+            observer_events.append(
+                "native-ipsec:null-mode:ealg-saved:"
+                f"{null_swap.original_enc_tail.split()[0]}:{null_swap.spi}"
+            )
         else:
             observer_events.append("native-ipsec:null-mode:no-ealg-found")
+        observer_events.extend(restore_events)
     if response_bytes is not None:
         observer_events.append(
             f"native-ipsec:recv:ok:{peer_host}:{peer_port}:{len(response_bytes)}B"
@@ -690,20 +713,122 @@ def observe_pcscf_log_responses(
     return tuple(observations)
 
 
+@dataclass(frozen=True)
+class NullEalgSwap:
+    """State needed to undo a null-encryption swap on one outbound SA.
+
+    ``original_enc_tail`` is the full text after ``enc`` in the xfrm state
+    dump — the algorithm name plus the key hex when the dump exposes it
+    (e.g. ``cbc(aes) 0x44556677``). Keeping the whole tail lets the restore
+    re-specify the key, which ``ip xfrm state update`` requires for
+    non-null algorithms.
+    """
+
+    spi: str
+    original_enc_tail: str
+
+
+@dataclass(frozen=True)
+class _OutboundSa:
+    spi: str
+    enc_tail: str | None
+    sel_sport: str | None
+    sel_dport: str | None
+
+
+def _collect_outbound_sas(stdout: str, src_ip: str, dst_ip: str) -> list[_OutboundSa]:
+    """Parse ``ip xfrm state`` blocks for ESP SAs with src→dst direction.
+
+    Real iproute2 output puts the SPI on the ``proto esp spi 0x… reqid …``
+    line (not on a standalone ``spi`` line), so both shapes are accepted.
+    The selector line (``sel src … sport X dport Y``) is captured when
+    present — IMS installs several SAs with the same src/dst pair and only
+    the selector's ports distinguish them.
+    """
+    sas: list[_OutboundSa] = []
+    block: list[str] = []
+    blocks: list[list[str]] = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            if block:
+                blocks.append(block)
+                block = []
+            continue
+        block.append(line.strip())
+    if block:
+        blocks.append(block)
+
+    for blk in blocks:
+        header = blk[0].split()
+        if len(header) < 4 or header[0] != "src" or header[2] != "dst":
+            continue
+        if header[1] != src_ip or header[3] != dst_ip:
+            continue
+        spi: str | None = None
+        enc_tail: str | None = None
+        sel_sport: str | None = None
+        sel_dport: str | None = None
+        for line in blk[1:]:
+            tokens = line.split()
+            if line.startswith("sel "):
+                if "sport" in tokens:
+                    sel_sport = tokens[tokens.index("sport") + 1]
+                if "dport" in tokens:
+                    sel_dport = tokens[tokens.index("dport") + 1]
+            if spi is None:
+                if line.startswith("spi "):
+                    spi = tokens[1].split("(")[0]
+                elif line.startswith("proto ") and "spi" in tokens:
+                    spi = tokens[tokens.index("spi") + 1].split("(")[0]
+            if enc_tail is None and (
+                line.startswith("ealg ") or line.startswith("enc ")
+            ):
+                enc_tail = line.split(None, 1)[1].strip()
+        if spi is not None:
+            sas.append(
+                _OutboundSa(
+                    spi=spi,
+                    enc_tail=enc_tail,
+                    sel_sport=sel_sport,
+                    sel_dport=sel_dport,
+                )
+            )
+    return sas
+
+
+def _selector_port_matches(port_text: str | None, port: int) -> bool | None:
+    """Return whether the selector covers ``port``; None when it can't tell."""
+    if port_text is None:
+        return None
+    range_text = port_text.split("(")[0]
+    lo, _, hi = range_text.partition("-")
+    try:
+        if hi:
+            return int(lo) <= port <= int(hi)
+        return int(lo) == port
+    except ValueError:
+        return None
+
+
 def _save_and_null_outbound_ealg(
     *,
     container: str,
     src_ip: str,
     dst_ip: str,
-) -> str | None:
+    src_port: int,
+    dst_port: int,
+) -> NullEalgSwap | None:
     """Temporarily set the P-CSCF→UE outbound SA encryption to NULL.
 
-    Queries ``ip xfrm state`` for the SA matching ``src <src_ip> dst
-    <dst_ip>`` (direction P-CSCF → UE), captures the current ``ealg``
-    value, then replaces it with ``ealg null`` via ``ip xfrm state update``.
+    Queries ``ip xfrm state`` for ESP SAs with direction ``src <src_ip> dst
+    <dst_ip>``, picks the one whose selector matches the send tuple
+    (``src_port``→``dst_port``) — IMS installs two outbound SAs per UE with
+    identical src/dst and different ports — captures its ``enc`` tail, then
+    switches it to ``enc null`` via ``ip xfrm state update``.
 
-    Returns the original ealg string (e.g. ``aes-cbc``) so the caller can
-    restore it after the send, or ``None`` if no matching SA was found.
+    Returns the swap handle for :func:`_restore_outbound_ealg`, or ``None``
+    when no SA could be selected unambiguously or the null update failed
+    (nothing was nulled, so there is nothing to restore).
     """
     try:
         result = subprocess.run(
@@ -718,39 +843,33 @@ def _save_and_null_outbound_ealg(
     if result.returncode != 0:
         return None
 
-    # Parse xfrm state to find the SA matching src=src_ip dst=dst_ip and
-    # extract its SPI + current ealg. xfrm state output groups blocks by
-    # blank lines; each block starts with "src X dst Y" and contains a
-    # "spi 0x..." line and an "ealg" (or "enc") line.
-    spi: str | None = None
-    original_ealg: str | None = None
-    in_target_block = False
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            in_target_block = False
-            continue
-        if stripped.startswith("src ") and " dst " in stripped:
-            parts = stripped.split()
-            in_target_block = (
-                len(parts) >= 4 and parts[1] == src_ip and parts[3] == dst_ip
-            )
-            continue
-        if not in_target_block:
-            continue
-        if stripped.startswith("spi "):
-            spi = stripped.split()[1]
-        if stripped.startswith("ealg ") or stripped.startswith("enc "):
-            # "ealg aes-cbc" or "enc aes-cbc" — capture the algorithm name.
-            original_ealg = stripped.split(None, 1)[1].strip()
-
-    if spi is None or original_ealg is None:
+    candidates = [sa for sa in _collect_outbound_sas(result.stdout, src_ip, dst_ip) if sa.enc_tail]
+    if not candidates:
+        return None
+    exact = [
+        sa
+        for sa in candidates
+        if _selector_port_matches(sa.sel_sport, src_port) is True
+        and _selector_port_matches(sa.sel_dport, dst_port) is True
+    ]
+    if len(exact) == 1:
+        target = exact[0]
+    elif len(candidates) == 1:
+        target = candidates[0]
+    else:
+        logger.warning(
+            "null mode: %d outbound SAs match %s->%s and the send tuple "
+            "%d->%d does not disambiguate them; refusing to null an arbitrary SA",
+            len(candidates),
+            src_ip,
+            dst_ip,
+            src_port,
+            dst_port,
+        )
         return None
 
-    # Update the SA to use null encryption. The SPI must be passed as-is
-    # (hex string), and both src/dst must match the original SA.
     try:
-        subprocess.run(
+        null_result = subprocess.run(
             [
                 "docker",
                 "exec",
@@ -766,7 +885,7 @@ def _save_and_null_outbound_ealg(
                 "proto",
                 "esp",
                 "spi",
-                spi,
+                target.spi,
                 "enc",
                 "null",
             ],
@@ -775,9 +894,20 @@ def _save_and_null_outbound_ealg(
             timeout=5.0,
             check=False,
         )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning(
+            "null mode: ealg swap failed for spi %s: %s", target.spi, exc
+        )
         return None
-    return original_ealg
+    if null_result.returncode != 0:
+        stderr_text = (null_result.stderr or null_result.stdout or "").strip()[:200]
+        logger.warning(
+            "null mode: ealg swap failed for spi %s: %s",
+            target.spi,
+            stderr_text or "unknown error",
+        )
+        return None
+    return NullEalgSwap(spi=target.spi, original_enc_tail=target.enc_tail or "null")
 
 
 def _restore_outbound_ealg(
@@ -785,71 +915,63 @@ def _restore_outbound_ealg(
     container: str,
     src_ip: str,
     dst_ip: str,
-    ealg: str,
-) -> None:
-    """Restore the original encryption algorithm on the P-CSCF→UE SA."""
+    swap: NullEalgSwap,
+) -> bool:
+    """Restore the original encryption on the SA the swap nulled.
+
+    The update targets the SPI saved in ``swap`` — re-querying by src/dst
+    could pick a different (e.g. rekeyed) SA and leave the nulled one
+    permanently null-encrypted. The saved ``enc`` tail is split so the
+    algorithm name and key hex become separate argv tokens, as iproute2
+    expects. Returns True only when the update succeeded.
+    """
+    cmd = [
+        "docker",
+        "exec",
+        container,
+        "ip",
+        "xfrm",
+        "state",
+        "update",
+        "src",
+        src_ip,
+        "dst",
+        dst_ip,
+        "proto",
+        "esp",
+        "spi",
+        swap.spi,
+        "enc",
+        *swap.original_enc_tail.split(),
+    ]
     try:
         result = subprocess.run(
-            ["docker", "exec", container, "ip", "xfrm", "state"],
-            capture_output=True,
-            text=True,
-            timeout=10.0,
-            check=False,
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return
-    if result.returncode != 0:
-        return
-
-    spi: str | None = None
-    in_target_block = False
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            in_target_block = False
-            continue
-        if stripped.startswith("src ") and " dst " in stripped:
-            parts = stripped.split()
-            in_target_block = (
-                len(parts) >= 4 and parts[1] == src_ip and parts[3] == dst_ip
-            )
-            continue
-        if not in_target_block:
-            continue
-        if stripped.startswith("spi "):
-            spi = stripped.split()[1]
-
-    if spi is None:
-        return
-
-    try:
-        subprocess.run(
-            [
-                "docker",
-                "exec",
-                container,
-                "ip",
-                "xfrm",
-                "state",
-                "update",
-                "src",
-                src_ip,
-                "dst",
-                dst_ip,
-                "proto",
-                "esp",
-                "spi",
-                spi,
-                "enc",
-                ealg,
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5.0,
             check=False,
         )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        pass
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        logger.error(
+            "null mode: ealg restore failed for spi %s — SA may remain "
+            "null-encrypted; manual fix: %s (error: %s)",
+            swap.spi,
+            " ".join(cmd),
+            exc,
+        )
+        return False
+    if result.returncode != 0:
+        stderr_text = (result.stderr or result.stdout or "").strip()[:200]
+        logger.error(
+            "null mode: ealg restore failed for spi %s — SA may remain "
+            "null-encrypted; manual fix: %s (stderr: %s)",
+            swap.spi,
+            " ".join(cmd),
+            stderr_text or "unknown error",
+        )
+        return False
+    return True
 
 
 __all__ = [

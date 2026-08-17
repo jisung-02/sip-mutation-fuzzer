@@ -623,5 +623,273 @@ class NativeIPsecSocketObservationTests(unittest.TestCase):
         self.assertEqual(observation.source, "pcscf-log")
 
 
+class NullModeEalgSwapTests(unittest.TestCase):
+    """Selector-aware SA targeting and failure visibility for null mode."""
+
+    PCSCF_IP = "172.22.0.21"
+    UE_IP = "10.20.20.8"
+
+    # Two outbound SAs with identical src/dst (the IMS per-UE reality),
+    # distinguished only by selector ports, with the SPI on the real
+    # iproute2 ``proto esp spi 0x… reqid …`` line and keys in the dump.
+    XFRM_DUMP = (
+        "src 172.22.0.21 dst 10.20.20.8\n"
+        "\tsel src 172.22.0.21/32 dst 10.20.20.8/32 sport 5001 dport 5100\n"
+        "\tproto esp spi 0xc0000002 reqid 1 mode transport\n"
+        "\treplay-window 32\n"
+        "\tauth-trunc hmac(sha256) 0x0011223344556677\n"
+        "\tenc cbc(aes) 0x445566778899aabb\n"
+        "\n"
+        "src 172.22.0.21 dst 10.20.20.8\n"
+        "\tsel src 172.22.0.21/32 dst 10.20.20.8/32 sport 6101 dport 6100\n"
+        "\tproto esp spi 0xc0000001 reqid 2 mode transport\n"
+        "\treplay-window 32\n"
+        "\tauth-trunc hmac(sha256) 0x99aabbccddeeff00\n"
+        "\tenc cbc(aes) 0xddeeff0011223344\n"
+    )
+
+    @staticmethod
+    def _run_result(stdout: str = "", returncode: int = 0):
+        return subprocess.CompletedProcess(
+            args=["docker"], returncode=returncode, stdout=stdout, stderr=""
+        )
+
+    def test_save_targets_sa_matching_send_tuple(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            _save_and_null_outbound_ealg,
+        )
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            side_effect=[
+                self._run_result(stdout=self.XFRM_DUMP),
+                self._run_result(),
+            ],
+        ) as mock_run:
+            swap = _save_and_null_outbound_ealg(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                dst_ip=self.UE_IP,
+                src_port=6101,
+                dst_port=6100,
+            )
+
+        self.assertIsNotNone(swap)
+        assert swap is not None
+        self.assertEqual(swap.spi, "0xc0000001")
+        self.assertEqual(swap.original_enc_tail, "cbc(aes) 0xddeeff0011223344")
+        update_cmd = mock_run.call_args_list[1].args[0]
+        self.assertEqual(update_cmd[update_cmd.index("spi") + 1], "0xc0000001")
+        self.assertEqual(update_cmd[update_cmd.index("enc") + 1], "null")
+
+    def test_save_refuses_ambiguous_sas_without_matching_selector(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            _save_and_null_outbound_ealg,
+        )
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            side_effect=[self._run_result(stdout=self.XFRM_DUMP)],
+        ) as mock_run:
+            swap = _save_and_null_outbound_ealg(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                dst_ip=self.UE_IP,
+                src_port=1234,
+                dst_port=5678,
+            )
+
+        self.assertIsNone(swap)
+        mock_run.assert_called_once()  # no null update was issued
+
+    def test_save_returns_none_when_null_update_fails(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            _save_and_null_outbound_ealg,
+        )
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            side_effect=[
+                self._run_result(stdout=self.XFRM_DUMP),
+                self._run_result(returncode=1),
+            ],
+        ):
+            swap = _save_and_null_outbound_ealg(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                dst_ip=self.UE_IP,
+                src_port=6101,
+                dst_port=6100,
+            )
+
+        self.assertIsNone(swap)
+
+    def test_restore_uses_saved_spi_and_splits_enc_tail(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            NullEalgSwap,
+            _restore_outbound_ealg,
+        )
+
+        swap = NullEalgSwap(
+            spi="0xc0000001", original_enc_tail="cbc(aes) 0xddeeff0011223344"
+        )
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            return_value=self._run_result(),
+        ) as mock_run:
+            restored = _restore_outbound_ealg(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                dst_ip=self.UE_IP,
+                swap=swap,
+            )
+
+        self.assertTrue(restored)
+        mock_run.assert_called_once()  # no re-query by src/dst
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[cmd.index("spi") + 1], "0xc0000001")
+        enc_idx = cmd.index("enc")
+        self.assertEqual(cmd[enc_idx + 1], "cbc(aes)")
+        self.assertEqual(cmd[enc_idx + 2], "0xddeeff0011223344")
+
+    def test_restore_reports_failure(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            NullEalgSwap,
+            _restore_outbound_ealg,
+        )
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            return_value=self._run_result(returncode=1),
+        ):
+            restored = _restore_outbound_ealg(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                dst_ip=self.UE_IP,
+                swap=NullEalgSwap(
+                    spi="0xc0000001", original_enc_tail="cbc(aes) 0xddeeff0011223344"
+                ),
+            )
+
+        self.assertFalse(restored)
+
+    def test_send_null_mode_wires_swap_and_restore_events(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import send_via_native_ipsec
+
+        calls: list[list[str]] = []
+
+        def _dispatch(cmd, **_kwargs):
+            calls.append(cmd)
+            if "xfrm" in cmd:
+                if "update" in cmd:
+                    return self._run_result()
+                return self._run_result(stdout=self.XFRM_DUMP)
+            return self._run_result()  # in-container driver proc
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            side_effect=_dispatch,
+        ):
+            result = send_via_native_ipsec(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                src_port=6101,
+                dst_ip=self.UE_IP,
+                dst_port=6100,
+                payload=b"INVITE sip:user@host SIP/2.0\r\n\r\n",
+                timeout_seconds=1.0,
+                ipsec_mode="null",
+            )
+
+        # query → null update → driver → restore update
+        self.assertEqual(len(calls), 4)
+        self.assertIn("update", calls[1])
+        self.assertIn("python3", calls[2])
+        self.assertIn("update", calls[3])
+        self.assertIn(
+            "native-ipsec:null-mode:ealg-saved:cbc(aes):0xc0000001",
+            result.observer_events,
+        )
+        self.assertIn(
+            "native-ipsec:null-mode:restore-ok:0xc0000001", result.observer_events
+        )
+
+    def test_send_null_mode_surfaces_restore_failure_and_still_restores_on_error(
+        self,
+    ) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            NativeIPsecError,
+            send_via_native_ipsec,
+        )
+
+        update_results = [
+            self._run_result(),  # null swap succeeds
+            self._run_result(returncode=1),  # restore fails
+        ]
+        calls: list[list[str]] = []
+
+        def _dispatch(cmd, **_kwargs):
+            calls.append(cmd)
+            if "xfrm" in cmd:
+                if "update" in cmd:
+                    return update_results.pop(0)
+                return self._run_result(stdout=self.XFRM_DUMP)
+            return self._run_result()  # driver succeeds
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            side_effect=_dispatch,
+        ):
+            result = send_via_native_ipsec(
+                container="pcscf",
+                src_ip=self.PCSCF_IP,
+                src_port=6101,
+                dst_ip=self.UE_IP,
+                dst_port=6100,
+                payload=b"INVITE sip:user@host SIP/2.0\r\n\r\n",
+                timeout_seconds=1.0,
+                ipsec_mode="null",
+            )
+
+        self.assertIn(
+            "native-ipsec:null-mode:restore-failed:0xc0000001",
+            result.observer_events,
+        )
+
+        # Same wiring on the exception path: the restore runs before the
+        # error is raised and its outcome is attached to the error events.
+        update_results = [self._run_result(), self._run_result()]
+
+        def _dispatch_error(cmd, **_kwargs):
+            calls.append(cmd)
+            if "xfrm" in cmd:
+                if "update" in cmd:
+                    return update_results.pop(0)
+                return self._run_result(stdout=self.XFRM_DUMP)
+            raise TimeoutError("docker exec timed out")
+
+        with patch(
+            "volte_mutation_fuzzer.sender.ipsec_native.subprocess.run",
+            side_effect=_dispatch_error,
+        ):
+            with self.assertRaises(NativeIPsecError) as ctx:
+                send_via_native_ipsec(
+                    container="pcscf",
+                    src_ip=self.PCSCF_IP,
+                    src_port=6101,
+                    dst_ip=self.UE_IP,
+                    dst_port=6100,
+                    payload=b"INVITE sip:user@host SIP/2.0\r\n\r\n",
+                    timeout_seconds=1.0,
+                    ipsec_mode="null",
+                )
+
+        self.assertIn(
+            "native-ipsec:null-mode:restore-ok:0xc0000001",
+            ctx.exception.observer_events,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
