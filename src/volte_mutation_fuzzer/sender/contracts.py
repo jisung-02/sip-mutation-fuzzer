@@ -215,7 +215,12 @@ class SocketObservation(BaseModel):
     source: ObservationSource = "socket"
     remote_host: str | None = None
     remote_port: int | None = Field(default=None, ge=0, le=65535)
-    status_code: int | None = Field(default=None, ge=100, le=699)
+    # Observed status-line code, NOT a validated SIP value: the wire parsers
+    # accept any 3-digit code (e.g. "SIP/2.0 700", "SIP/2.0 099"), and an
+    # out-of-range code is evidence about the target — it must be recorded
+    # with classification "invalid", not rejected here. RFC 3261 conformance
+    # (100-699) is judged by classify_status_code(), never by this field.
+    status_code: int | None = Field(default=None, ge=0, le=999)
     reason_phrase: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     body: str = ""

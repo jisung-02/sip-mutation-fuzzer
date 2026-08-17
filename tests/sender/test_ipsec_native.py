@@ -158,6 +158,26 @@ class NativeIPsecPreflightTests(unittest.TestCase):
 
 
 class NativeIPsecObserverTests(unittest.TestCase):
+    def test_log_observer_records_out_of_range_status_as_invalid(self) -> None:
+        from volte_mutation_fuzzer.sender.ipsec_native import (
+            _parse_pcscf_log_observation,
+        )
+
+        # Out-of-range codes in P-CSCF logs are target evidence: record with
+        # classification "invalid" instead of failing SocketObservation
+        # validation (which used to crash the native-ipsec receive path).
+        observation = _parse_pcscf_log_observation(
+            "SIP/2.0 999 Bogus Call-ID: abc CSeq: 42 INVITE\n",
+            ue_ip="10.20.20.8",
+            ue_port=8100,
+        )
+
+        self.assertIsNotNone(observation)
+        assert observation is not None
+        self.assertEqual(observation.status_code, 999)
+        self.assertEqual(observation.classification, "invalid")
+        self.assertEqual(observation.source, "pcscf-log")
+
     def test_low_confidence_observer_ignores_unrelated_status_lines_without_tuple_hints(
         self,
     ) -> None:

@@ -45,6 +45,23 @@ class ParseSipResponseTests(unittest.TestCase):
         obs = parse_sip_response(b"\x00\x01 not sip at all\r\n", ("10.0.0.1", 5060))
         self.assertEqual(obs.classification, "invalid")
 
+    def test_out_of_range_status_code_recorded_not_rejected(self) -> None:
+        # The status-line regex accepts any 3-digit code. Codes outside RFC
+        # 3261's 100-699 are evidence about the target: record them with
+        # classification "invalid" instead of failing SocketObservation
+        # validation (which used to crash the sender with ValidationError).
+        obs = parse_sip_response(
+            b"SIP/2.0 700 Out Of Range\r\n\r\n", ("10.0.0.1", 5060)
+        )
+        self.assertEqual(obs.status_code, 700)
+        self.assertEqual(obs.classification, "invalid")
+
+        leading_zero = parse_sip_response(
+            b"SIP/2.0 099 Weird\r\n\r\n", ("10.0.0.1", 5060)
+        )
+        self.assertEqual(leading_zero.status_code, 99)
+        self.assertEqual(leading_zero.classification, "invalid")
+
 
 class SIPSenderReactorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -83,6 +100,28 @@ class SIPSenderReactorTests(unittest.TestCase):
         self.assertEqual(result.responses[-1].status_code, 200)
         self.assertGreater(result.bytes_sent, 0)
         self.assertEqual(len(responder.received_payloads), 1)
+
+    def test_send_udp_out_of_range_response_yields_invalid_response(self) -> None:
+        # A peer replying "SIP/2.0 700" used to raise ValidationError inside
+        # parse_sip_response and escape send_artifact's (OSError,
+        # RealUEDirectError) handler. It must surface as a recorded
+        # invalid_response outcome instead.
+        responder = UDPResponder(responses=(b"SIP/2.0 700 Out Of Range\r\n\r\n",))
+        responder.start()
+        self.addCleanup(responder.close)
+
+        result = self.reactor.send_packet(
+            self.packet,
+            TargetEndpoint(
+                host=responder.host, port=responder.port, timeout_seconds=0.5
+            ),
+        )
+
+        self.assertEqual(result.outcome, "invalid_response")
+        final = result.final_response
+        assert final is not None
+        self.assertEqual(final.status_code, 700)
+        self.assertEqual(final.classification, "invalid")
 
     def test_send_udp_collect_all_responses_keeps_provisional_and_final(self) -> None:
         responder = UDPResponder(
