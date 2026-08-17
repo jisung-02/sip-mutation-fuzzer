@@ -89,8 +89,8 @@ uv run fuzzer campaign run \
 ## Report And Replay
 
 ```bash
-uv run fuzzer campaign report <results.jsonl> --filter suspicious,crash,stack_failure
-uv run fuzzer campaign replay <results.jsonl> --case-id <id>
+uv run fuzzer campaign report <campaign.jsonl> --filter suspicious,crash,stack_failure
+uv run fuzzer campaign replay <campaign.jsonl> --case-id <id>
 ```
 
 ## Defaults That Matter

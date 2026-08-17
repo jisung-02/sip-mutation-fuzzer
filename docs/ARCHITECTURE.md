@@ -132,7 +132,7 @@ Verdicts:
 Evidence sources:
 
 - SIP response and observer events
-- `results.jsonl`
+- `campaign.jsonl`
 - `pcap/`
 - `interesting/case_<id>/`
 - Android logcat/bugreport/screenshot snapshots
@@ -148,6 +148,6 @@ Campaign output is JSONL under the campaign directory. Reporting and replay
 consume that same JSONL contract:
 
 ```bash
-uv run fuzzer campaign report <results.jsonl>
-uv run fuzzer campaign replay <results.jsonl> --case-id <id>
+uv run fuzzer campaign report <campaign.jsonl>
+uv run fuzzer campaign replay <campaign.jsonl> --case-id <id>
 ```

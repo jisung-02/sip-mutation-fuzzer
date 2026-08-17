@@ -221,22 +221,22 @@ under the campaign directory's `pcap/` folder. In real-UE mode, leaving
 - `bypass`: P-CSCF namespace path intended for xfrm policy bypass experiments.
 
 Native runs may show ESP rather than readable SIP in external pcaps. Read
-`observer_events`, SIP responses, and `results.jsonl` first.
+`observer_events`, SIP responses, and `campaign.jsonl` first.
 
 ## Results
 
 ```bash
-uv run fuzzer campaign report <results.jsonl>
-uv run fuzzer campaign report <results.jsonl> --filter suspicious,crash,stack_failure
-uv run fuzzer campaign report <results.jsonl> --html
-uv run fuzzer campaign replay <results.jsonl> --case-id <id>
+uv run fuzzer campaign report <campaign.jsonl>
+uv run fuzzer campaign report <campaign.jsonl> --filter suspicious,crash,stack_failure
+uv run fuzzer campaign report <campaign.jsonl> --html
+uv run fuzzer campaign replay <campaign.jsonl> --case-id <id>
 ```
 
 Typical output layout:
 
 ```text
 results/<campaign>/
-├── results.jsonl
+├── campaign.jsonl
 ├── pcap/
 ├── interesting/
 ├── adb_snapshots/

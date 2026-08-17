@@ -31,7 +31,7 @@ That can be normal. Native mode uses the negotiated xfrm/IPsec path, so outer ca
 
 - `observer_events`
 - `responses`
-- `results.jsonl`
+- `campaign.jsonl`
 - P-CSCF logs
 
 ## Suspicious 4xx / 5xx
@@ -46,8 +46,8 @@ Common causes:
 Inspect:
 
 ```bash
-uv run fuzzer campaign report <results.jsonl> --filter suspicious,crash,stack_failure
-uv run fuzzer campaign replay <results.jsonl> --case-id <id>
+uv run fuzzer campaign report <campaign.jsonl> --filter suspicious,crash,stack_failure
+uv run fuzzer campaign replay <campaign.jsonl> --case-id <id>
 ```
 
 ## iPhone IMS Does Not Register

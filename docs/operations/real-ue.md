@@ -54,7 +54,7 @@ uv run fuzzer campaign run \
 
 `native`는 P-CSCF live xfrm state와 `Security-Client` / protected port 매핑을
 사용한다. 외부 pcap에서 평문 SIP가 바로 보이지 않을 수 있으므로,
-`observer_events`, `responses`, `results.jsonl`을 우선 본다.
+`observer_events`, `responses`, `campaign.jsonl`을 우선 본다.
 
 ## Null / Bypass
 
@@ -102,7 +102,7 @@ uv run fuzzer campaign run \
 
 Real-UE run에서 의미 있는 evidence는 아래 순서로 본다.
 
-1. `results.jsonl` case verdict and `observer_events`
+1. `campaign.jsonl` case verdict and `observer_events`
 2. `sent.sip`, `response.sip`
 3. pcap, native 모드에서는 ESP 여부와 별개로 보조 자료
 4. Android ADB snapshot 또는 iOS syslog/crash report
