@@ -441,7 +441,8 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
             return "Expires: 300"
         return "Expires: 3600"
     if field_name == "info_package":
-        return "Info-Package: dtmf"
+        # IANA-registered info package (RFC 6086 registry).
+        return "Info-Package: infoDtmf"
     if field_name == "recv_info":
         # IANA-registered info package (RFC 6086 registry).
         return "Recv-Info: infoDtmf"

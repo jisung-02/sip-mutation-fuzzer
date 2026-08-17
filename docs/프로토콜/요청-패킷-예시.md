@@ -152,7 +152,7 @@ From: "Caller" <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>;tag=from-tag
 To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: info@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INFO
-Info-Package: dtmf
+Info-Package: infoDtmf
 Content-Type: application/dtmf-relay
 Content-Length: 24
 
