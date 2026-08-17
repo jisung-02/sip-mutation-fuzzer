@@ -272,7 +272,14 @@ class ResultStore:
             return None
         try:
             header, cases = self.read_all()
-        except Exception:
+        except Exception as exc:
+            # Resume is silently disabled without this log — a corrupt
+            # checkpoint file would otherwise be undiagnosable.
+            logger.warning(
+                "checkpoint read failed for %s; resume disabled: %s",
+                self._path,
+                exc,
+            )
             return None
         if not cases:
             return None
@@ -778,8 +785,10 @@ class CampaignExecutor:
             reporter.finalize(summary, "aborted")
             try:
                 HtmlReportGenerator(self._jsonl_path).generate()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "HTML report generation failed during abort: %s", exc
+                )
             return campaign
         finally:
             post_grace = config.post_campaign_log_grace_seconds

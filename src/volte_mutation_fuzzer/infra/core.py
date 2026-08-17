@@ -619,6 +619,10 @@ def _route_probe_ip(ims_subnet: str) -> str:
 
 
 def _increment_identifier(value: str, offset: int) -> str:
+    if not value.isdigit():
+        raise ValueError(
+            f"identifier must be numeric (digits only): {value!r}"
+        )
     width = len(value)
     return f"{int(value) + offset:0{width}d}"
 

@@ -15,7 +15,20 @@ from typing import Callable
 from unittest import mock
 from urllib.parse import urlparse
 
-from volte_mutation_fuzzer.infra.core import InfraManager
+from volte_mutation_fuzzer.infra.core import InfraManager, _increment_identifier
+
+
+class IncrementIdentifierTests(unittest.TestCase):
+    def test_increments_with_padding(self) -> None:
+        self.assertEqual(_increment_identifier("001010000000001", 1), "001010000000002")
+        self.assertEqual(_increment_identifier("222222", 3), "222225")
+
+    def test_rejects_non_numeric_identifier(self) -> None:
+        # Raw int() would raise an uninformative traceback for a bad
+        # --start-imsi CLI value.
+        with self.assertRaises(ValueError) as ctx:
+            _increment_identifier("00101000000abc", 1)
+        self.assertIn("00101000000abc", str(ctx.exception))
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = ""):
