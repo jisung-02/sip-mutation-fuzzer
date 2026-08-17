@@ -210,7 +210,7 @@ METHOD_BODY: dict[SIPMethod, tuple[str, str]] = {
         "s=-\r\n"
         "c=IN IP4 192.0.2.10\r\n"
         "t=0 0\r\n"
-        "m=audio 49170 RTP/AVP 0\r\n",
+        "m=audio 49170 RTP/AVP 96 97\r\n",
     ),
     SIPMethod.MESSAGE: ("text/plain", "Hello from SIP MESSAGE\r\n"),
     SIPMethod.NOTIFY: (
@@ -228,7 +228,7 @@ METHOD_BODY: dict[SIPMethod, tuple[str, str]] = {
         "s=-\r\n"
         "c=IN IP4 192.0.2.10\r\n"
         "t=0 0\r\n"
-        "m=audio 49172 RTP/AVP 0\r\n",
+        "m=audio 49172 RTP/AVP 96 97\r\n",
     ),
 }
 
@@ -240,7 +240,7 @@ RESPONSE_BODY: dict[int, tuple[str, str]] = {
         "s=-\r\n"
         "c=IN IP4 198.51.100.20\r\n"
         "t=0 0\r\n"
-        "m=audio 50000 RTP/AVP 0\r\n",
+        "m=audio 50000 RTP/AVP 96 97\r\n",
     ),
     200: (
         "application/sdp",
@@ -249,11 +249,16 @@ RESPONSE_BODY: dict[int, tuple[str, str]] = {
         "s=-\r\n"
         "c=IN IP4 198.51.100.20\r\n"
         "t=0 0\r\n"
-        "m=audio 50002 RTP/AVP 0\r\n",
+        "m=audio 50002 RTP/AVP 96 97\r\n",
     ),
     380: (
-        "text/plain",
-        f"Alternative service available via sip:service@{IMS_DOMAIN}\r\n",
+        "application/3gpp-ims+xml",
+        '<ims-3gpp xmlns="urn:3gpp:ns:ims:xml">\r\n'
+        "  <service-info>\r\n"
+        "    <service-type>emergency</service-type>\r\n"
+        "    <reason>Alternative service available</reason>\r\n"
+        "  </service-info>\r\n"
+        "</ims-3gpp>",
     ),
 }
 
@@ -395,13 +400,13 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "require":
         if status_code == 494:
             return "Require: sec-agree"
-        if status_code in {180, 181, 182, 183, 199}:
-            return "Require: 100rel"
-        return "Require: timer"
+        return "Require: 100rel"
     if field_name == "proxy_require":
         return "Proxy-Require: sec-agree"
     if field_name == "allow":
-        return "Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, MESSAGE, NOTIFY, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE"
+        # SIPMethod enum declaration order — the runtime Allow header
+        # starts at ACK and renders one Allow header per method.
+        return "Allow: ACK, BYE, CANCEL, INFO, INVITE, MESSAGE, NOTIFY, OPTIONS, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE"
     if field_name == "allow_events":
         return "Allow-Events: presence, dialog, refer"
     if field_name == "accept":
@@ -425,21 +430,21 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
             return "Event: presence"
         return "Event: refer"
     if field_name == "subscription_state":
-        return "Subscription-State: active;expires=300"
+        return "Subscription-State: active;expires=3600"
     if field_name == "expires":
         if method == SIPMethod.SUBSCRIBE:
-            return "Expires: 300"
+            return "Expires: 3600"
         if method == SIPMethod.REGISTER:
             return "Expires: 3600"
         if status_code == 204:
             return "Expires: 300"
-        return "Expires: 600"
+        return "Expires: 3600"
     if field_name == "info_package":
         return "Info-Package: dtmf"
     if field_name == "recv_info":
-        return "Recv-Info: dtmf"
+        return "Recv-Info: g.3gpp.iari-ref"
     if field_name == "session_expires":
-        return "Session-Expires: 600;refresher=uac"
+        return "Session-Expires: 1800"
     if field_name == "min_se":
         return "Min-SE: 90"
     if field_name == "sip_if_match":
@@ -479,13 +484,13 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "authentication_info":
         return 'Authentication-Info: nextnonce="nonce-2"'
     if field_name == "min_expires":
-        return "Min-Expires: 600"
+        return "Min-Expires: 300"
     if field_name == "rseq":
         return "RSeq: 1"
     if field_name == "sip_etag":
         return "SIP-ETag: etag-1"
     if field_name == "security_server":
-        return "Security-Server: ipsec-3gpp;alg=hmac-md5-96;prot=esp;mod=trans"
+        return "Security-Server: ipsec-3gpp;q=0.1"
     if field_name == "service_route":
         return f"Service-Route: <sip:{PROXY_HOST};lr>"
     if field_name == "unsupported":
@@ -493,9 +498,9 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "error_info":
         return f"Error-Info: <{IMS_WEB_ROOT}/error-info>"
     if field_name == "geolocation_error":
-        return "Geolocation-Error: 100 locationValueError"
+        return "Geolocation-Error: location-invalid"
     if field_name == "alert_msg_error":
-        return "AlertMsg-Error: 300 unsupported-alerting"
+        return "AlertMsg-Error: unsupported-alert"
     if field_name == "permission_missing":
         return f"Permission-Missing: <{CALLEE_AOR}>"
     if field_name == "timestamp":
