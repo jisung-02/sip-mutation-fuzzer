@@ -497,7 +497,6 @@ class SIPGenerator:
 
         if spec.related_method == SIPMethod.REGISTER and 200 <= spec.status_code < 300:
             defaults.setdefault("service_route", (self._build_from_name_address().uri,))
-            defaults.setdefault("sip_etag", self._uuid_hex())
 
         for header_name in policy.forbidden_headers:
             defaults.pop(header_name, None)
@@ -567,13 +566,17 @@ class SIPGenerator:
             return 300
 
         if field_name == "geolocation_error":
-            return "location-invalid"
+            # RFC 6442: the value is a 1-3 digit error code, not a token.
+            return "100"
 
         if field_name == "alert_msg_error":
-            return "unsupported-alert"
+            # RFC 8876: the value is a 3-digit error code (100-103 defined).
+            return "100"
 
         if field_name == "recv_info":
-            return ("g.3gpp.iari-ref",)
+            # IANA-registered info package; g.3gpp.iari-ref is an RFC 3840
+            # media feature tag, not an RFC 6086 info package.
+            return ("infoDtmf",)
 
         if field_name == "security_server":
             return ("ipsec-3gpp;q=0.1",)

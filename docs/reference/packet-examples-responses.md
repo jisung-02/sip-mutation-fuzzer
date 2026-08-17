@@ -190,14 +190,14 @@ CSeq: 1 INVITE
 Require: 100rel
 RSeq: 1
 Content-Type: application/sdp
-Content-Length: 94
+Content-Length: 98
 
 v=0
 o=- 0 0 IN IP4 172.22.0.20
 s=-
 c=IN IP4 198.51.100.20
 t=0 0
-m=audio 50000 RTP/AVP 0
+m=audio 50000 RTP/AVP 96 97
 ```
 
 ### 필수 헤더
@@ -275,14 +275,14 @@ Call-ID: 200-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
 Contact: <sip:network@ims.mnc001.mcc001.3gppnetwork.org>
 Content-Type: application/sdp
-Content-Length: 94
+Content-Length: 98
 
 v=0
 o=- 0 0 IN IP4 172.22.0.20
 s=-
 c=IN IP4 198.51.100.20
 t=0 0
-m=audio 50002 RTP/AVP 0
+m=audio 50002 RTP/AVP 96 97
 ```
 
 ### 필수 헤더
@@ -310,7 +310,7 @@ m=audio 50002 RTP/AVP 0
 
 ## 202 Accepted (Deprecated)
 
-- 설명: Accepted but not yet fully completed; explicitly allowed for MESSAGE asynchronous gateway delivery (RFC 3428). Not mentioned by RFC 6665 for SUBSCRIBE (200 OK is the expected response). Forbidden for REFER by RFC 7647 (MUST NOT send 202).
+- 설명: Accepted but not yet fully completed; explicitly allowed for MESSAGE asynchronous gateway delivery (RFC 3428). Not mentioned by RFC 6665 for SUBSCRIBE (200 OK is the expected response). Forbidden for REFER by RFC 7647 (MUST NOT send 202). The reason phrase matches the IANA registry value ("Accepted (Deprecated)", reference RFC 6665).
 - 대표 상황: Asynchronous MESSAGE processing via a store-and-forward gateway.
 - 관련 메서드: MESSAGE
 - RFC: RFC3261, RFC3428, RFC6665, RFC7647
@@ -356,7 +356,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 204-subscribe@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 SUBSCRIBE
-Expires: 300
+Expires: 3600
 Content-Length: 0
 ```
 
@@ -530,10 +530,15 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 380-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
-Content-Type: text/plain
-Content-Length: 81
+Content-Type: application/3gpp-ims+xml
+Content-Length: 184
 
-Alternative service available via sip:service@ims.mnc001.mcc001.3gppnetwork.org
+<ims-3gpp xmlns="urn:3gpp:ns:ims:xml">
+  <service-info>
+    <service-type>emergency</service-type>
+    <reason>Alternative service available</reason>
+  </service-info>
+</ims-3gpp>
 ```
 
 ### 필수 헤더
@@ -728,7 +733,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 405-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
-Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, MESSAGE, NOTIFY, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
+Allow: ACK, BYE, CANCEL, INFO, INVITE, MESSAGE, NOTIFY, OPTIONS, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
 Content-Length: 0
 ```
 
@@ -1118,7 +1123,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 421-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
-Require: timer
+Require: 100rel
 Content-Length: 0
 ```
 
@@ -1152,7 +1157,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 422-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
-Min-SE: 90
+Min-SE: 1800
 Content-Length: 0
 ```
 
@@ -1186,7 +1191,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 423-register@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 REGISTER
-Min-Expires: 600
+Min-Expires: 300
 Content-Length: 0
 ```
 
@@ -1220,7 +1225,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 424-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
-Geolocation-Error: 100 locationValueError
+Geolocation-Error: 100
 Content-Length: 0
 ```
 
@@ -1254,7 +1259,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 425-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
-AlertMsg-Error: 300 unsupported-alerting
+AlertMsg-Error: 100
 Content-Length: 0
 ```
 
@@ -1576,7 +1581,7 @@ From: "UE" <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>;tag=ue-tag
 To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 469-info@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INFO
-Recv-Info: dtmf
+Recv-Info: infoDtmf
 Content-Length: 0
 ```
 
@@ -2030,7 +2035,7 @@ To: "Network" <sip:network@ims.mnc001.mcc001.3gppnetwork.org>;tag=net-tag
 Call-ID: 494-invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
 Require: sec-agree
-Security-Server: ipsec-3gpp;alg=hmac-md5-96;prot=esp;mod=trans
+Security-Server: ipsec-3gpp;q=0.1
 Content-Length: 0
 ```
 

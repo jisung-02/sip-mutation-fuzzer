@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from volte_mutation_fuzzer.sip.common import SIPMethod
+from volte_mutation_fuzzer.sip.common import SIPMethod, SessionExpiresHeader
 from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 _COMMON_REQUEST_OPTIONALS: dict[str, Any] = {
@@ -50,7 +50,7 @@ _METHOD_REQUEST_OPTIONALS: dict[SIPMethod, dict[str, Any]] = {
         ),
         "session_expires": 1800,
         "min_se": 90,
-        "recv_info": ("g.3gpp.iari-ref",),
+        "recv_info": ("infoDtmf",),
         "privacy": ("none",),
         "subject": "VoLTE Call",
         "priority": "normal",
@@ -59,7 +59,7 @@ _METHOD_REQUEST_OPTIONALS: dict[SIPMethod, dict[str, Any]] = {
     SIPMethod.UPDATE: {
         "session_expires": 1800,
         "min_se": 90,
-        "recv_info": ("g.3gpp.iari-ref",),
+        "recv_info": ("infoDtmf",),
     },
     SIPMethod.SUBSCRIBE: {
         "expires": 3600,
@@ -67,7 +67,7 @@ _METHOD_REQUEST_OPTIONALS: dict[SIPMethod, dict[str, Any]] = {
     SIPMethod.REGISTER: {
         "expires": 3600,
         "path": ("sip:pcscf.ims.mnc001.mcc001.3gppnetwork.org;lr",),
-        "recv_info": ("g.3gpp.iari-ref",),
+        "recv_info": ("infoDtmf",),
     },
     SIPMethod.PUBLISH: {
         "expires": 3600,
@@ -76,10 +76,11 @@ _METHOD_REQUEST_OPTIONALS: dict[SIPMethod, dict[str, Any]] = {
         "refer_sub": True,
     },
     SIPMethod.CANCEL: {
-        "reason": 'SIP;cause=location_cancelled;text="Call cancelled"',
+        # RFC 3326: cause must be 1*DIGIT mirroring a SIP response code.
+        "reason": 'SIP;cause=487;text="Request Terminated"',
     },
     SIPMethod.PRACK: {
-        "recv_info": ("g.3gpp.iari-ref",),
+        "recv_info": ("infoDtmf",),
     },
     SIPMethod.INFO: {
         "info_package": DEFAULT_INFO_PACKAGE,
@@ -105,25 +106,24 @@ _COMMON_RESPONSE_OPTIONALS: dict[str, Any] = {
 _RESPONSE_OPTIONALS: dict[tuple[SIPMethod | None, int | None], dict[str, Any]] = {
     (SIPMethod.INVITE, 180): {
         "rseq": 1,
-        "session_expires": 1800,
-        "min_se": 90,
-        "recv_info": ("g.3gpp.iari-ref",),
+        "recv_info": ("infoDtmf",),
     },
     (SIPMethod.INVITE, 183): {
         "rseq": 1,
-        "session_expires": 1800,
-        "min_se": 90,
-        "recv_info": ("g.3gpp.iari-ref",),
+        "recv_info": ("infoDtmf",),
     },
     (SIPMethod.INVITE, 199): {
-        "reason": "SIP;cause=location_cancelled",
+        "reason": 'SIP;cause=487;text="Request Terminated"',
     },
     (SIPMethod.INVITE, 200): {
-        "session_expires": 1800,
-        "recv_info": ("g.3gpp.iari-ref",),
+        # RFC 4028 §9: the 2xx Session-Expires MUST carry a refresher
+        # parameter. "uas" keeps the refresh responsibility on the network
+        # side (choosing "uac" would additionally require Require: timer).
+        "session_expires": SessionExpiresHeader(seconds=1800, refresher="uas"),
+        "recv_info": ("infoDtmf",),
     },
     (SIPMethod.UPDATE, 200): {
-        "session_expires": 1800,
+        "session_expires": SessionExpiresHeader(seconds=1800, refresher="uas"),
     },
     (None, 422): {
         "min_se": 1800,

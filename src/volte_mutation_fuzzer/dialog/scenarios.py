@@ -5,6 +5,7 @@ from volte_mutation_fuzzer.dialog.contracts import (
     DialogScenarioType,
     DialogStep,
 )
+from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 # Methods that use the full INVITE→200→ACK→[target]→BYE pattern
 _INVITE_DIALOG_METHODS = frozenset({"BYE", "UPDATE", "REFER", "INFO"})
@@ -14,8 +15,6 @@ _STATELESS_METHODS = frozenset(
     {"OPTIONS", "INVITE", "MESSAGE", "REGISTER", "SUBSCRIBE", "PUBLISH", "NOTIFY"}
 )
 
-_INFO_DEFAULT_PACKAGE = "dtmf"
-
 
 def _build_invite_dialog(method: str) -> DialogScenario:
     """INVITE→200 OK→ACK→[target]→expect any → BYE (unless target is BYE)."""
@@ -23,7 +22,7 @@ def _build_invite_dialog(method: str) -> DialogScenario:
     if method != "BYE":
         teardown = (DialogStep(method="BYE", role="send"),)
 
-    info_package = _INFO_DEFAULT_PACKAGE if method == "INFO" else None
+    info_package = DEFAULT_INFO_PACKAGE if method == "INFO" else None
 
     return DialogScenario(
         scenario_type=DialogScenarioType.invite_dialog,

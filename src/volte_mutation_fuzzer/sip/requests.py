@@ -6,6 +6,7 @@ from volte_mutation_fuzzer.sip.common import (
     CSeqHeader,
     EventHeader,
     RAckHeader,
+    SessionExpiresHeader,
     SubscriptionStateHeader,
     URIReference,
     ConditionalFieldRule,
@@ -61,7 +62,10 @@ class SIPRequest(SIPPacketBase):
     p_early_media: str | None = None
     p_charging_vector: str | None = None
     accept_contact: str | None = None
-    p_asserted_identity: tuple[NameAddress, ...] | None = None
+    # RFC 3325: at most two P-Asserted-Identity values (SIP and tel URI).
+    p_asserted_identity: tuple[NameAddress, ...] | None = Field(
+        default=None, max_length=2
+    )
     content_type: str | None = None
     content_disposition: str | None = None
     content_encoding: tuple[str, ...] | None = None
@@ -115,7 +119,7 @@ class InviteRequest(SIPRequest):
     method: Literal[SIPMethod.INVITE] = SIPMethod.INVITE
     contact: list[NameAddress] = Field(min_length=1)
     recv_info: tuple[str, ...] | None = None
-    session_expires: int | None = Field(default=None, ge=0)
+    session_expires: SessionExpiresHeader | int | None = None
     min_se: int | None = Field(default=None, ge=0)
     privacy: tuple[str, ...] | None = None
 
@@ -180,7 +184,7 @@ class UpdateRequest(SIPRequest):
     method: Literal[SIPMethod.UPDATE] = SIPMethod.UPDATE
     contact: list[NameAddress] = Field(min_length=1)
     recv_info: tuple[str, ...] | None = None
-    session_expires: int | None = Field(default=None, ge=0)
+    session_expires: SessionExpiresHeader | int | None = None
     min_se: int | None = Field(default=None, ge=0)
 
 

@@ -18,7 +18,9 @@ from volte_mutation_fuzzer.sip.bodies import (
 )
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
-DEFAULT_INFO_PACKAGE = "dtmf"
+# IANA-registered info package for DTMF (RFC 6086 registry, 3GPP TS 24.229).
+# It pairs with application/dtmf-relay bodies per the infoDtmf package draft.
+DEFAULT_INFO_PACKAGE = "infoDtmf"
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,10 @@ class BodyFactory:
         "reg": ReginfoBody,
     }
     _INFO_BODY_MAP: dict[str, type[SIPBody]] = {
-        DEFAULT_INFO_PACKAGE: DtmfRelayBody,
+        # Keys are lowercase: _normalize() lowercases before lookup.
+        DEFAULT_INFO_PACKAGE.lower(): DtmfRelayBody,
+        # Legacy pre-registration token kept for older scenario configs.
+        "dtmf": DtmfRelayBody,
     }
     _REQUEST_SDP_METHODS = frozenset(
         {SIPMethod.INVITE, SIPMethod.PRACK, SIPMethod.UPDATE}

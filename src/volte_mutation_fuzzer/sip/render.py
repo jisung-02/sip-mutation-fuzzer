@@ -15,6 +15,7 @@ from volte_mutation_fuzzer.sip.common import (
     NameAddress,
     RAckHeader,
     RetryAfterHeader,
+    SessionExpiresHeader,
     SIPFieldLocation,
     SIPURI,
     SubscriptionStateHeader,
@@ -122,6 +123,8 @@ def _serialize_wire_value(python_name: str, value: Any) -> str:
         return _serialize_parameterized_value(value.state, parameters)
     if isinstance(value, RAckHeader):
         return f"{value.response_num} {value.cseq_num} {value.method}"
+    if isinstance(value, SessionExpiresHeader):
+        return str(value)
     if isinstance(value, RetryAfterHeader):
         rendered = str(value.seconds)
         if value.comment is not None:

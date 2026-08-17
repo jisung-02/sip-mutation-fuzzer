@@ -5,7 +5,7 @@ from volte_mutation_fuzzer.generator.optional_defaults import (
     get_response_optional_defaults,
 )
 from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
-from volte_mutation_fuzzer.sip.common import SIPMethod
+from volte_mutation_fuzzer.sip.common import SIPMethod, SessionExpiresHeader
 
 PCSCF_HOST = "pcscf.ims.mnc001.mcc001.3gppnetwork.org"
 
@@ -68,7 +68,7 @@ class OptionalDefaultsTests(unittest.TestCase):
 
         self.assertEqual(
             defaults["reason"],
-            'SIP;cause=location_cancelled;text="Call cancelled"',
+            'SIP;cause=487;text="Request Terminated"',
         )
         self.assertNotIn("require", defaults)
         self.assertNotIn("proxy_require", defaults)
@@ -120,18 +120,24 @@ class OptionalDefaultsTests(unittest.TestCase):
         defaults = get_response_optional_defaults(SIPMethod.INVITE, 180)
 
         self.assertEqual(defaults["rseq"], 1)
-        self.assertEqual(defaults["session_expires"], 1800)
-        self.assertEqual(defaults["min_se"], 90)
+        self.assertEqual(defaults["recv_info"], ("infoDtmf",))
+        self.assertNotIn("session_expires", defaults)
+        self.assertNotIn("min_se", defaults)
 
     def test_invite_183_response_defaults_include_rseq(self) -> None:
         defaults = get_response_optional_defaults(SIPMethod.INVITE, 183)
 
         self.assertEqual(defaults["rseq"], 1)
+        self.assertNotIn("session_expires", defaults)
+        self.assertNotIn("min_se", defaults)
 
-    def test_invite_200_response_defaults_include_session_expires(self) -> None:
+    def test_invite_200_response_defaults_include_refresher(self) -> None:
         defaults = get_response_optional_defaults(SIPMethod.INVITE, 200)
 
-        self.assertEqual(defaults["session_expires"], 1800)
+        self.assertEqual(
+            defaults["session_expires"],
+            SessionExpiresHeader(seconds=1800, refresher="uas"),
+        )
 
     def test_generic_422_response_defaults_include_min_se_for_any_method(
         self,

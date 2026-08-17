@@ -170,9 +170,26 @@ class SubscriptionStateHeader(BaseModel):
 class RAckHeader(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    response_num: int = Field(ge=0, lt=2**31)
+    # RFC 3262: response-num mirrors the RSeq value of the reliable
+    # provisional response being acknowledged, so it is 1 or greater.
+    response_num: int = Field(ge=1, lt=2**31)
     cseq_num: int = Field(ge=0, lt=2**31)
     method: SIPMethod
+
+
+class SessionExpiresHeader(BaseModel):
+    """RFC 4028 Session-Expires with the optional refresher parameter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seconds: int = Field(ge=0)
+    refresher: Literal["uac", "uas"] | None = None
+
+    def __str__(self) -> str:
+        rendered = str(self.seconds)
+        if self.refresher is not None:
+            rendered += f";refresher={self.refresher}"
+        return rendered
 
 
 class AuthChallenge(BaseModel):
@@ -370,6 +387,7 @@ __all__ = [
     "AuthChallenge",
     "CSeqHeader",
     "EventHeader",
+    "SessionExpiresHeader",
     "SubscriptionStateHeader",
     "RAckHeader",
     "ConditionalFieldRule",

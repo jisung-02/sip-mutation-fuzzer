@@ -62,6 +62,12 @@ class BodyFactoryTests(unittest.TestCase):
         )
         self.assertIs(
             self.factory.select(
+                BodyContext(method=SIPMethod.INFO, info_package=DEFAULT_INFO_PACKAGE)
+            ),
+            DtmfRelayBody,
+        )
+        self.assertIs(
+            self.factory.select(
                 BodyContext(method=SIPMethod.INFO, info_package="dtmf")
             ),
             DtmfRelayBody,

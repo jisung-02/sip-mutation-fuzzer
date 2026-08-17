@@ -10,6 +10,7 @@ from volte_mutation_fuzzer.sip.common import (
     NameAddress,
     PacketDefinitionBase,
     RetryAfterHeader,
+    SessionExpiresHeader,
     SIPDirection,
     SIPMethod,
     SIPPacketBase,
@@ -52,11 +53,12 @@ class SIPResponse(SIPPacketBase):
     www_authenticate: tuple[AuthChallenge, ...] | None = None
     authentication_info: dict[str, str] | None = None
     expires: int | None = Field(default=None, ge=0)
-    session_expires: int | None = Field(default=None, ge=0)
+    session_expires: SessionExpiresHeader | int | None = None
     min_expires: int | None = Field(default=None, ge=0)
     min_se: int | None = Field(default=None, ge=0)
     recv_info: tuple[str, ...] | None = None
-    rseq: int | None = Field(default=None, ge=1)
+    # RFC 3262: RSeq values live in [1, 2**31 - 1].
+    rseq: int | None = Field(default=None, ge=1, le=2**31 - 1)
     sip_etag: str | None = None
     security_server: tuple[str, ...] | None = None
     service_route: tuple[NameAddress | URIReference, ...] | None = None
@@ -421,7 +423,8 @@ _RESPONSE_SPECS: tuple[ResponseModelSpec, ...] = (
             "Accepted but not yet fully completed; explicitly allowed for MESSAGE"
             " asynchronous gateway delivery (RFC 3428). Not mentioned by RFC 6665"
             " for SUBSCRIBE (200 OK is the expected response). Forbidden for REFER"
-            " by RFC 7647 (MUST NOT send 202)."
+            " by RFC 7647 (MUST NOT send 202). The reason phrase matches the IANA"
+            ' registry value ("Accepted (Deprecated)", reference RFC 6665).'
         ),
         typical_scenario="Asynchronous MESSAGE processing via a store-and-forward gateway.",
         reference_rfcs=("RFC3261", "RFC3428", "RFC6665", "RFC7647"),

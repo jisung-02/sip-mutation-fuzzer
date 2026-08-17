@@ -1,5 +1,6 @@
 from volte_mutation_fuzzer.dialog.contracts import DialogScenarioType
 from volte_mutation_fuzzer.dialog.scenarios import scenario_for_method
+from volte_mutation_fuzzer.sip.body_factory import DEFAULT_INFO_PACKAGE
 
 
 class TestScenarioForMethod:
@@ -90,7 +91,7 @@ class TestInviteDialogScenarioStructure:
     def test_info_sets_default_info_package_metadata(self) -> None:
         scenario = scenario_for_method("INFO")
         assert scenario is not None
-        assert scenario.fuzz_step.info_package == "dtmf"
+        assert scenario.fuzz_step.info_package == DEFAULT_INFO_PACKAGE
 
     def test_refer_stays_bodyless_by_default(self) -> None:
         scenario = scenario_for_method("REFER")

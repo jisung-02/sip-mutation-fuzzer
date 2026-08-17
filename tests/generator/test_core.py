@@ -8,7 +8,12 @@ from volte_mutation_fuzzer.generator import (
     SIPGenerator,
 )
 from volte_mutation_fuzzer.sip.catalog import SIPCatalog, SIP_CATALOG
-from volte_mutation_fuzzer.sip.common import NameAddress, SIPMethod, SIPURI
+from volte_mutation_fuzzer.sip.common import (
+    NameAddress,
+    SessionExpiresHeader,
+    SIPMethod,
+    SIPURI,
+)
 from volte_mutation_fuzzer.sip.requests import (
     REQUEST_MODELS_BY_METHOD,
     ByeRequest,
@@ -355,7 +360,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         )
 
         assert isinstance(packet, InfoRequest)
-        self.assertEqual(packet.info_package, "dtmf")
+        self.assertEqual(packet.info_package, "infoDtmf")
         self.assertEqual(packet.content_type, "application/dtmf-relay")
         assert packet.body is not None
         self.assertIn("Signal=", packet.body)
@@ -384,7 +389,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         )
 
         assert isinstance(packet, InfoRequest)
-        self.assertEqual(packet.info_package, "dtmf")
+        self.assertEqual(packet.info_package, "infoDtmf")
         self.assertEqual(packet.content_type, "application/dtmf-relay")
         assert packet.body is not None
         self.assertIn("Signal=", packet.body)
@@ -852,7 +857,7 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
 
         self.assertEqual(
             packet.reason,
-            'SIP;cause=location_cancelled;text="Call cancelled"',
+            'SIP;cause=487;text="Request Terminated"',
         )
         self.assertIsNone(packet.require)
         self.assertIsNone(packet.proxy_require)
@@ -872,10 +877,12 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         packet = RESPONSE_MODELS_BY_CODE[180].model_validate(defaults)
 
         self.assertEqual(packet.rseq, 1)
-        self.assertEqual(packet.session_expires, 1800)
-        self.assertEqual(packet.min_se, 90)
+        # RFC 4028 defines Session-Expires/Min-SE usage only in requests,
+        # 422, and 2xx — 1xx responses carry neither.
+        self.assertIsNone(packet.session_expires)
+        self.assertIsNone(packet.min_se)
         assert packet.recv_info is not None
-        self.assertEqual(packet.recv_info, ("g.3gpp.iari-ref",))
+        self.assertEqual(packet.recv_info, ("infoDtmf",))
         assert packet.supported is not None
         self.assertIn("100rel", packet.supported)
         self.assertIsNone(packet.body)
@@ -884,6 +891,77 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertIsNotNone(packet.timestamp)
         assert packet.timestamp is not None
         self.assertGreater(packet.timestamp, 0)
+
+    def test_response_defaults_invite_200_session_expires_has_refresher(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+
+        defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.INVITE),
+            context,
+        )
+        packet = RESPONSE_MODELS_BY_CODE[200].model_validate(defaults)
+
+        self.assertEqual(
+            packet.session_expires,
+            SessionExpiresHeader(seconds=1800, refresher="uas"),
+        )
+
+    def test_response_defaults_register_200_has_no_sip_etag(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+
+        defaults = generator._build_response_defaults(
+            ResponseSpec(status_code=200, related_method=SIPMethod.REGISTER),
+            context,
+        )
+        packet = RESPONSE_MODELS_BY_CODE[200].model_validate(defaults)
+
+        # SIP-ETag is a PUBLISH-only header (RFC 3903); registrar responses
+        # never carry it.
+        self.assertIsNone(packet.sip_etag)
+        assert packet.service_route is not None
+
+    def test_response_required_fields_use_rfc_value_forms(self) -> None:
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(
+            call_id=REALISTIC_CALL_ID,
+            local_tag=REALISTIC_LOCAL_TAG,
+            local_cseq=7,
+        )
+
+        geolocation = RESPONSE_MODELS_BY_CODE[424].model_validate(
+            generator._build_response_defaults(
+                ResponseSpec(status_code=424, related_method=SIPMethod.INVITE),
+                context,
+            )
+        )
+        alert = RESPONSE_MODELS_BY_CODE[425].model_validate(
+            generator._build_response_defaults(
+                ResponseSpec(status_code=425, related_method=SIPMethod.INVITE),
+                context,
+            )
+        )
+        bad_info = RESPONSE_MODELS_BY_CODE[469].model_validate(
+            generator._build_response_defaults(
+                ResponseSpec(status_code=469, related_method=SIPMethod.INFO),
+                context,
+            )
+        )
+
+        # RFC 6442 / RFC 8876: numeric error codes, not free-form tokens.
+        self.assertEqual(geolocation.geolocation_error, "100")
+        self.assertEqual(alert.alert_msg_error, "100")
+        assert bad_info.recv_info is not None
+        self.assertEqual(bad_info.recv_info, ("infoDtmf",))
 
     def test_response_defaults_only_autogenerate_bodies_for_selected_success_cases(
         self,

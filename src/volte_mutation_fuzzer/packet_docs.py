@@ -418,7 +418,8 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "accept_language":
         return "Accept-Language: ko, en"
     if field_name == "alert_info":
-        return "Alert-Info: <urn:service:alerting>"
+        # RFC 7462 alert URN namespace (urn:alert:<category>:<indication>).
+        return "Alert-Info: <urn:alert:service:call-waiting>"
     if field_name == "call_info":
         return f"Call-Info: <{IMS_WEB_ROOT}/call-info>;purpose=info"
     if field_name == "event":
@@ -442,10 +443,14 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "info_package":
         return "Info-Package: dtmf"
     if field_name == "recv_info":
-        return "Recv-Info: g.3gpp.iari-ref"
+        # IANA-registered info package (RFC 6086 registry).
+        return "Recv-Info: infoDtmf"
     if field_name == "session_expires":
         return "Session-Expires: 1800"
     if field_name == "min_se":
+        if status_code == 422:
+            # Match the runtime 422 default (generator/optional_defaults.py).
+            return "Min-SE: 1800"
         return "Min-SE: 90"
     if field_name == "sip_if_match":
         return "SIP-If-Match: etag-1"
@@ -464,7 +469,8 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "p_asserted_identity":
         return f"P-Asserted-Identity: <{CALLER_AOR}>"
     if field_name == "reason":
-        return 'Reason: SIP ;cause=200 ;text="Normal call clearing"'
+        # RFC 3326: cause is 1*DIGIT; Q.850 cause=16 pairs with this text.
+        return 'Reason: Q.850 ;cause=16 ;text="Normal call clearing"'
     if field_name == "subject":
         return "Subject: SIP MESSAGE test"
     if field_name == "organization":
@@ -498,9 +504,11 @@ def header_line(field_name: str, context: dict[str, object]) -> str:
     if field_name == "error_info":
         return f"Error-Info: <{IMS_WEB_ROOT}/error-info>"
     if field_name == "geolocation_error":
-        return "Geolocation-Error: location-invalid"
+        # RFC 6442: 1-3 digit error code (100 = cannot process location).
+        return "Geolocation-Error: 100"
     if field_name == "alert_msg_error":
-        return "AlertMsg-Error: unsupported-alert"
+        # RFC 8876: 3-digit error code (100 = cannot process alert payload).
+        return "AlertMsg-Error: 100"
     if field_name == "permission_missing":
         return f"Permission-Missing: <{CALLEE_AOR}>"
     if field_name == "timestamp":

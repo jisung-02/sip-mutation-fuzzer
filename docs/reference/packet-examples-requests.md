@@ -76,7 +76,7 @@ From: "Caller" <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>;tag=from-tag
 To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: bye@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 BYE
-Reason: SIP ;cause=200 ;text="Normal call clearing"
+Reason: Q.850 ;cause=16 ;text="Normal call clearing"
 User-Agent: VolteMutationFuzzer/0.1
 Content-Length: 0
 ```
@@ -110,7 +110,7 @@ From: "Caller" <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>;tag=from-tag
 To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: cancel@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 CANCEL
-Reason: SIP ;cause=200 ;text="Normal call clearing"
+Reason: Q.850 ;cause=16 ;text="Normal call clearing"
 User-Agent: VolteMutationFuzzer/0.1
 Content-Length: 0
 ```
@@ -194,19 +194,19 @@ Call-ID: invite@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 INVITE
 Contact: <sip:222222@10.20.20.9>
 Supported: 100rel, timer
-Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, MESSAGE, NOTIFY, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
-Recv-Info: dtmf
-Session-Expires: 600;refresher=uac
+Allow: ACK, BYE, CANCEL, INFO, INVITE, MESSAGE, NOTIFY, OPTIONS, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
+Recv-Info: infoDtmf
+Session-Expires: 1800
 Min-SE: 90
 Content-Type: application/sdp
-Content-Length: 91
+Content-Length: 95
 
 v=0
 o=- 0 0 IN IP4 172.22.0.16
 s=-
 c=IN IP4 192.0.2.10
 t=0 0
-m=audio 49170 RTP/AVP 0
+m=audio 49170 RTP/AVP 96 97
 ```
 
 ### 필수 헤더
@@ -291,7 +291,7 @@ Call-ID: notify@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 NOTIFY
 Contact: <sip:222222@10.20.20.9>
 Event: presence
-Subscription-State: active;expires=300
+Subscription-State: active;expires=3600
 Content-Type: application/pidf+xml
 Content-Length: 93
 
@@ -336,7 +336,7 @@ To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: options@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 OPTIONS
 Supported: 100rel, timer
-Allow: INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, MESSAGE, NOTIFY, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
+Allow: ACK, BYE, CANCEL, INFO, INVITE, MESSAGE, NOTIFY, OPTIONS, PRACK, PUBLISH, REFER, REGISTER, SUBSCRIBE, UPDATE
 Accept: application/sdp
 Content-Length: 0
 ```
@@ -371,7 +371,7 @@ From: "Caller" <sip:222222@ims.mnc001.mcc001.3gppnetwork.org>;tag=from-tag
 To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: prack@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 PRACK
-Recv-Info: dtmf
+Recv-Info: infoDtmf
 Content-Length: 0
 ```
 
@@ -408,7 +408,7 @@ To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: publish@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 PUBLISH
 Event: presence
-Expires: 600
+Expires: 3600
 SIP-If-Match: etag-1
 Content-Type: application/pidf+xml
 Content-Length: 90
@@ -495,7 +495,7 @@ Call-ID: register@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 REGISTER
 Contact: <sip:222222@10.20.20.9>
 Expires: 3600
-Recv-Info: dtmf
+Recv-Info: infoDtmf
 Path: <sip:path.ims.mnc001.mcc001.3gppnetwork.org;lr>
 User-Agent: VolteMutationFuzzer/0.1
 Content-Length: 0
@@ -541,7 +541,7 @@ Contact: <sip:222222@10.20.20.9>
 Supported: 100rel, timer
 Accept: application/pidf+xml
 Event: presence
-Expires: 300
+Expires: 3600
 Content-Length: 0
 ```
 
@@ -581,18 +581,18 @@ To: <sip:111111@ue.ims.mnc001.mcc001.3gppnetwork.org>
 Call-ID: update@pcscf.ims.mnc001.mcc001.3gppnetwork.org
 CSeq: 1 UPDATE
 Contact: <sip:222222@10.20.20.9>
-Recv-Info: dtmf
-Session-Expires: 600;refresher=uac
+Recv-Info: infoDtmf
+Session-Expires: 1800
 Min-SE: 90
 Content-Type: application/sdp
-Content-Length: 91
+Content-Length: 95
 
 v=0
 o=- 1 1 IN IP4 172.22.0.16
 s=-
 c=IN IP4 192.0.2.10
 t=0 0
-m=audio 49172 RTP/AVP 0
+m=audio 49172 RTP/AVP 96 97
 ```
 
 ### 필수 헤더

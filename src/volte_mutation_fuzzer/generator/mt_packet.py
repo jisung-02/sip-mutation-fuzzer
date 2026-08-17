@@ -295,7 +295,7 @@ def _build_body(
         sms = SmsBody(payload=_build_default_sms_body(seed, from_msisdn))
         return sms.content_type, sms.render()
 
-    if method == "INFO" and info_package == "dtmf":
+    if method == "INFO" and info_package == DEFAULT_INFO_PACKAGE:
         body_model = DtmfRelayBody.default_instance(signal=str(seed % 10))
         return body_model.content_type, body_model.render()
 
