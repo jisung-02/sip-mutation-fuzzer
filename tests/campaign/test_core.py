@@ -334,6 +334,162 @@ class ResultStoreTests(unittest.TestCase):
             assert result is not None
             self.assertEqual(result.case_id, 3)
 
+    def _write_torn_case_line(self, path: Path, case_id: int) -> bytes:
+        """Append half of a valid case line, without the trailing newline."""
+        payload = {"type": "case", "case_id": case_id, "seed": case_id}
+        full_line = json.dumps(payload).encode("utf-8")
+        fragment = full_line[: len(full_line) // 2]
+        with path.open("ab") as handle:
+            handle.write(fragment)
+        return fragment
+
+    def test_read_all_skips_torn_trailing_fragment(self) -> None:
+        """A partial trailing line (SIGKILL mid-append) must not fail the read."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "campaign.jsonl"
+            store = ResultStore(path)
+            store.write_header(self._make_campaign(str(path)))
+            store.append(self._make_case_result(0))
+            store.append(self._make_case_result(1))
+            self._write_torn_case_line(path, case_id=2)
+
+            header, cases = store.read_all()
+
+            self.assertEqual(header.campaign_id, "test123")
+            self.assertEqual([c.case_id for c in cases], [0, 1])
+
+    def test_read_all_still_raises_on_midfile_corruption(self) -> None:
+        """Newline-terminated garbage between records is real corruption."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "campaign.jsonl"
+            store = ResultStore(path)
+            store.write_header(self._make_campaign(str(path)))
+            store.append(self._make_case_result(0))
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("{not json at all\n")
+            store.append(self._make_case_result(1))
+
+            with self.assertRaises(json.JSONDecodeError):
+                store.read_all()
+
+    def test_repair_torn_tail_truncates_fragment_before_append(self) -> None:
+        """Repair drops the fragment so the next append stays line-framed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "campaign.jsonl"
+            store = ResultStore(path)
+            store.write_header(self._make_campaign(str(path)))
+            store.append(self._make_case_result(0))
+            fragment = self._write_torn_case_line(path, case_id=1)
+
+            dropped = store.repair_torn_tail()
+
+            self.assertEqual(dropped, len(fragment))
+            self.assertTrue(path.read_bytes().endswith(b"\n"))
+            store.append(self._make_case_result(1))
+            _, cases = store.read_all()
+            self.assertEqual([c.case_id for c in cases], [0, 1])
+
+
+class CampaignResumeIntegrityTests(unittest.TestCase):
+    """Resume must never destroy or further corrupt an existing JSONL."""
+
+    def _make_case_result(self, case_id: int) -> CaseResult:
+        return CaseResult(
+            case_id=case_id,
+            seed=case_id,
+            method="OPTIONS",
+            layer="model",
+            strategy="default",
+            verdict="normal",
+            reason="ok",
+            elapsed_ms=50.0,
+            reproduction_cmd="uv run fuzzer ...",
+            timestamp=time.time(),
+        )
+
+    def _seed_campaign_file(
+        self, tmpdir: str, case_count: int, torn: bool
+    ) -> Path:
+        config = CampaignConfig(
+            target_host="127.0.0.1",
+            methods=("OPTIONS",),
+            max_cases=case_count,
+        )
+        path = Path(tmpdir) / "resume-camp" / "campaign.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        store = ResultStore(path)
+        store.write_header(
+            CampaignResult(
+                campaign_id="resumetest",
+                started_at="2026-01-01T00:00:00Z",
+                config=config,
+                status="running",
+            )
+        )
+        for i in range(case_count):
+            store.append(self._make_case_result(i))
+        if torn:
+            payload = {"type": "case", "case_id": case_count}
+            full_line = json.dumps(payload).encode("utf-8")
+            with path.open("ab") as handle:
+                handle.write(full_line[: len(full_line) // 2])
+        return path
+
+    def test_resume_refuses_to_overwrite_unreadable_jsonl(self) -> None:
+        """An unreadable non-empty file must abort resume, not truncate it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._seed_campaign_file(tmpdir, case_count=1, torn=False)
+            path.write_text("garbage that is not jsonl\n", encoding="utf-8")
+            before = path.read_bytes()
+
+            config = CampaignConfig(
+                target_host="127.0.0.1",
+                resume=True,
+                results_dir=str(Path(tmpdir)),
+                output_name="resume-camp",
+            )
+            executor = CampaignExecutor(config)
+
+            with self.assertRaises(RuntimeError):
+                executor.run()
+
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_resume_on_torn_tail_repairs_and_appends_cleanly(self) -> None:
+        """A torn trailing line is repaired; appends never merge with it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            case_count = 5
+            path = self._seed_campaign_file(
+                tmpdir, case_count=case_count, torn=True
+            )
+
+            config = CampaignConfig(
+                target_host="127.0.0.1",
+                resume=True,
+                results_dir=str(Path(tmpdir)),
+                output_name="resume-camp",
+            )
+            executor = CampaignExecutor(config)
+            result = executor.run()
+
+            # campaign identity preserved, all recorded cases replayed/skipped
+            self.assertEqual(result.campaign_id, "resumetest")
+
+            raw = path.read_bytes()
+            self.assertTrue(raw.endswith(b"\n"))
+            # Every physical line must be standalone-valid JSON: the resume
+            # marker and footer must not have merged with the torn fragment.
+            types = []
+            for line in raw.split(b"\n"):
+                if not line.strip():
+                    continue
+                types.append(json.loads(line).get("type"))
+            self.assertIn("resume_marker", types)
+            self.assertEqual(types.count("case"), case_count)
+            header, cases = ResultStore(path).read_all()
+            self.assertEqual(header.campaign_id, "resumetest")
+            self.assertEqual(len(cases), case_count)
+
 
 class CampaignExecutorWallClockTests(unittest.TestCase):
     def _make_campaign(self, _path: str) -> CampaignResult:

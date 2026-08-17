@@ -302,11 +302,44 @@ class ResultStore:
         with self._path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
+    def repair_torn_tail(self) -> int:
+        """Drop an unterminated trailing line so appends stay line-framed.
+
+        A SIGKILL/power-loss mid-append leaves a fragment without a trailing
+        newline. Left in place, the next append (resume marker or case line)
+        merges with it into a single corrupt record. Returns the number of
+        bytes removed (0 when the file is already newline-terminated).
+        """
+        data = self._path.read_bytes()
+        if not data or data.endswith(b"\n"):
+            return 0
+        keep = data.rfind(b"\n") + 1
+        self._path.write_bytes(data[:keep])
+        dropped = len(data) - keep
+        logger.warning(
+            "repaired torn JSONL tail in %s (dropped %d bytes)",
+            self._path,
+            dropped,
+        )
+        return dropped
+
     def read_all(self) -> tuple[CampaignResult, list[CaseResult]]:
-        lines = self._path.read_text(encoding="utf-8").splitlines()
+        raw_lines = self._path.read_bytes().split(b"\n")
+        if raw_lines and raw_lines[-1] != b"":
+            # Unterminated trailing fragment — a partial append. Skip it
+            # instead of failing the whole read (json.loads on it raises,
+            # which previously made resume treat the file as unreadable).
+            # The resume path calls repair_torn_tail() before appending.
+            fragment = raw_lines.pop()
+            logger.warning(
+                "ignoring torn trailing JSONL fragment in %s (%d bytes)",
+                self._path,
+                len(fragment),
+            )
         header: CampaignResult | None = None
         cases: list[CaseResult] = []
-        for line in lines:
+        for raw_line in raw_lines:
+            line = raw_line.decode("utf-8")
             if not line.strip():
                 continue
             obj = json.loads(line)
@@ -556,6 +589,9 @@ class CampaignExecutor:
         skip_before = -1
 
         if config.resume:
+            # 찢어진 마지막 줄(SIGKILL 등)을 append 전에 정리한다. 그대로
+            # 두면 resume marker가 조각과 한 줄로 합쳐져 기록이 손상된다.
+            self._store.repair_torn_tail()
             checkpoint = self._store.find_checkpoint()
             if checkpoint is not None:
                 last_id, summary, campaign_id, started_at, _ = checkpoint
@@ -567,7 +603,22 @@ class CampaignExecutor:
                     last_id + 1,
                 )
             else:
-                # 파일 없거나 case 없음 → 새 캠페인처럼 시작
+                # 파일 없거나 case 없음 → 새 캠페인처럼 시작. 단 파일이
+                # 존재하는데 읽을 수 없으면(헤더 손상 등) 새 헤더 기록이
+                # 기존 데이터를 통째로 지우므로 거부한다.
+                if (
+                    self._jsonl_path.exists()
+                    and self._jsonl_path.stat().st_size > 0
+                ):
+                    try:
+                        self._store.read_all()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"cannot resume {self._jsonl_path}: {exc}. "
+                            "Refusing to overwrite an unreadable campaign "
+                            "file — restore it or resume a different "
+                            "--output."
+                        ) from exc
                 campaign_id = uuid.uuid4().hex[:12]
                 started_at = datetime.now(timezone.utc).isoformat()
                 summary = CampaignSummary()
