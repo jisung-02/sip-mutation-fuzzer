@@ -1022,6 +1022,35 @@ class SIPMutator:
             effective_layer,
         )
 
+        # "identity" is the zero-operation baseline: the message must pass
+        # through unchanged with no mutation records. Without this dispatch
+        # the strategy fell through to the random default operators while
+        # the case was still recorded as identity. Model layer never gets
+        # here (validation above rejects identity there), and an explicit
+        # target keeps its targeted-mutation semantics.
+        if target is None and effective_config.strategy == "identity":
+            if effective_layer == "wire":
+                assert editable_message is not None
+                return MutatedCase(
+                    original_packet=packet,
+                    wire_text=self._finalize_wire_message(editable_message),
+                    records=(),
+                    seed=effective_config.seed,
+                    profile=effective_config.profile,
+                    strategy=effective_config.strategy,
+                    final_layer="wire",
+                )
+            assert editable_bytes is not None
+            return MutatedCase(
+                original_packet=packet,
+                packet_bytes=self._finalize_packet_bytes(editable_bytes),
+                records=(),
+                seed=effective_config.seed,
+                profile=effective_config.profile,
+                strategy=effective_config.strategy,
+                final_layer="byte",
+            )
+
         if effective_layer == "model":
             model_target = target if target is None or target.layer == "model" else None
             return self._mutate_model(

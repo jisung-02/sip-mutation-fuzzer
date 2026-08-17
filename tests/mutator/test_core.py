@@ -1658,6 +1658,68 @@ class SIPMutatorWireMutationTests(SIPMutatorTestCase):
         )
 
 
+class SIPMutatorIdentityStrategyTests(SIPMutatorTestCase):
+    def test_mutate_wire_identity_passes_message_through_unchanged(self) -> None:
+        # identity is the zero-operation baseline: the campaign emits
+        # wire+identity combos (SUPPORTED_STRATEGIES_BY_LAYER), and mutate()
+        # used to fall through to the random default operators while the
+        # case was still recorded as identity.
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=17, layer="wire", strategy="identity"),
+        )
+        other_seed = mutator.mutate(
+            packet,
+            MutationConfig(seed=999, layer="wire", strategy="identity"),
+        )
+
+        self.assertEqual(case.strategy, "identity")
+        self.assertEqual(case.final_layer, "wire")
+        self.assertEqual(case.records, ())
+        self.assertIsNone(case.packet_bytes)
+        self.assertEqual(case.wire_text, other_seed.wire_text)
+        self.assertEqual(
+            case.wire_text,
+            mutator._finalize_wire_message(mutator._to_editable_message(packet)),
+        )
+
+    def test_mutate_byte_identity_passes_bytes_through_unchanged(self) -> None:
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        case = mutator.mutate(
+            packet,
+            MutationConfig(seed=17, layer="byte", strategy="identity"),
+        )
+        other_seed = mutator.mutate(
+            packet,
+            MutationConfig(seed=999, layer="byte", strategy="identity"),
+        )
+
+        self.assertEqual(case.strategy, "identity")
+        self.assertEqual(case.final_layer, "byte")
+        self.assertEqual(case.records, ())
+        self.assertIsNone(case.wire_text)
+        self.assertEqual(case.packet_bytes, other_seed.packet_bytes)
+
+    def test_mutate_model_identity_still_rejected(self) -> None:
+        # Model layer never supported identity; the pass-through fix must
+        # not silently widen the model strategy set.
+        mutator = SIPMutator()
+        packet = self.build_request()
+
+        with self.assertRaises(ValueError) as ctx:
+            mutator.mutate(
+                packet,
+                MutationConfig(seed=17, layer="model", strategy="identity"),
+            )
+
+        self.assertIn("unsupported mutation strategy", str(ctx.exception))
+
+
 class SIPMutatorModelMutationFailureTests(SIPMutatorTestCase):
     def test_mutate_rejects_unsupported_strategy(self) -> None:
         mutator = SIPMutator()
