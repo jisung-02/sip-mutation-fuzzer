@@ -20,7 +20,7 @@ _DEFAULT_SUBSCRIBER_OPC: Final[str] = "00112233445566778899AABBCCDDEEFF"
 _DEFAULT_SUBSCRIBER_AMF: Final[str] = "8000"
 _DEFAULT_START_IMSI: Final[str] = "001010000000001"
 _DEFAULT_START_MSISDN: Final[str] = "222222"
-_DEFAULT_PAGE_SIZE: Final[int] = 200
+_DEFAULT_PYHSS_IFC_PATH: Final[str] = "default_ifc.xml"
 
 
 @dataclass(frozen=True)
@@ -203,13 +203,20 @@ class InfraManager:
             raise ValueError(
                 "no UE entries found in .env — add UE1_IMSI, UE1_KI, UE1_OPC, UE1_AMF, UE1_MSISDN"
             )
+        self._ensure_pyhss_apns()
         provisioned: list[dict[str, str]] = []
         for cfg in configs:
             self._provision_hss_subscriber(
                 imsi=cfg.imsi, key=cfg.key, opc=cfg.opc, amf=cfg.amf
             )
             self._ensure_ims_apn(cfg.imsi)
-            self._provision_pyhss_subscriber(imsi=cfg.imsi, msisdn=cfg.msisdn)
+            self._provision_pyhss_subscriber(
+                imsi=cfg.imsi,
+                msisdn=cfg.msisdn,
+                key=cfg.key,
+                opc=cfg.opc,
+                amf=cfg.amf,
+            )
             provisioned.append({"imsi": cfg.imsi, "msisdn": cfg.msisdn})
         return provisioned
 
@@ -226,13 +233,16 @@ class InfraManager:
         if count < 1:
             raise ValueError("count must be at least 1")
 
+        self._ensure_pyhss_apns()
         provisioned: list[dict[str, str]] = []
         for index in range(count):
             imsi = _increment_identifier(start_imsi, index)
             msisdn = _increment_identifier(start_msisdn, index)
             self._provision_hss_subscriber(imsi=imsi, key=key, opc=opc, amf=amf)
             self._ensure_ims_apn(imsi)
-            self._provision_pyhss_subscriber(imsi=imsi, msisdn=msisdn)
+            self._provision_pyhss_subscriber(
+                imsi=imsi, msisdn=msisdn, key=key, opc=opc, amf=amf
+            )
             provisioned.append({"imsi": imsi, "msisdn": msisdn})
         return provisioned
 
@@ -412,78 +422,162 @@ if (!imsPresent) {
             last_detail = detail or f"{shell} exited with status {result.returncode}"
         return last_detail
 
-    def _provision_pyhss_subscriber(self, *, imsi: str, msisdn: str) -> None:
-        existing = self._list_pyhss_subscribers()
-        if any(
-            entry.get("imsi") == imsi or entry.get("msisdn") == msisdn
-            for entry in existing
-            if isinstance(entry, dict)
-        ):
-            return
+    def _provision_pyhss_subscriber(
+        self,
+        *,
+        imsi: str,
+        msisdn: str,
+        key: str,
+        opc: str,
+        amf: str,
+    ) -> None:
+        """Create or refresh the PyHSS rows a working IMS subscription needs.
 
+        Mirrors scripts/provision_subscribers.py: the previous version only
+        PUT a bare ims_subscriber row — without ifc_path the S-CSCF answers
+        the MAR with 403 (REGISTER never completes), and without auc/
+        subscriber rows IMS AKA authentication data and the EPC-side
+        subscriber linkage were missing entirely.
+        """
         ims_domain = _build_ims_domain(
             self._env.get("MCC", "001"),
             self._env.get("MNC", "01"),
         )
-        scscf_uri = f"sip:scscf.{ims_domain}:6060"
-        last_error = "PyHSS provisioning failed"
-        for endpoint in ("/ims_subscriber/", "/ims_subscriber"):
-            for payload in (
-                {
-                    "imsi": imsi,
-                    "msisdn": msisdn,
-                    "msisdn_list": msisdn,
-                    "scscf": scscf_uri,
-                },
-                {
-                    "imsi": imsi,
-                    "msisdn": msisdn,
-                    "msisdn_list": [msisdn],
-                    "scscf": scscf_uri,
-                },
-            ):
-                request = urllib.request.Request(
-                    f"{self.pyhss_api.rstrip('/')}{endpoint}",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "Accept": "application/json",
-                        "Content-Type": "application/json",
-                        "Provisioning-Key": "hss",
-                    },
-                    method="PUT",
-                )
-                try:
-                    with urllib.request.urlopen(request, timeout=10.0):
-                        return
-                except urllib.error.HTTPError as exc:
-                    last_error = exc.read().decode("utf-8", errors="replace") or str(
-                        exc
-                    )
-                except urllib.error.URLError as exc:
-                    last_error = str(exc)
-        raise RuntimeError(
-            f"failed to provision PyHSS IMS subscriber {imsi}: {last_error}"
+
+        auc = self._pyhss_upsert(
+            resource="auc",
+            data={"ki": key, "opc": opc, "amf": amf, "sqn": 0, "imsi": imsi},
+            # The update payload must not carry sqn: it tracks the IMS AKA
+            # sequence number shared with the UE, and resetting it breaks
+            # authentication (same rule as the provisioning script).
+            update_data={"ki": key, "opc": opc, "amf": amf, "imsi": imsi},
+            lookup_path=f"imsi/{imsi}",
+        )
+        auc_id = auc.get("auc_id")
+        if auc_id is None:
+            status, body = self._pyhss_request(f"/auc/imsi/{imsi}", method="GET")
+            record = self._decode_json(body) if status == 200 else {}
+            auc_id = record.get("auc_id")
+        if auc_id is None:
+            raise RuntimeError(
+                f"failed to resolve PyHSS auc_id for {imsi}: "
+                "auc upsert succeeded but the record exposes no id"
+            )
+
+        self._pyhss_upsert(
+            resource="subscriber",
+            data={
+                "imsi": imsi,
+                "enabled": True,
+                "auc_id": auc_id,
+                "default_apn": 1,
+                "apn_list": "1,2",
+                "msisdn": msisdn,
+                "ue_ambr_dl": 0,
+                "ue_ambr_ul": 0,
+            },
+            lookup_path=f"imsi/{imsi}",
         )
 
-    def _list_pyhss_subscribers(self) -> list[dict[str, object]]:
+        self._pyhss_upsert(
+            resource="ims_subscriber",
+            data={
+                "imsi": imsi,
+                "msisdn": msisdn,
+                "sh_profile": "string",
+                "scscf_peer": f"scscf.{ims_domain}",
+                "msisdn_list": f"[{msisdn}]",
+                "ifc_path": _DEFAULT_PYHSS_IFC_PATH,
+                "scscf": f"sip:scscf.{ims_domain}:6060",
+                "scscf_realm": ims_domain,
+            },
+            lookup_path=f"imsi/{imsi}",
+        )
+
+    def _ensure_pyhss_apns(self) -> None:
+        for apn in ("internet", "ims"):
+            self._pyhss_upsert(
+                resource="apn",
+                data={"apn": apn, "apn_ambr_dl": 0, "apn_ambr_ul": 0},
+                lookup_path=f"apn/{apn}",
+            )
+
+    def _pyhss_upsert(
+        self,
+        *,
+        resource: str,
+        data: dict[str, object],
+        lookup_path: str,
+        update_data: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """PUT a PyHSS resource, or PATCH the existing record on conflict.
+
+        Returns the decoded record of the winning request. lookup_path is
+        the path segment that addresses the existing record by natural key
+        (e.g. "imsi/<imsi>", "apn/<apn>"); the record id it yields is used
+        for the PATCH.
+        """
+        status, body = self._pyhss_request(f"/{resource}/", method="PUT", payload=data)
+        if 200 <= status < 300:
+            return self._decode_json(body)
+        detail = f"PUT /{resource}/ failed with status {status}: {body.strip()}"
+
+        lookup_status, lookup_body = self._pyhss_request(
+            f"/{resource}/{lookup_path}", method="GET"
+        )
+        if lookup_status == 200:
+            record = self._decode_json(lookup_body)
+            record_id = record.get(f"{resource}_id") or record.get("id")
+            if record_id is not None:
+                payload = update_data if update_data is not None else data
+                patch_status, patch_body = self._pyhss_request(
+                    f"/{resource}/{record_id}", method="PATCH", payload=payload
+                )
+                if 200 <= patch_status < 300:
+                    return self._decode_json(patch_body)
+                raise RuntimeError(
+                    f"failed to update PyHSS {resource}: PATCH /{resource}/"
+                    f"{record_id} failed with status {patch_status}: "
+                    f"{patch_body.strip()}"
+                )
+            detail = f"existing {resource} record exposes no id: {lookup_body.strip()}"
+        raise RuntimeError(f"failed to provision PyHSS {resource}: {detail}")
+
+    def _pyhss_request(
+        self,
+        path: str,
+        *,
+        method: str,
+        payload: dict[str, object] | None = None,
+    ) -> tuple[int, str]:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = urllib.request.Request(
-            (
-                f"{self.pyhss_api.rstrip('/')}/ims_subscriber/list"
-                f"?page=0&page_size={_DEFAULT_PAGE_SIZE}"
-            ),
+            f"{self.pyhss_api.rstrip('/')}{path}",
+            data=data,
             headers={
                 "Accept": "application/json",
+                "Content-Type": "application/json",
                 "Provisioning-Key": "hss",
             },
+            method=method,
         )
         try:
             with urllib.request.urlopen(request, timeout=10.0) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, ValueError):
-            return []
-        if not isinstance(payload, list):
-            return []
-        return [item for item in payload if isinstance(item, dict)]
+                return response.status, response.read().decode(
+                    "utf-8", errors="replace"
+                )
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as exc:
+            return 0, str(exc)
+
+    @staticmethod
+    def _decode_json(body: str) -> dict[str, object]:
+        try:
+            decoded = json.loads(body)
+        except ValueError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
 
 
 def _run_route_command(command: list[str]) -> RouteCommandResult:

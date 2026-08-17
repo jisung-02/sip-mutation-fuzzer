@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import email.message
+import io
+import json
 import subprocess
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Callable
 from unittest import mock
+from urllib.parse import urlparse
 
 from volte_mutation_fuzzer.infra.core import InfraManager
 
@@ -54,7 +60,82 @@ def _is_mongo_command(command: list[str]) -> bool:
     return "mongosh" in " ".join(command) or "mongo" in command
 
 
-class ProvisionHssSubscriberTests(unittest.TestCase):
+def _urlopen_ok(status: int = 200, body: str = "{}"):
+    payload = mock.MagicMock()
+    payload.status = status
+    payload.read.return_value = body.encode("utf-8")
+    handle = mock.MagicMock()
+    handle.__enter__.return_value = payload
+    return handle
+
+
+def _http_error(status: int, body: str = "") -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "http://localhost:8080",
+        status,
+        "error",
+        email.message.Message(),
+        io.BytesIO(body.encode()),
+    )
+
+
+class _PyhssRouter:
+    """Route urllib.request.urlopen calls to canned PyHSS responses.
+
+    Handlers are matched on (method, URL path) so "/subscriber/" never
+    collides with "/ims_subscriber/". Each registered handler fires once,
+    in registration order; unmatched requests succeed with an empty body.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, bytes | None]] = []
+        self._routes: dict[tuple[str, str], list] = {}
+
+    def add(
+        self,
+        method: str,
+        path: str,
+        *,
+        status: int = 200,
+        body: str = "{}",
+        error: Exception | None = None,
+    ) -> None:
+        handler = error if error is not None else _urlopen_ok(status, body)
+        self._routes.setdefault((method, path), []).append(handler)
+
+    def __call__(self, request, timeout=None):  # noqa: ANN001
+        method = request.get_method()
+        path = urlparse(request.full_url).path
+        self.calls.append((method, path, request.data))
+        handlers = self._routes.get((method, path))
+        if handlers:
+            handler = handlers.pop(0)
+            if isinstance(handler, Exception):
+                raise handler
+            return handler
+        return _urlopen_ok(200, "{}")
+
+    def sent_payloads(self, method: str, path: str) -> list[dict]:
+        return [
+            json.loads(data)
+            for m, p, data in self.calls
+            if m == method and p == path and data is not None
+        ]
+
+    def request_paths(self) -> list[tuple[str, str]]:
+        return [(method, path) for method, path, _data in self.calls]
+
+
+class InfraManagerTestCase(unittest.TestCase):
+    def make_manager(self) -> InfraManager:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "docker-compose.yml").write_text("services: {}\n")
+        return InfraManager(infra_dir=root, env={})
+
+
+class ProvisionHssSubscriberTests(InfraManagerTestCase):
     IMSI = "001010000000001"
     KEY = "00112233445566778899AABBCCDDEEFF"
     OPC = "FFEEDDCCBBAA99887766554433221100"
@@ -192,6 +273,176 @@ class EnsureImsApnTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 self.manager._ensure_ims_apn("001010000000001")
         self.assertIn("failed to update IMS APN", str(ctx.exception))
+
+
+class ProvisionPyhssSubscriberTests(InfraManagerTestCase):
+    IMSI = "001010000000001"
+    MSISDN = "222222"
+    KEY = "00112233445566778899AABBCCDDEEFF"
+    OPC = "FFEEDDCCBBAA99887766554433221100"
+    AMF = "8000"
+
+    def setUp(self) -> None:
+        self.manager = self.make_manager()
+
+    def _provision(self, router: _PyhssRouter) -> None:
+        with mock.patch.object(urllib.request, "urlopen", side_effect=router):
+            self.manager._provision_pyhss_subscriber(
+                imsi=self.IMSI,
+                msisdn=self.MSISDN,
+                key=self.KEY,
+                opc=self.OPC,
+                amf=self.AMF,
+            )
+
+    def _add_success_routes(self, router: _PyhssRouter) -> None:
+        router.add("PUT", "/auc/", body=json.dumps({"auc_id": 7}))
+        router.add("PUT", "/subscriber/")
+        router.add("PUT", "/ims_subscriber/")
+
+    def test_fresh_subscriber_creates_all_three_rows(self) -> None:
+        router = _PyhssRouter()
+        self._add_success_routes(router)
+        self._provision(router)
+        paths = router.request_paths()
+        self.assertIn(("PUT", "/auc/"), paths)
+        self.assertIn(("PUT", "/subscriber/"), paths)
+        self.assertIn(("PUT", "/ims_subscriber/"), paths)
+
+        auc_payload = router.sent_payloads("PUT", "/auc/")[0]
+        self.assertEqual(auc_payload["ki"], self.KEY)
+        self.assertEqual(auc_payload["opc"], self.OPC)
+        self.assertEqual(auc_payload["amf"], self.AMF)
+        self.assertEqual(auc_payload["imsi"], self.IMSI)
+
+        subscriber_payload = router.sent_payloads("PUT", "/subscriber/")[0]
+        self.assertEqual(subscriber_payload["auc_id"], 7)
+        self.assertTrue(subscriber_payload["enabled"])
+        self.assertEqual(subscriber_payload["msisdn"], self.MSISDN)
+
+    def test_ims_subscriber_payload_includes_required_ifc_path(self) -> None:
+        # ifc_path is mandatory: null makes the S-CSCF answer the MAR with
+        # 403, so REGISTER never completes.
+        router = _PyhssRouter()
+        self._add_success_routes(router)
+        self._provision(router)
+        payload = router.sent_payloads("PUT", "/ims_subscriber/")[0]
+        self.assertEqual(payload["ifc_path"], "default_ifc.xml")
+        self.assertEqual(
+            payload["scscf"],
+            "sip:scscf.ims.mnc001.mcc001.3gppnetwork.org:6060",
+        )
+        self.assertEqual(payload["scscf_realm"], "ims.mnc001.mcc001.3gppnetwork.org")
+        self.assertEqual(
+            payload["scscf_peer"], "scscf.ims.mnc001.mcc001.3gppnetwork.org"
+        )
+
+    def test_existing_rows_are_patched_and_auc_sqn_preserved(self) -> None:
+        router = _PyhssRouter()
+        router.add("PUT", "/auc/", error=_http_error(409, "duplicate"))
+        router.add("GET", f"/auc/imsi/{self.IMSI}", body=json.dumps({"auc_id": 7}))
+        router.add("PATCH", "/auc/7", body=json.dumps({"auc_id": 7}))
+        router.add("PUT", "/subscriber/", error=_http_error(409, "duplicate"))
+        router.add(
+            "GET",
+            f"/subscriber/imsi/{self.IMSI}",
+            body=json.dumps({"subscriber_id": 3}),
+        )
+        router.add("PATCH", "/subscriber/3")
+        router.add("PUT", "/ims_subscriber/", error=_http_error(409, "duplicate"))
+        router.add(
+            "GET",
+            f"/ims_subscriber/imsi/{self.IMSI}",
+            body=json.dumps({"ims_subscriber_id": 5}),
+        )
+        router.add("PATCH", "/ims_subscriber/5")
+        self._provision(router)
+
+        auc_patch = router.sent_payloads("PATCH", "/auc/7")[0]
+        self.assertEqual(auc_patch["ki"], self.KEY)
+        self.assertEqual(auc_patch["opc"], self.OPC)
+        # Resetting sqn desynchronizes the IMS AKA sequence number shared
+        # with the UE — the PATCH payload must not contain it.
+        self.assertNotIn("sqn", auc_patch)
+
+        ims_patch = router.sent_payloads("PATCH", "/ims_subscriber/5")[0]
+        self.assertEqual(ims_patch["ifc_path"], "default_ifc.xml")
+
+    def test_unresolvable_auc_id_raises(self) -> None:
+        router = _PyhssRouter()
+        router.add("PUT", "/auc/", body="{}")
+        router.add("GET", f"/auc/imsi/{self.IMSI}", body="{}")
+        with mock.patch.object(urllib.request, "urlopen", side_effect=router):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.manager._provision_pyhss_subscriber(
+                    imsi=self.IMSI,
+                    msisdn=self.MSISDN,
+                    key=self.KEY,
+                    opc=self.OPC,
+                    amf=self.AMF,
+                )
+        self.assertIn("auc_id", str(ctx.exception))
+
+    def test_unreachable_pyhss_raises(self) -> None:
+        router = _PyhssRouter()
+        router.add("PUT", "/auc/", error=urllib.error.URLError("connection refused"))
+        router.add(
+            "GET",
+            f"/auc/imsi/{self.IMSI}",
+            error=urllib.error.URLError("connection refused"),
+        )
+        with mock.patch.object(urllib.request, "urlopen", side_effect=router):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.manager._provision_pyhss_subscriber(
+                    imsi=self.IMSI,
+                    msisdn=self.MSISDN,
+                    key=self.KEY,
+                    opc=self.OPC,
+                    amf=self.AMF,
+                )
+        self.assertIn("connection refused", str(ctx.exception))
+
+
+class EnsurePyhssApnsTests(InfraManagerTestCase):
+    def test_upserts_internet_and_ims_apns(self) -> None:
+        manager = self.make_manager()
+        router = _PyhssRouter()
+        router.add("PUT", "/apn/")
+        router.add("PUT", "/apn/")
+        with mock.patch.object(urllib.request, "urlopen", side_effect=router):
+            manager._ensure_pyhss_apns()
+        payloads = router.sent_payloads("PUT", "/apn/")
+        self.assertEqual(
+            [p["apn"] for p in payloads],
+            ["internet", "ims"],
+        )
+
+
+class ProvisionSubscribersWiringTests(InfraManagerTestCase):
+    def test_provision_subscribers_wires_keys_and_all_pyhss_rows(self) -> None:
+        manager = self.make_manager()
+        run, _calls = _install_fake_run()
+        router = _PyhssRouter()
+        router.add("PUT", "/apn/")
+        router.add("PUT", "/apn/")
+        router.add("PUT", "/auc/", body=json.dumps({"auc_id": 11}))
+        router.add("PUT", "/subscriber/")
+        router.add("PUT", "/ims_subscriber/")
+        with (
+            mock.patch.object(subprocess, "run", side_effect=run),
+            mock.patch.object(urllib.request, "urlopen", side_effect=router),
+        ):
+            manager.provision_subscribers(
+                1,
+                key="AABBCCDDEEFF00112233445566778899",
+                opc="112233445566778899AABBCCDDEEFF00",
+            )
+        auc_payload = router.sent_payloads("PUT", "/auc/")[0]
+        self.assertEqual(auc_payload["ki"], "AABBCCDDEEFF00112233445566778899")
+        self.assertEqual(auc_payload["opc"], "112233445566778899AABBCCDDEEFF00")
+        paths = router.request_paths()
+        self.assertIn(("PUT", "/subscriber/"), paths)
+        self.assertIn(("PUT", "/ims_subscriber/"), paths)
 
 
 if __name__ == "__main__":
