@@ -263,6 +263,37 @@ class SIPGeneratorSignatureTests(unittest.TestCase):
         self.assertEqual(packet.cseq.sequence, 1)
         self.assertEqual(len(packet.contact), 1)
 
+    def test_build_request_defaults_ack_and_cancel_mirror_invite_cseq(self) -> None:
+        """RFC 3261 §9.1/§13.2.2.4: ACK/CANCEL reuse the INVITE's sequence."""
+        generator = SIPGenerator(GeneratorSettings())
+        context = DialogContext(local_tag=REALISTIC_LOCAL_TAG)
+
+        invite = InviteRequest.model_validate(
+            generator._build_request_defaults(
+                RequestSpec(method=SIPMethod.INVITE), context
+            )
+        )
+        self.assertEqual(invite.cseq.sequence, 1)
+
+        for method in (SIPMethod.ACK, SIPMethod.CANCEL):
+            with self.subTest(method=method):
+                packet = REQUEST_MODELS_BY_METHOD[method].model_validate(
+                    generator._build_request_defaults(
+                        RequestSpec(method=method), context
+                    )
+                )
+                self.assertEqual(packet.cseq.sequence, 1)
+                self.assertEqual(packet.cseq.method, method)
+                # Mirroring must not advance the dialog's CSeq counter.
+                self.assertEqual(context.remote_cseq, 1)
+
+        bye = REQUEST_MODELS_BY_METHOD[SIPMethod.BYE].model_validate(
+            generator._build_request_defaults(
+                RequestSpec(method=SIPMethod.BYE), context
+            )
+        )
+        self.assertEqual(bye.cseq.sequence, 2)
+
     def test_build_request_defaults_cover_all_request_models(self) -> None:
         generator = SIPGenerator(GeneratorSettings())
 

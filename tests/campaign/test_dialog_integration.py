@@ -70,6 +70,38 @@ class CampaignDialogIntegrationTests(unittest.TestCase):
             methods.append(first_line.split(" ", 1)[0])
         return methods
 
+    @staticmethod
+    def _cseq_parts(payload: bytes) -> list[str]:
+        for line in payload.split(b"\r\n"):
+            if line.lower().startswith(b"cseq:"):
+                return line.decode("utf-8", errors="replace").split()
+        return []
+
+    def test_dialog_ack_cseq_mirrors_invite_on_wire(self) -> None:
+        """Wire-level RFC 3261 check: ACK reuses the INVITE sequence number."""
+        server = DialogUDPResponder(
+            responses_by_method={
+                "INVITE": make_200_ok(),
+                "ACK": b"",
+                "BYE": make_200_ok_generic("BYE"),
+            }
+        )
+        server.start()
+        self.addCleanup(server.close)
+
+        executor = CampaignExecutor(self._make_config(server.host, server.port))
+
+        result = executor._execute_case(self._make_case_spec("BYE"))
+
+        self.assertNotEqual(result.verdict, "unknown")
+        methods = self._methods_seen(server)
+        invite_seq = self._cseq_parts(
+            server.received_payloads[methods.index("INVITE")]
+        )[1]
+        ack_cseq = self._cseq_parts(server.received_payloads[methods.index("ACK")])
+        self.assertEqual(ack_cseq[1], invite_seq)
+        self.assertEqual(ack_cseq[2].upper(), "ACK")
+
     def test_execute_case_routes_bye_through_dialog_orchestrator(self) -> None:
         server = DialogUDPResponder(
             responses_by_method={

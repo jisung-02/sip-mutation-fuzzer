@@ -757,7 +757,17 @@ class SIPGenerator:
             )
             return CSeqHeader(sequence=sequence, method=method)
 
-        sequence = 1 if context is None else context.next_remote_cseq()
+        if context is None:
+            sequence = 1
+        elif method in (SIPMethod.ACK, SIPMethod.CANCEL):
+            # RFC 3261 §9.1 (CANCEL) / §13.2.2.4 (ACK): the sequence number
+            # mirrors the INVITE being cancelled/confirmed — only the method
+            # parameter differs — and must not advance the dialog's CSeq
+            # counter. remote_cseq == 0 (no request sent on this context
+            # yet) falls back to 1, matching the contextless path.
+            sequence = context.remote_cseq or 1
+        else:
+            sequence = context.next_remote_cseq()
         return CSeqHeader(sequence=sequence, method=method)
 
     def _build_request_uri(
