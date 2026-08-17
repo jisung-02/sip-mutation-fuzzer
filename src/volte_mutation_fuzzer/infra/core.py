@@ -282,9 +282,56 @@ class InfraManager:
                 "already exists" in detail.casefold()
                 or "duplicate key" in detail.casefold()
             ):
+                # open5gs-dbctl cannot update credentials of an existing
+                # subscriber: returning here as success left stale K/OPC/AMF
+                # in the database, so re-provisioning with rotated keys kept
+                # failing AKA authentication. Patch the security fields via
+                # the mongo shell instead (same approach as
+                # scripts/provision_subscribers.py).
+                error = self._update_hss_subscriber_credentials(
+                    imsi=imsi, key=key, opc=opc, amf=amf
+                )
+                if error is not None:
+                    raise RuntimeError(
+                        "failed to update HSS subscriber credentials for "
+                        f"existing subscriber {imsi}: {error}"
+                    )
                 return
             last_detail = detail or f"command exited with status {result.returncode}"
         raise RuntimeError(f"failed to provision HSS subscriber {imsi}: {last_detail}")
+
+    def _update_hss_subscriber_credentials(
+        self,
+        *,
+        imsi: str,
+        key: str,
+        opc: str,
+        amf: str,
+    ) -> str | None:
+        """Refresh stored K/OPC/AMF of an existing subscriber; None on success.
+
+        security.sqn is deliberately not written: it tracks the AKA
+        sequence number shared with the UE, and resetting it desynchronizes
+        the pair and breaks LTE authentication.
+        """
+        script = """
+const imsi = %(imsi)s;
+const result = db.subscribers.updateOne(
+  {imsi: imsi},
+  {$set: {"security.k": %(key)s, "security.opc": %(opc)s, "security.amf": %(amf)s}},
+);
+if (result.matchedCount === 0) {
+  print("subscriber-not-found");
+  quit(1);
+}
+print("credentials-updated");
+""" % {
+            "imsi": json.dumps(imsi),
+            "key": json.dumps(key),
+            "opc": json.dumps(opc),
+            "amf": json.dumps(amf),
+        }
+        return self._run_mongo_script(script)
 
     def _ensure_ims_apn(self, imsi: str) -> None:
         script = """
@@ -335,7 +382,13 @@ if (!imsPresent) {
   print("ims-apn-present");
 }
 """ % {"imsi": json.dumps(imsi)}
-        last_detail = "mongo APN update failed"
+        error = self._run_mongo_script(script)
+        if error is not None:
+            raise RuntimeError(f"failed to update IMS APN for {imsi}: {error}")
+
+    def _run_mongo_script(self, script: str) -> str | None:
+        """Run a JS script against the Open5GS DB; return error detail or None."""
+        last_detail = "mongo script failed"
         for shell in ("mongosh", "mongo"):
             result = subprocess.run(
                 [
@@ -353,11 +406,11 @@ if (!imsPresent) {
                 text=True,
                 check=False,
             )
-            detail = _join_output(result.stdout, result.stderr)
             if result.returncode == 0:
-                return
+                return None
+            detail = _join_output(result.stdout, result.stderr)
             last_detail = detail or f"{shell} exited with status {result.returncode}"
-        raise RuntimeError(f"failed to update IMS APN for {imsi}: {last_detail}")
+        return last_detail
 
     def _provision_pyhss_subscriber(self, *, imsi: str, msisdn: str) -> None:
         existing = self._list_pyhss_subscribers()
