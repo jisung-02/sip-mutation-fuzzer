@@ -30,15 +30,31 @@ def _iter_new_case_results(
         return [], start_offset
 
     cases: list[CaseResult] = []
-    with jsonl_path.open("r", encoding="utf-8") as handle:
+    # Only advance the offset past newline-terminated lines, read as raw
+    # bytes. During realtime monitoring the writer may be mid-append, so a
+    # trailing fragment without "\n" can be a partially-written record; the
+    # previous text-mode tell() consumed the fragment, and once the writer
+    # finished the line the completed record was never re-read — permanently
+    # dropping it from the analysis. Holding the fragment back is safe
+    # because appends are always "\n"-framed (ResultStore.append, and torn
+    # tails are repaired by repair_torn_tail), and re-reading a few held
+    # bytes on the next poll is cheap.
+    next_offset = start_offset
+    with jsonl_path.open("rb") as handle:
         handle.seek(start_offset)
         for raw_line in handle:
+            if not raw_line.endswith(b"\n"):
+                break
+            next_offset += len(raw_line)
             line = raw_line.strip()
             if not line:
                 continue
             try:
                 payload = json.loads(line)
-            except json.JSONDecodeError:
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                print(f"[crash-analysis] skipped invalid case record: {exc}")
+                continue
+            if not isinstance(payload, dict):
                 continue
             if payload.get("type") != "case":
                 continue
@@ -47,7 +63,7 @@ def _iter_new_case_results(
                 cases.append(CaseResult.model_validate(payload))
             except ValidationError as exc:
                 print(f"[crash-analysis] skipped invalid case record: {exc}")
-        return cases, handle.tell()
+    return cases, next_offset
 
 
 def analyze_completed(jsonl_file: str, output_dir: str) -> None:
