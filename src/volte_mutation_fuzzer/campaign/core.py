@@ -786,9 +786,7 @@ class CampaignExecutor:
             try:
                 HtmlReportGenerator(self._jsonl_path).generate()
             except Exception as exc:
-                logger.warning(
-                    "HTML report generation failed during abort: %s", exc
-                )
+                logger.warning("HTML report generation failed during abort: %s", exc)
             return campaign
         finally:
             post_grace = config.post_campaign_log_grace_seconds
