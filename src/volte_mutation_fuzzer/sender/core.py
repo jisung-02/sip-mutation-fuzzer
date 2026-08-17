@@ -4,7 +4,7 @@ import socket
 import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 from volte_mutation_fuzzer.sender.contracts import (
     CorrelationKey,
@@ -530,6 +530,13 @@ class SIPSenderReactor:
                     observer_events.append(
                         f"native-ipsec:alt-tuple:{session.pcscf_ip}:{alt_src}->{resolved_host}:{alt_dst}"
                     )
+            # The dispatch in _send_real_ue_direct only routes "native"/
+            # "null" here ("bypass" never reaches this function), but that
+            # narrowing is invisible across the call chain — narrow
+            # explicitly so the mode literal is provable.
+            ipsec_mode: Literal["native", "null"] = (
+                "null" if target.ipsec_mode == "null" else "native"
+            )
             native_result = send_via_native_ipsec(
                 container=container,
                 src_ip=session.pcscf_ip,
@@ -541,7 +548,7 @@ class SIPSenderReactor:
                 transport=target.transport,
                 alt_src_port=alt_src,
                 alt_dst_port=alt_dst,
-                ipsec_mode=target.ipsec_mode if target.ipsec_mode else "native",
+                ipsec_mode=ipsec_mode,
             )
             observer_events.extend(native_result.observer_events)
 

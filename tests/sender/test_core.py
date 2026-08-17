@@ -293,7 +293,10 @@ class SIPSenderReactorTests(unittest.TestCase):
             mode="real-ue-direct",
             host="10.20.20.8",
             port=5060,
-            ipsec_mode="null",
+            # The container legacy path serves sends without native IPsec:
+            # "null" is a real native IPsec mode (null-encryption ESP) and
+            # is routed to _send_via_native_ipsec instead.
+            ipsec_mode=None,
             bind_container="legacy-netns",
             timeout_seconds=0.2,
         )
@@ -508,6 +511,7 @@ class SIPSenderReactorTests(unittest.TestCase):
             transport="UDP",
             alt_src_port=0,
             alt_dst_port=0,
+            ipsec_mode="native",
         )
         mock_prepare.assert_called_once_with(
             artifact,
