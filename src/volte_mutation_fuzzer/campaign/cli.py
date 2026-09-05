@@ -33,7 +33,19 @@ def _parse_csv(raw: str | None) -> tuple[str, ...] | None:
 def _parse_response_codes(raw: str | None) -> tuple[int, ...] | None:
     if raw is None:
         return None
-    return tuple(int(code.strip()) for code in raw.split(",") if code.strip())
+    codes: list[int] = []
+    for raw_code in raw.split(","):
+        code = raw_code.strip()
+        if not code:
+            continue
+        try:
+            codes.append(int(code))
+        except ValueError as exc:
+            raise typer.BadParameter(
+                f"response codes must be integers: {code!r}",
+                param_hint="--response-codes",
+            ) from exc
+    return tuple(codes)
 
 
 @app.command("run")

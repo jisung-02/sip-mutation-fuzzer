@@ -80,6 +80,25 @@ class CampaignRunCLITests(unittest.TestCase):
         self.assertNotIn("--mt-invite-template", result.output)
         self.assertNotIn("alias 'ipsec'", result.output)
 
+    def test_run_rejects_non_numeric_response_code_without_traceback(self) -> None:
+        result = self.runner.invoke(
+            app,
+            [
+                "campaign",
+                "run",
+                "--mode",
+                "softphone",
+                "--response-codes",
+                "200,abc",
+                "--max-cases",
+                "0",
+            ],
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("response codes must be integers: 'abc'", result.output)
+        self.assertNotIn("Traceback", result.output)
+
     def test_run_command_rejects_ipsec_alias(self) -> None:
         with patch("volte_mutation_fuzzer.campaign.cli.CampaignExecutor") as executor:
             result = self.runner.invoke(
