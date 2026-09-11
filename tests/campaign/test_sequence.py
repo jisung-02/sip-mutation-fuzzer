@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import unittest.mock
 from types import SimpleNamespace
+from typing import Any, cast
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig, CaseSpec
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor
@@ -16,8 +17,8 @@ from volte_mutation_fuzzer.sender.contracts import (
 )
 
 
-def _sequence_config(**overrides) -> CampaignConfig:
-    defaults = dict(
+def _sequence_config(**overrides: Any) -> CampaignConfig:
+    defaults: dict[str, Any] = dict(
         mode="real-ue-direct",
         target_host="10.20.20.8",
         target_msisdn="111111",
@@ -147,7 +148,7 @@ class SequenceExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.verdict, "suspicious")
         self.assertIn("sequence:invite_retransmit", result.mutation_ops)
-        steps = result.details["sequence_steps"]
+        steps = cast(list[dict[str, object]], result.details["sequence_steps"])
         self.assertEqual(len(steps), 3)
         self.assertEqual(steps[0]["method"], "INVITE")
         self.assertTrue(steps[0]["mutate"])

@@ -4,6 +4,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from volte_mutation_fuzzer.campaign.contracts import (
     CampaignConfig,
@@ -43,7 +44,7 @@ MESSAGE_SEED = (
 )
 
 
-class _CorpusDirMixin:
+class _CorpusDirMixin(unittest.TestCase):
     def _make_corpus_dir(self) -> Path:
         tmp = tempfile.TemporaryDirectory(suffix="vmf-corpus")
         self.addCleanup(tmp.cleanup)
@@ -52,8 +53,8 @@ class _CorpusDirMixin:
         (corpus_dir / "02_message.bin").write_bytes(MESSAGE_SEED)
         return corpus_dir
 
-    def _build_config(self, corpus_dir: Path, **overrides) -> CampaignConfig:
-        defaults = dict(
+    def _build_config(self, corpus_dir: Path, **overrides: Any) -> CampaignConfig:
+        defaults: dict[str, Any] = dict(
             mode="real-ue-direct",
             target_host="10.20.20.8",
             target_msisdn="111111",
@@ -340,9 +341,13 @@ class CorpusExecutionTests(_CorpusDirMixin, unittest.TestCase):
             case_id=0, seed=0, method="OPTIONS", layer="byte", strategy="identity"
         )
         selected = [executor._select_corpus_entry(spec) for _ in range(3)]
-        self.assertEqual([entry.name for entry in selected], ["a.sip"] * 3)
+        self.assertEqual(
+            [entry.name for entry in selected if entry is not None], ["a.sip"] * 3
+        )
         odd_spec = spec.model_copy(update={"seed": 1})
-        self.assertEqual(executor._select_corpus_entry(odd_spec).name, "b.sip")
+        odd_entry = executor._select_corpus_entry(odd_spec)
+        assert odd_entry is not None
+        self.assertEqual(odd_entry.name, "b.sip")
         invite_spec = spec.model_copy(update={"method": "INVITE"})
         self.assertIsNone(executor._select_corpus_entry(invite_spec))
 
@@ -619,8 +624,9 @@ class CorpusSpliceTests(_CorpusDirMixin, unittest.TestCase):
         for seed in range(12):
             probe = spec.model_copy(update={"seed": seed})
             primary = executor._select_corpus_entry(probe)
+            assert primary is not None
             partner = executor._select_splice_partner(probe, primary)
-            assert primary is not None and partner is not None
+            assert partner is not None
             self.assertNotEqual(primary.name, partner.name)
 
 

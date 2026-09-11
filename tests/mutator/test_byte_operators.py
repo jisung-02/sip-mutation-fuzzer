@@ -230,10 +230,12 @@ class SplicePacketBytesTests(unittest.TestCase):
     def test_record_carries_crossover_metadata(self) -> None:
         spliced = self.mutator.splice_packet_bytes(SAMPLE, SECONDARY, seed=5)
         record = spliced.records[0]
+        spliced_bytes = spliced.packet_bytes
+        assert spliced_bytes is not None
         self.assertEqual(record.operator, "splice")
         self.assertEqual(record.layer, "byte")
         self.assertEqual(record.before, len(SAMPLE))
-        self.assertEqual(record.after, len(spliced.packet_bytes))
+        self.assertEqual(record.after, len(spliced_bytes))
 
 
 if __name__ == "__main__":

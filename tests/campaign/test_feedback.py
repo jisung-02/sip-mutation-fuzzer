@@ -1,14 +1,15 @@
 import tempfile
 import unittest
 import unittest.mock
+from typing import Any
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig, CaseSpec
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor
 from volte_mutation_fuzzer.campaign.contracts import CorpusEntry
 
 
-def _config(**overrides) -> CampaignConfig:
-    defaults = dict(
+def _config(**overrides: Any) -> CampaignConfig:
+    defaults: dict[str, Any] = dict(
         mode="real-ue-direct",
         target_host="10.20.20.8",
         target_msisdn="111111",
@@ -72,7 +73,9 @@ class RuntimePromotionTests(unittest.TestCase):
         self.assertTrue(seed_path.is_file())
         self.assertEqual(seed_path.read_bytes(), payload)
         self.assertIsNotNone(executor._last_seed)
-        self.assertEqual(executor._last_seed.method, "OPTIONS")
+        last_seed = executor._last_seed
+        assert last_seed is not None
+        self.assertEqual(last_seed.method, "OPTIONS")
 
     def test_string_payload_promoted_as_sip(self) -> None:
         executor = self._executor()
@@ -118,6 +121,7 @@ class LastSeedContinuationTests(unittest.TestCase):
         self._with_last_seed(executor)
         selected = executor._select_corpus_entry(_spec(4))
         self.assertIsNotNone(selected)
+        assert selected is not None
         self.assertEqual(selected.name, "case_000001_OPTIONS.bin")
 
     def test_odd_case_rotates_static_corpus(self) -> None:
@@ -144,6 +148,7 @@ class LastSeedContinuationTests(unittest.TestCase):
             CorpusEntry(name="a.sip", method="OPTIONS", data=b"A"),
         )
         selected = executor._select_corpus_entry(_spec(4))
+        assert selected is not None
         self.assertEqual(selected.name, "a.sip")
 
 
