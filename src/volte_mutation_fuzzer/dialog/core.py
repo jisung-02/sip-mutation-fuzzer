@@ -9,6 +9,9 @@ from volte_mutation_fuzzer.dialog.contracts import (
     DialogScenarioType,
     DialogStep,
     DialogStepResult,
+    SequenceExchangeResult,
+    SequenceScenario,
+    SequenceStepResult,
 )
 from volte_mutation_fuzzer.dialog.state_extractor import (
     extract_dialog_state_from_responses,
@@ -143,6 +146,82 @@ class DialogOrchestrator:
             fuzz_result=fuzz_result,
             teardown_results=tuple(teardown_results),
             setup_succeeded=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Sequence mode
+    # ------------------------------------------------------------------
+
+    def execute_sequence(
+        self,
+        scenario: SequenceScenario,
+        mutation_config: MutationConfig,
+    ) -> SequenceExchangeResult:
+        """Run a flat sequence scenario on one dialog context/socket.
+
+        Unlike ``execute``, every step flagged ``mutate`` receives the
+        mutation config (chained mutation), and repeated steps resend the
+        same seeded packet back-to-back (retransmission). The first failed
+        step short-circuits the scenario — later steps would run against a
+        dialog state the target no longer has.
+        """
+        assert self._target.host is not None
+        assert self._target.port is not None
+
+        context = DialogContext()
+        results: list[SequenceStepResult] = []
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(self._target.timeout_seconds)
+
+            for step_index, step in enumerate(scenario.steps):
+                dialog_step = DialogStep(
+                    method=step.method,
+                    role="send",
+                    is_fuzz_target=step.mutate,
+                    info_package=step.info_package,
+                )
+                step_config = mutation_config if step.mutate else None
+                for repeat_index in range(step.repeat):
+                    result = self._run_step(
+                        sock,
+                        dialog_step,
+                        step_index,
+                        context,
+                        mutation_config=step_config,
+                    )
+                    results.append(
+                        SequenceStepResult(
+                            step_index=step_index,
+                            method=step.method,
+                            repeat_index=repeat_index,
+                            mutate=step.mutate,
+                            send_result=result.send_result,
+                            profile=result.profile,
+                            strategy=result.strategy,
+                            success=result.success,
+                            error=result.error,
+                        )
+                    )
+                    if not result.success:
+                        return SequenceExchangeResult(
+                            scenario_name=scenario.name,
+                            step_results=tuple(results),
+                            succeeded=False,
+                            error=result.error or f"{step.method} step failed",
+                        )
+                    if step.method == "INVITE" and result.send_result is not None:
+                        extract_dialog_state_from_responses(
+                            result.send_result.responses,
+                            context,
+                        )
+                if step.delay_seconds:
+                    time.sleep(step.delay_seconds)
+
+        return SequenceExchangeResult(
+            scenario_name=scenario.name,
+            step_results=tuple(results),
+            succeeded=True,
         )
 
     # ------------------------------------------------------------------
