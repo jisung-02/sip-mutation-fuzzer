@@ -26,15 +26,25 @@ For `fuzzer campaign run`:
 - In real-UE mode, omitted `--target-msisdn` becomes `111111`.
 - In real-UE mode, omitted `--ipsec-mode` becomes `native`.
 - Omitted `--profile` becomes `legacy`.
-- Omitted `--layer` becomes `model,wire,byte`, except `--packet-file` forces
-  `byte`.
+- Omitted `--layer` becomes `model,wire,byte`, except `--packet-file` and
+  `--corpus-dir` force `byte`.
 - Omitted `--strategy` becomes `default,state_breaker` for legacy campaigns,
-  except `--packet-file` defaults to `identity`.
+  except `--packet-file` defaults to `identity` and `--corpus-dir` defaults to
+  `default`.
 - `--mt` uses the bundled `mt_invite_3gpp.sip.tmpl` template for INVITE
   campaigns.
 - `--mt` requires `real-ue-direct` and `target_msisdn`.
 - `--packet-file` requires `real-ue-direct`, `target_msisdn`, `byte` layer, and
   `identity` strategy.
+- `--corpus-dir` requires `real-ue-direct` and `target_msisdn`, accepts only
+  `byte` layer, defaults the method set from corpus start-lines, and is
+  mutually exclusive with `--mt` and `--packet-file`.
+- `campaign sequence --scenario <name>` runs INVITE-dialog state-attack
+  scenarios with chained mutation; INVITE methods only, mutually exclusive
+  with `--mt`/`--packet-file`/`--corpus-dir`.
+- Runtime feedback (`--feedback`, default on) promotes interesting payloads
+  into `<campaign>/corpus/` during the run and drives last-seed continuation
+  in corpus campaigns; `--no-feedback` disables it.
 - Real-UE config auto-enables ADB and pcap unless explicitly disabled.
 - If `--ios` is set and `--adb/--no-adb` is omitted, ADB is disabled.
 
@@ -51,6 +61,12 @@ device identity as runtime state.
 - `--layer auto` is profile-aware in mutator CLI paths.
 - Do not add `--impi` to examples unless debugging IMPI resolution, making a
   self-contained reproduction, or following explicit user instruction.
+- Corpus campaigns (`--corpus-dir`) mutate seed buffers at the `byte` layer;
+  seed selection derives from the case seed, so replay reproduces the exact
+  buffer. `campaign promote` recycles interesting-case sent bytes into a
+  corpus directory.
+- `--strategy splice` crosses two same-method corpus seeds at CRLF
+  boundaries (legacy/parser_breaker profiles, corpus mode only).
 
 ## Files To Read Before Logic Changes
 

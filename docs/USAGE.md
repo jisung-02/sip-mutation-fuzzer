@@ -113,6 +113,98 @@ uv run fuzzer campaign run \
   --oracle-log-grace 0
 ```
 
+## Corpus Campaigns
+
+`--corpus-dir` mutates a directory of seed packets instead of generating fresh
+packets. Seeds are raw byte buffers (`.sip`, `.bin`, `.bytes`, `.txt`; hidden
+files skipped), each starting with a supported SIP request line; the campaign
+method set defaults to the methods found in the corpus.
+
+```bash
+# Round 1: normal generated campaign
+uv run fuzzer campaign run --methods INVITE --profile legacy --max-cases 500
+
+# Recycle anomalies into seeds (crash/stack_failure/suspicious sent bytes)
+uv run fuzzer campaign promote results/<campaign_id>/campaign.jsonl
+
+# Round 2: re-fuzz the recycled seeds at the byte layer
+uv run fuzzer campaign run \
+  --corpus-dir results/<campaign_id>/corpus \
+  --profile legacy \
+  --strategy default \
+  --max-cases 200
+```
+
+Corpus rules:
+
+- `byte` layer only (`model`/`wire` are rejected); the seed is mutated, unlike
+  `--packet-file` which sends verbatim.
+- Byte-layer strategies apply (`default`, `identity`, `safe`,
+  `header_targeted`, `tail_chop_1`, `tail_garbage`, `splice`).
+- Which seed a case mutates is derived from its seed value, so reproduction
+  commands re-select the same seed and replay the exact mutation.
+- `--strategy splice` crosses two same-method seeds per case (head of one +
+  tail of the other, cut at CRLF boundaries, deterministic from the seed).
+  It needs at least two seeds for the method and is allowed for `legacy` and
+  `parser_breaker` profiles only.
+
+## Sequence Mode
+
+`campaign sequence` runs cataloged multi-message state-attack scenarios — the
+ordering anomalies single-packet mutation cannot express. Every step flagged
+`mutate` in the scenario receives the mutation config (chained mutation), and
+repeated steps retransmit the same seeded packet back-to-back.
+
+```bash
+uv run fuzzer campaign sequence --scenario invite_retransmit --repeats 3 \
+  --profile legacy --strategy default --max-cases 10
+
+uv run fuzzer campaign sequence --scenario invite_early_bye \
+  --strategy null_byte_only --max-cases 10
+
+uv run fuzzer campaign sequence --scenario invite_double_bye --max-cases 5
+uv run fuzzer campaign sequence --scenario cancel_retransmit --repeats 2
+```
+
+Scenarios:
+
+| Scenario | Pattern |
+| --- | --- |
+| `invite_retransmit` | mutated INVITE ×N back-to-back, then CANCEL |
+| `invite_early_bye` | mutated INVITE → mutated BYE before any 1xx, then CANCEL |
+| `invite_double_bye` | INVITE → ACK → mutated BYE → mutated BYE again |
+| `cancel_retransmit` | INVITE → mutated CANCEL ×2 |
+
+Rules:
+
+- `--methods INVITE` only; sequence scenarios are INVITE-dialog based and
+  carry their own cleanup steps.
+- Mutually exclusive with `--mt`, `--packet-file`, and `--corpus-dir`;
+  no `--response-codes`.
+- `--repeats N` overrides the repeat count of repeated steps
+  (retransmission pressure).
+- Per-step outcomes land in `details.sequence_steps` in `campaign.jsonl`, so
+  reports show which message in the chain misbehaved.
+
+## Runtime Feedback
+
+`--feedback` (on by default, `--no-feedback` to disable) closes part of the
+feedback loop inside a running campaign:
+
+- **Live promotion**: the moment a case is verdicted
+  `crash`/`stack_failure`/`suspicious`, its exact sent bytes are written to
+  `<campaign_dir>/corpus/case_<id>_<method>.bin|.sip` — the same layout
+  `campaign promote` produces, so a follow-up campaign can point
+  `--corpus-dir` at it without a promote step.
+- **Last-seed continuation**: in corpus campaigns, after a hit, even-numbered
+  cases mutate the most recently promoted payload (deepening around the
+  anomaly) while odd-numbered cases keep rotating the static corpus
+  (exploration).
+
+Continuation depends on live responses, so replaying a continuation case
+re-rolls it against the static corpus; the promoted seed itself is on disk
+for manual reproduction.
+
 ## Profiles And Strategies
 
 `--profile` controls mutation policy. It is independent from sender `--mode`.
@@ -175,6 +267,7 @@ Real-UE and template:
 ```text
 --mt / --no-mt
 --packet-file <path>
+--corpus-dir <dir>
 --impi <IMPI>
 --preserve-via / --no-preserve-via
 --preserve-contact / --no-preserve-contact
@@ -212,6 +305,11 @@ under the campaign directory's `pcap/` folder. In real-UE mode, leaving
 - `--packet-file` is mutually exclusive with `--mt`.
 - `--packet-file` sends raw bytes verbatim and supports only `byte` or `auto`
   layer, which resolves to `byte`, and only `identity` strategy.
+- `--corpus-dir` is mutually exclusive with `--mt` and `--packet-file`,
+  requires `real-ue-direct` and `target_msisdn`, restricts layers to `byte`
+  (auto resolves to `byte`), and defaults the method set from the corpus
+  start-lines. See "Corpus Campaigns" above.
+- `--strategy splice` is corpus-only: it is rejected without `--corpus-dir`.
 
 ## IPsec Modes
 
@@ -230,7 +328,16 @@ uv run fuzzer campaign report <campaign.jsonl>
 uv run fuzzer campaign report <campaign.jsonl> --filter suspicious,crash,stack_failure
 uv run fuzzer campaign report <campaign.jsonl> --html
 uv run fuzzer campaign replay <campaign.jsonl> --case-id <id>
+uv run fuzzer campaign promote <campaign.jsonl> [--out <dir>]
+uv run fuzzer campaign sequence --scenario <name> [options]
 ```
+
+`campaign promote` copies the exact sent bytes of every
+`crash`/`stack_failure`/`suspicious` case into a seed directory (default
+`<campaign_dir>/corpus/`) plus a `manifest.json` with provenance; the
+directory feeds `--corpus-dir` for the next round. With runtime feedback on
+(see "Runtime Feedback"), interesting payloads land in `corpus/` during the
+run, so promote is mainly for retroactively recycling older campaigns.
 
 Typical output layout:
 
@@ -240,7 +347,8 @@ results/<campaign>/
 ├── pcap/
 ├── interesting/
 ├── adb_snapshots/
-└── ios_snapshots/
+├── ios_snapshots/
+└── corpus/            # after `campaign promote`
 ```
 
 ## Environment

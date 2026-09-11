@@ -51,6 +51,10 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "header_targeted",
             "tail_chop_1",
             "tail_garbage",
+            # Crossover of two corpus seeds; only meaningful in campaign
+            # corpus mode (needs a second buffer) but cataloged here so
+            # profile validation and case generation know it.
+            "splice",
         }
     ),
 }
@@ -131,7 +135,9 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
                 "edge_boundary",
             }
         ),
-        "byte": frozenset({"default", "identity", "tail_chop_1", "tail_garbage"}),
+        "byte": frozenset(
+            {"default", "identity", "tail_chop_1", "tail_garbage", "splice"}
+        ),
     },
     "pixel_ims": {
         "model": frozenset(),

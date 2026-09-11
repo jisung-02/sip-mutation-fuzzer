@@ -74,6 +74,30 @@ SIP method support is split into runtime and generator truth:
   real-UE oriented packets for methods such as `MESSAGE`.
 - Packet-file path: `--packet-file` reads raw bytes and bypasses generator and
   slot substitution.
+- Corpus path: `--corpus-dir` loads a directory of seed packets; each case
+  mutates one seed at the byte layer (`SIPMutator.mutate_packet_bytes`) or
+  crosses two seeds (`SIPMutator.splice_packet_bytes` under
+  `--strategy splice`). Seed selection is derived from the case seed, keeping
+  replay exact. `campaign promote` recycles interesting-case payloads back
+  into a corpus directory for the next round.
+- Sequence path: `campaign sequence --scenario <name>` runs a cataloged
+  multi-message state-attack scenario (`dialog/sequence_catalog.py` —
+  retransmit, early/double teardown) through
+  `DialogOrchestrator.execute_sequence` on one dialog context. Every
+  `mutate`-flagged step receives the mutation config (chained mutation);
+  repeated steps retransmit the same seeded packet. Per-step outcomes land
+  in `details.sequence_steps`.
+
+## Runtime Feedback
+
+`--feedback` (default on) adds the in-campaign half of a feedback loop:
+interesting verdicts (`crash`/`stack_failure`/`suspicious`) promote their
+exact sent bytes into `<campaign_dir>/corpus/` immediately (same layout as
+`campaign promote`), and corpus campaigns continue mutating the most recently
+promoted seed on even-numbered cases (last-seed continuation) while odd
+cases rotate the static corpus. Continuation depends on live responses, so
+it trades strict replay determinism for anomaly deepening; the promoted seed
+files themselves remain on disk for exact reproduction.
 
 ## Mutator Layer
 
@@ -85,6 +109,16 @@ Mutation layers:
 - `model`: SIP model/field mutation
 - `wire`: text-level SIP mutation, including SDP-aware strategies
 - `byte`: raw byte-level mutation and targeted byte offsets
+
+The byte `default` strategy draws from an operator pool that includes
+single-byte edits (`flip_byte`, `set_byte` with boundary values like
+0x00/0xFF, `arith_byte` ±1..35), block edits (`fill_range`,
+`block_duplicate`/`block_move` on CRLF line spans, `delete_range`),
+insertions (`insert_bytes` at arbitrary offsets, `insert_dict_token` with SIP
+keyword/boundary-integer tokens), and structural damage (`damage_crlf`,
+`truncate_bytes`). The `safe` strategy keeps routing-critical lines (start
+line, Via, Call-ID, CSeq) byte-identical. `splice` is a corpus-only strategy
+that crosses two seed buffers at CRLF boundaries.
 
 Profiles:
 

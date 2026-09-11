@@ -17,10 +17,13 @@ from volte_mutation_fuzzer.campaign.contracts import (
     CampaignSummary,
     CaseResult,
     CaseSpec,
+    CorpusEntry,
+    load_corpus_entries,
 )
 from volte_mutation_fuzzer.capture.core import PcapCapture
 from volte_mutation_fuzzer.dialog.core import DialogOrchestrator
 from volte_mutation_fuzzer.dialog.scenarios import scenario_for_method
+from volte_mutation_fuzzer.dialog.sequence_catalog import build_sequence_scenario
 from volte_mutation_fuzzer.generator.contracts import (
     DialogContext,
     GeneratorSettings,
@@ -74,7 +77,10 @@ from volte_mutation_fuzzer.sip.completeness import (
 from volte_mutation_fuzzer.sip.render import render_packet
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
-from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector
+from volte_mutation_fuzzer.campaign.evidence import (
+    EvidenceCollector,
+    INTERESTING_VERDICTS,
+)
 from volte_mutation_fuzzer.campaign.report import HtmlReportGenerator
 
 _DEFAULT_PCSCF_IP: str = "172.22.0.21"
@@ -129,9 +135,14 @@ class CaseGenerator:
         # SIP parsing). model/wire layers are filtered out so we don't emit
         # combos that would be skipped at execute time.
         packet_file_active = config.packet_file is not None
+        # Corpus mode: seeds are raw byte buffers, so (like packet-file) only
+        # the byte layer can mutate them. Unlike packet-file the bytes are NOT
+        # sent verbatim — the mutator runs, which is the point of the corpus.
+        corpus_active = config.corpus_dir is not None
 
-        if packet_file_active:
-            # File is sent verbatim — layer config is ignored, always byte.
+        if packet_file_active or corpus_active:
+            # File is sent verbatim / corpus seeds are raw bytes — layer config
+            # is ignored, always byte.
             effective_layers = ("byte",)
         elif template_active:
             effective_layers = tuple(lyr for lyr in config.layers if lyr != "model")
@@ -551,6 +562,16 @@ class CampaignExecutor:
             if not data:
                 raise ValueError(f"packet_file is empty: {config.packet_file}")
             self._packet_file_bytes = data
+        # Corpus mode: load seed packets once (validation already ran in
+        # CampaignConfig; reloading here is cheap and keeps the executor
+        # self-contained for direct construction in tests).
+        self._corpus_entries: tuple[CorpusEntry, ...] = ()
+        if config.corpus_dir is not None:
+            self._corpus_entries = load_corpus_entries(Path(config.corpus_dir))
+        # Runtime feedback state: the most recently promoted interesting
+        # payload. Corpus campaigns continue mutating it (last-seed
+        # continuation) instead of always rotating the static corpus.
+        self._last_seed: CorpusEntry | None = None
         self._ue_resolver = RealUEDirectResolver()
 
         # Initialize crash analyzer
@@ -872,6 +893,28 @@ class CampaignExecutor:
             # ever leak through.
             if self._packet_file_bytes is not None and spec.response_code is None:
                 return self._execute_packet_file_case(
+                    spec, timestamp, case_started_monotonic
+                )
+
+            # Corpus path (real-ue-direct, byte-layer mutation of corpus
+            # seeds). Checked before the dialog router for the same reason as
+            # packet-file: corpus seeds for in-dialog methods (BYE/ACK/CANCEL/
+            # INFO/PRACK/REFER/UPDATE) must be mutated+sent from their bytes,
+            # not swallowed by the synthetic dialog executor. Mutually
+            # exclusive with packet_file (validated in CampaignConfig).
+            if self._corpus_entries and spec.response_code is None:
+                return self._execute_corpus_case(
+                    spec, timestamp, case_started_monotonic
+                )
+
+            # Sequence mode: cataloged multi-message state-attack scenarios
+            # (retransmit, early/double teardown). Runs its own step loop, so
+            # it must not fall through to the single-fuzz-step dialog router.
+            if (
+                self._config.sequence_scenario is not None
+                and spec.response_code is None
+            ):
+                return self._execute_sequence_case(
                     spec, timestamp, case_started_monotonic
                 )
 
@@ -1454,17 +1497,405 @@ class CampaignExecutor:
     ) -> CaseResult:
         """Send a campaign case using bytes from --packet-file verbatim.
 
+        No mutation: ``self._packet_file_bytes`` flows straight into the
+        shared raw-bytes executor.
+        """
+        assert self._packet_file_bytes is not None
+        return self._execute_raw_bytes_case(
+            spec,
+            timestamp,
+            case_started_monotonic,
+            payload_bytes=self._packet_file_bytes,
+            mutation_ops=(),
+            reproduction_cmd=self._build_packet_file_reproduction_cmd(
+                spec,
+                profile=spec.profile,
+                strategy=spec.strategy,
+            ),
+            executor_label="packet-file",
+        )
+
+    def _select_corpus_entry(self, spec: CaseSpec) -> CorpusEntry | None:
+        """Pick the corpus seed for a case, deterministically from the seed.
+
+        ``spec.seed`` already encodes ``seed_start + case_id``, so a replay
+        command with the same ``--seed-start`` selects the same entry and
+        applies the same mutation. ``seed % len`` cycles through the matching
+        entries as cases advance.
+
+        Last-seed continuation (feedback): when the previous interesting hit
+        promoted a runtime seed for this method, even-numbered cases mutate
+        that payload — deepening around the anomaly — while odd-numbered
+        cases keep rotating the static corpus for exploration. Continuation
+        depends on live responses, so replaying a continuation case re-rolls
+        it against the static corpus; the seed itself is on disk under
+        ``<campaign>/corpus/`` for manual reproduction.
+        """
+        if (
+            self._config.feedback_enabled
+            and self._last_seed is not None
+            and self._last_seed.method == spec.method
+            and spec.case_id % 2 == 0
+        ):
+            return self._last_seed
+        matching = tuple(
+            entry for entry in self._corpus_entries if entry.method == spec.method
+        )
+        if not matching:
+            return None
+        return matching[spec.seed % len(matching)]
+
+    def _select_splice_partner(
+        self,
+        spec: CaseSpec,
+        primary: CorpusEntry,
+    ) -> CorpusEntry | None:
+        """Deterministically pick a *different* same-method seed to cross.
+
+        The offset skips the primary itself: ``1 + (seed // n) % (n - 1)``
+        lands in ``1..n-1`` for any seed, so the partner varies across cases
+        but is never the primary.
+        """
+        matching = tuple(
+            entry for entry in self._corpus_entries if entry.method == spec.method
+        )
+        if len(matching) < 2:
+            return None
+        primary_index = matching.index(primary)
+        offset = 1 + (spec.seed // len(matching)) % (len(matching) - 1)
+        return matching[(primary_index + offset) % len(matching)]
+
+    def _execute_corpus_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        """Mutate one corpus seed at the byte layer and send it.
+
+        Reuses the raw-bytes execution path (UE/port resolution, pcap, oracle,
+        teardown) after running ``SIPMutator.mutate_packet_bytes`` — the
+        strategy/seed profile guarantees the reproduction command rebuilds the
+        exact same mutated buffer.
+        """
+        config = self._config
+        entry = self._select_corpus_entry(spec)
+        if entry is None:
+            # Unreachable post-validation (methods ⊆ corpus methods), kept as
+            # a defensive branch so a config/executor mismatch cannot crash
+            # the whole campaign.
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"no corpus seed for method {spec.method}",
+                elapsed_ms=0.0,
+                reproduction_cmd=self._build_corpus_reproduction_cmd(spec),
+                error="corpus-seed-missing",
+                timestamp=timestamp,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+        reproduction_cmd = self._build_corpus_reproduction_cmd(spec, entry=entry)
+        try:
+            if spec.strategy == "splice":
+                partner = self._select_splice_partner(spec, entry)
+                if partner is None:
+                    return self._build_case_result(
+                        spec,
+                        verdict="unknown",
+                        reason=(
+                            f"splice requires at least two corpus seeds for "
+                            f"method {spec.method}"
+                        ),
+                        elapsed_ms=0.0,
+                        reproduction_cmd=reproduction_cmd,
+                        error="corpus-splice-partner-missing",
+                        timestamp=timestamp,
+                        case_wall_ms=self._case_wall_ms(case_started_monotonic),
+                    )
+                mutated = self._mutator.splice_packet_bytes(
+                    entry.data,
+                    partner.data,
+                    seed=spec.seed,
+                    profile=spec.profile,
+                )
+            else:
+                mutated = self._mutator.mutate_packet_bytes(
+                    entry.data,
+                    MutationConfig(
+                        seed=spec.seed,
+                        profile=spec.profile,
+                        strategy=spec.strategy,
+                        layer="byte",
+                        max_operations=config.mutations_per_case,
+                    ),
+                )
+        except ValueError as exc:
+            # Strategy not applicable to this seed (e.g. header_targeted with
+            # no mutable header): record and move on instead of aborting.
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"corpus mutation rejected: {exc}",
+                elapsed_ms=0.0,
+                reproduction_cmd=reproduction_cmd,
+                error="corpus-mutation-error",
+                timestamp=timestamp,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+        payload_bytes = mutated.packet_bytes or b""
+        mutation_ops = tuple(
+            f"{record.operator}({record.target.path})" for record in mutated.records
+        )
+        return self._execute_raw_bytes_case(
+            spec,
+            timestamp,
+            case_started_monotonic,
+            payload_bytes=payload_bytes,
+            mutation_ops=mutation_ops,
+            reproduction_cmd=reproduction_cmd,
+            executor_label="corpus",
+        )
+
+    def _execute_sequence_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+    ) -> CaseResult:
+        """Run one sequence-mode scenario case.
+
+        Builds the cataloged scenario (with the configured retransmission
+        pressure), executes it through ``DialogOrchestrator.execute_sequence``
+        on a single dialog, and evaluates the oracle against the last mutated
+        step's responses. Per-step outcomes land in ``details`` so reports can
+        show which message in the chain misbehaved.
+        """
+        config = self._config
+        assert config.sequence_scenario is not None
+        reproduction_cmd = self._build_sequence_reproduction_cmd(spec)
+        try:
+            scenario = build_sequence_scenario(
+                config.sequence_scenario,
+                repeat_override=config.sequence_repeats,
+            )
+        except ValueError as exc:
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"sequence scenario error: {exc}",
+                elapsed_ms=0.0,
+                reproduction_cmd=reproduction_cmd,
+                error="sequence-scenario-error",
+                timestamp=timestamp,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        capture: PcapCapture | None = None
+        pcap_path_saved: str | None = None
+        try:
+            if config.pcap_enabled:
+                pcap_dir = self._pcap_dir
+                pcap_dir.mkdir(parents=True, exist_ok=True)
+                pcap_path = str(pcap_dir / f"case_{spec.case_id:06d}.pcap")
+                capture = PcapCapture(pcap_path, interface=config.pcap_interface)
+                capture.start()
+            # The sequence orchestrator opens plain sockets, so it needs a
+            # concrete host/port. MSISDN-only real-UE configs resolve the UE
+            # IP here (same resolver the packet-file path uses); softphone
+            # targets already carry a host.
+            sequence_target = self._target
+            if sequence_target.host is None and config.target_msisdn is not None:
+                resolved = self._ue_resolver.resolve(self._target, impi=config.impi)
+                sequence_target = sequence_target.model_copy(
+                    update={"host": resolved.host}
+                )
+            orchestrator = DialogOrchestrator(
+                self._generator, self._mutator, sequence_target
+            )
+            mutation_config = MutationConfig(
+                seed=spec.seed,
+                profile=spec.profile,
+                strategy=spec.strategy,
+                layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
+                max_operations=config.mutations_per_case,
+            )
+            try:
+                exchange = orchestrator.execute_sequence(scenario, mutation_config)
+            finally:
+                if capture is not None:
+                    pcap_path_saved = capture.stop()
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            exc_msg = str(exc) or "(no message)"
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=f"sequence executor error: {exc_type}: {exc_msg}",
+                elapsed_ms=0.0,
+                reproduction_cmd=reproduction_cmd,
+                error=f"{exc_type}: {exc_msg}",
+                timestamp=timestamp,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        step_summary = [
+            {
+                "step": result.step_index,
+                "method": result.method,
+                "repeat": result.repeat_index,
+                "mutate": result.mutate,
+                "success": result.success,
+                "error": result.error,
+            }
+            for result in exchange.step_results
+        ]
+        details: dict[str, object] = {
+            "sequence_scenario": exchange.scenario_name,
+            "sequence_steps": step_summary,
+        }
+
+        if not exchange.succeeded:
+            failed = next(
+                (r for r in exchange.step_results if not r.success),
+                None,
+            )
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason=(
+                    f"sequence step failed: "
+                    f"{failed.method if failed else '?'} — {exchange.error or 'unknown'}"
+                ),
+                elapsed_ms=0.0,
+                reproduction_cmd=reproduction_cmd,
+                error=exchange.error,
+                details=details,
+                timestamp=timestamp,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        # Oracle input: responses to the last mutated step (the interesting
+        # one); fall back to the last step overall (cleanup-only scenarios).
+        oracle_step = None
+        for result in exchange.step_results:
+            if result.mutate:
+                oracle_step = result
+        if oracle_step is None:
+            oracle_step = exchange.step_results[-1] if exchange.step_results else None
+
+        send_result = oracle_step.send_result if oracle_step is not None else None
+        sent_payload: str | bytes | None = (
+            send_result.sent_bytes
+            if send_result is not None and send_result.sent_bytes is not None
+            else None
+        )
+        if send_result is None:
+            return self._build_case_result(
+                spec,
+                verdict="unknown",
+                reason="sequence produced no send result for oracle",
+                elapsed_ms=0.0,
+                reproduction_cmd=reproduction_cmd,
+                error="sequence-no-send-result",
+                details=details,
+                timestamp=timestamp,
+                pcap_path=pcap_path_saved,
+                case_wall_ms=self._case_wall_ms(case_started_monotonic),
+            )
+
+        context = OracleContext(
+            method=spec.method,
+            timeout_threshold_ms=config.timeout_seconds * 1000,
+            log_grace_seconds=config.oracle_log_grace_seconds_for_method(spec.method),
+        )
+        process_name = config.process_name if config.check_process else None
+        verdict = self._oracle.evaluate(
+            send_result,
+            context,
+            process_name=process_name,
+            log_path=config.log_path,
+            process_check_interval=10,
+        )
+        case_result = self._build_case_result(
+            spec,
+            verdict=verdict.verdict,
+            reason=verdict.reason,
+            response_code=verdict.response_code,
+            elapsed_ms=verdict.elapsed_ms,
+            process_alive=verdict.process_alive,
+            raw_request=_payload_to_text(sent_payload),
+            raw_response=self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            ),
+            reproduction_cmd=reproduction_cmd,
+            profile=spec.profile,
+            strategy=spec.strategy,
+            mutation_ops=(f"sequence:{exchange.scenario_name}",),
+            details={**details, **(getattr(verdict, "details", {}) or {})},
+            timestamp=timestamp,
+            pcap_path=pcap_path_saved,
+            case_wall_ms=0.0,
+        )
+        return self._persist_case_artifacts(
+            spec,
+            case_result,
+            sent_payload=sent_payload,
+            timestamp=timestamp,
+            case_started_monotonic=case_started_monotonic,
+        )
+
+    def _build_sequence_reproduction_cmd(self, spec: CaseSpec) -> str:
+        cfg = self._config
+        assert cfg.sequence_scenario is not None
+        target_args = ""
+        if cfg.target_host is not None:
+            target_args = f" --target-host {cfg.target_host}"
+        elif cfg.target_msisdn is not None:
+            target_args = f" --target-msisdn {cfg.target_msisdn}"
+        mutations_arg = (
+            f" --mutations-per-case {cfg.mutations_per_case}"
+            if cfg.mutations_per_case > 1
+            else ""
+        )
+        return (
+            f"uv run fuzzer campaign sequence"
+            f" --scenario {cfg.sequence_scenario}"
+            f"{target_args}"
+            f" --ipsec-mode {cfg.ipsec_mode}"
+            f" --methods {spec.method}"
+            f" --profile {spec.profile}"
+            f" --layer {spec.layer}"
+            f" --strategy {spec.strategy}"
+            f" --repeats {cfg.sequence_repeats}"
+            f" --seed-start {spec.seed}"
+            f" --max-cases 1"
+            f"{mutations_arg}"
+        )
+
+    def _execute_raw_bytes_case(
+        self,
+        spec: CaseSpec,
+        timestamp: float,
+        case_started_monotonic: float,
+        *,
+        payload_bytes: bytes,
+        mutation_ops: tuple[str, ...],
+        reproduction_cmd: str,
+        executor_label: str,
+    ) -> CaseResult:
+        """Send a raw SIP byte buffer through the real-UE direct path.
+
         Mirrors the routing portion of ``_execute_mt_template_case`` (UE IP /
         port_pc / port_ps live resolution, pcap, oracle, teardown) but skips
-        generator + mutator entirely: ``self._packet_file_bytes`` is wrapped
-        in ``SendArtifact.from_packet_bytes`` so the wire path returns the
+        generator entirely: ``payload_bytes`` is wrapped in
+        ``SendArtifact.from_packet_bytes`` so the wire path returns the
         bytes unmodified (see ``prepare_real_ue_direct_payload`` →
         ``direct-normalization:bytes-unmodified``). Null bytes pass through.
         """
         config = self._config
-        assert self._packet_file_bytes is not None
         assert config.target_msisdn is not None
-        assert config.packet_file is not None
 
         error: str | None = None
         capture: PcapCapture | None = None
@@ -1490,9 +1921,8 @@ class CampaignExecutor:
             )
 
             # 3. Fragmentation guard for null-mode plaintext UDP. Same threshold
-            #    as the MT template path; bypass mode (Docker bridge) tolerates
-            #    fragmentation and is exempt.
-            payload_bytes = self._packet_file_bytes
+            # as the MT template path; bypass mode (Docker bridge) tolerates
+            # fragmentation and is exempt.
             if (
                 self._target.transport.upper() == "UDP"
                 and config.ipsec_mode == "null"
@@ -1502,15 +1932,11 @@ class CampaignExecutor:
                     spec,
                     verdict="unknown",
                     reason=(
-                        f"packet_file payload exceeds one-fragment UDP safety threshold "
+                        f"{executor_label} payload exceeds one-fragment UDP safety threshold "
                         f"({_MT_TEMPLATE_FRAG_LIMIT} bytes)"
                     ),
                     elapsed_ms=0.0,
-                    reproduction_cmd=self._build_packet_file_reproduction_cmd(
-                        spec,
-                        profile=spec.profile,
-                        strategy=spec.strategy,
-                    ),
+                    reproduction_cmd=reproduction_cmd,
                     error="fragmentation-guard",
                     timestamp=timestamp,
                     case_wall_ms=self._case_wall_ms(case_started_monotonic),
@@ -1613,15 +2039,10 @@ class CampaignExecutor:
                 process_alive=verdict.process_alive,
                 raw_request=_payload_to_text(sent_payload),
                 raw_response=raw_response,
-                reproduction_cmd=self._build_packet_file_reproduction_cmd(
-                    spec,
-                    profile=spec.profile,
-                    strategy=spec.strategy,
-                ),
+                reproduction_cmd=reproduction_cmd,
                 profile=spec.profile,
                 strategy=spec.strategy,
-                # No mutator runs in this path — operator list is always empty.
-                mutation_ops=(),
+                mutation_ops=mutation_ops,
                 error=error,
                 details=getattr(verdict, "details", {}) or {},
                 timestamp=timestamp,
@@ -1644,15 +2065,12 @@ class CampaignExecutor:
             return self._build_case_result(
                 spec,
                 verdict="unknown",
-                reason=f"packet-file executor error: {error}",
+                reason=f"{executor_label} executor error: {error}",
                 elapsed_ms=0.0,
-                reproduction_cmd=self._build_packet_file_reproduction_cmd(
-                    spec,
-                    profile=spec.profile,
-                    strategy=spec.strategy,
-                ),
+                reproduction_cmd=reproduction_cmd,
                 profile=spec.profile,
                 strategy=spec.strategy,
+                mutation_ops=mutation_ops,
                 error=error,
                 timestamp=timestamp,
                 fuzz_response_code=spec.response_code,
@@ -1692,6 +2110,47 @@ class CampaignExecutor:
         )
         if cfg.ipsec_mode != "native":
             reproduction_cmd += f" --mt-local-port {cfg.mt_local_port}"
+        return reproduction_cmd
+
+    def _build_corpus_reproduction_cmd(
+        self,
+        spec: CaseSpec,
+        *,
+        entry: CorpusEntry | None = None,
+    ) -> str:
+        cfg = self._config
+        target_args = ""
+        if cfg.target_host is not None:
+            target_args = f" --target-host {cfg.target_host}"
+        elif cfg.target_msisdn is not None:
+            target_args = f" --target-msisdn {cfg.target_msisdn}"
+
+        # Same replay guarantee as the MT path: --seed-start {spec.seed} with
+        # --max-cases 1 makes case 0 carry seed == spec.seed, which selects the
+        # same corpus entry (seed % len) and replays the identical mutation.
+        mutations_arg = (
+            f" --mutations-per-case {cfg.mutations_per_case}"
+            if cfg.mutations_per_case > 1
+            else ""
+        )
+        reproduction_cmd = (
+            f"uv run fuzzer campaign run"
+            f" --mode real-ue-direct"
+            f"{target_args}"
+            f" --corpus-dir {cfg.corpus_dir}"
+            f" --ipsec-mode {cfg.ipsec_mode}"
+            f" --methods {spec.method}"
+            f" --profile {spec.profile}"
+            f" --layer {spec.layer}"
+            f" --strategy {spec.strategy}"
+            f" --seed-start {spec.seed}"
+            f" --max-cases 1"
+            f"{mutations_arg}"
+        )
+        if cfg.ipsec_mode != "native":
+            reproduction_cmd += f" --mt-local-port {cfg.mt_local_port}"
+        if entry is not None:
+            reproduction_cmd += f"  # seed file: {entry.name}"
         return reproduction_cmd
 
     def _build_mt_template_reproduction_cmd(
@@ -2347,9 +2806,63 @@ class CampaignExecutor:
             adb_snapshot_dir=adb_snapshot_dir,
             ios_snapshot_dir=ios_snapshot_dir,
         )
+        self._maybe_promote_runtime_seed(spec, case_result, sent_payload)
         return case_result.model_copy(
             update={"case_wall_ms": self._case_wall_ms(case_started_monotonic)}
         )
+
+    def _maybe_promote_runtime_seed(
+        self,
+        spec: CaseSpec,
+        case_result: CaseResult,
+        sent_payload: str | bytes | None,
+    ) -> None:
+        """Feedback hook: persist interesting payloads as corpus seeds now.
+
+        Writes the exact sent bytes to ``<campaign_dir>/corpus/`` (same layout
+        ``campaign promote`` produces) and remembers the entry as the last
+        seed so subsequent corpus cases can continue mutating it. This is the
+        in-campaign half of the feedback loop; the campaign can end and a new
+        ``--corpus-dir <campaign>/corpus`` run picks the seeds up again.
+        """
+        if not self._config.feedback_enabled:
+            return
+        if case_result.verdict not in INTERESTING_VERDICTS:
+            return
+        if sent_payload is None:
+            return
+
+        try:
+            corpus_dir = self._campaign_dir / "corpus"
+            corpus_dir.mkdir(parents=True, exist_ok=True)
+            if isinstance(sent_payload, bytes):
+                suffix = ".bin"
+                data = sent_payload
+            else:
+                suffix = ".sip"
+                data = sent_payload.encode("utf-8")
+            name = f"case_{case_result.case_id:06d}_{spec.method}{suffix}"
+            seed_path = corpus_dir / name
+            seed_path.write_bytes(data)
+            self._last_seed = CorpusEntry(
+                name=name,
+                method=spec.method,
+                data=data,
+            )
+            logger.info(
+                "feedback: promoted case %d (%s) into runtime corpus: %s",
+                case_result.case_id,
+                case_result.verdict,
+                seed_path,
+            )
+        except Exception as exc:
+            # Promotion is best-effort — a feedback failure must never break
+            # the campaign loop itself.
+            logger.warning(
+                "feedback promotion failed for case %d: %s",
+                case_result.case_id,
+                exc,
+            )
 
     def _raw_response_from_send_result(
         self, verdict: str, send_result: SendReceiveResult
