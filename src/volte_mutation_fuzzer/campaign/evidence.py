@@ -134,6 +134,7 @@ class EvidenceCollector:
             )
             return None
 
+
 def promote_corpus(
     jsonl_path: Path,
     out_dir: Path | None = None,
@@ -189,7 +190,9 @@ def promote_corpus(
                 skipped += 1
                 continue
 
-            safe_method = _UNSAFE_FILENAME_CHARS.sub("-", method).strip("-") or "unknown"
+            safe_method = (
+                _UNSAFE_FILENAME_CHARS.sub("-", method).strip("-") or "unknown"
+            )
             dest = target_dir / f"case_{int(case_id):06d}_{safe_method}{source.suffix}"
             shutil.copy2(source, dest)
             promoted.append(

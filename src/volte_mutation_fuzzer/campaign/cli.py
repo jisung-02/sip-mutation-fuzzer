@@ -469,7 +469,11 @@ def run_command(
             wait_idle_timeout_seconds=wait_idle_timeout,
             invite_teardown=not no_teardown,
         )
-        if strategy is None and config.packet_file is None and config.corpus_dir is None:
+        if (
+            strategy is None
+            and config.packet_file is None
+            and config.corpus_dir is None
+        ):
             default_strategies = (
                 ("default", "state_breaker")
                 if config.profiles == ("legacy",)
@@ -626,6 +630,7 @@ def replay_command(
     result = executor._execute_case(spec)
     typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
+
 @app.command("promote")
 def promote_command(
     path: Annotated[str, typer.Argument(help="Path to campaign JSONL file.")],
@@ -669,6 +674,7 @@ def promote_command(
             "No interesting cases with evidence payloads found — nothing to recycle.",
             err=True,
         )
+
 
 @app.command("sequence")
 def sequence_command(
@@ -740,7 +746,9 @@ def sequence_command(
     ] = 5.0,
     cooldown: Annotated[
         float,
-        typer.Option("--cooldown", min=0.0, max=10.0, help="Cooldown between cases (s)."),
+        typer.Option(
+            "--cooldown", min=0.0, max=10.0, help="Cooldown between cases (s)."
+        ),
     ] = 1.0,
     adb: Annotated[
         bool | None,

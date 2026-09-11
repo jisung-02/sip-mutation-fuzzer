@@ -1,12 +1,14 @@
 import tempfile
 import unittest
 import unittest.mock
-from pathlib import Path
 from types import SimpleNamespace
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig, CaseSpec
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor
-from volte_mutation_fuzzer.dialog.contracts import SequenceExchangeResult, SequenceStepResult
+from volte_mutation_fuzzer.dialog.contracts import (
+    SequenceExchangeResult,
+    SequenceStepResult,
+)
 from volte_mutation_fuzzer.sender.contracts import (
     SendReceiveResult,
     SocketObservation,
@@ -161,7 +163,10 @@ class SequenceExecutionTests(unittest.TestCase):
             scenario_name="invite_retransmit",
             step_results=(
                 SequenceStepResult(
-                    step_index=0, method="INVITE", mutate=True, success=False,
+                    step_index=0,
+                    method="INVITE",
+                    mutate=True,
+                    success=False,
                     error="no response",
                 ),
             ),

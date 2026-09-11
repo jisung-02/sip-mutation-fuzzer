@@ -131,7 +131,9 @@ class CorpusConfigValidationTests(_CorpusDirMixin, unittest.TestCase):
             fh.write(OPTIONS_SEED)
             packet_path = fh.name
         self.addCleanup(lambda: Path(packet_path).unlink(missing_ok=True))
-        with self.assertRaisesRegex(ValueError, "mutually exclusive with --packet-file"):
+        with self.assertRaisesRegex(
+            ValueError, "mutually exclusive with --packet-file"
+        ):
             self._build_config(self._make_corpus_dir(), packet_file=packet_path)
 
     def test_mutually_exclusive_with_mt(self) -> None:
@@ -207,9 +209,7 @@ class CorpusExecutionTests(_CorpusDirMixin, unittest.TestCase):
             strategies=strategies,
         )
         with tempfile.TemporaryDirectory(suffix="vmf-results") as tmp:
-            executor = CampaignExecutor(
-                config.model_copy(update={"results_dir": tmp})
-            )
+            executor = CampaignExecutor(config.model_copy(update={"results_dir": tmp}))
         return executor
 
     def _send_result(self) -> SendReceiveResult:

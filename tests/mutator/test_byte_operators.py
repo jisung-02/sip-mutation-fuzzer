@@ -204,11 +204,15 @@ class SplicePacketBytesTests(unittest.TestCase):
         cut_b = int(parts[1].split(":")[0])
         self.assertEqual(data, SAMPLE[:cut_a] + SECONDARY[cut_b:])
         # cuts land on CRLF boundaries (or buffer ends)
-        self.assertIn(cut_a, {0, len(SAMPLE)} | {
-            offset + 2
-            for offset in range(len(SAMPLE))
-            if SAMPLE[offset : offset + 2] == b"\r\n"
-        })
+        self.assertIn(
+            cut_a,
+            {0, len(SAMPLE)}
+            | {
+                offset + 2
+                for offset in range(len(SAMPLE))
+                if SAMPLE[offset : offset + 2] == b"\r\n"
+            },
+        )
 
     def test_different_seeds_produce_different_cuts(self) -> None:
         outputs = {

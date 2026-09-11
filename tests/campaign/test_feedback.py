@@ -1,7 +1,6 @@
 import tempfile
 import unittest
 import unittest.mock
-from pathlib import Path
 
 from volte_mutation_fuzzer.campaign.contracts import CampaignConfig, CaseSpec
 from volte_mutation_fuzzer.campaign.core import CampaignExecutor
@@ -22,7 +21,9 @@ def _config(**overrides) -> CampaignConfig:
     return CampaignConfig(**defaults)
 
 
-def _spec(case_id: int, *, method: str = "OPTIONS", seed: int | None = None) -> CaseSpec:
+def _spec(
+    case_id: int, *, method: str = "OPTIONS", seed: int | None = None
+) -> CaseSpec:
     return CaseSpec(
         case_id=case_id,
         seed=case_id if seed is None else seed,
@@ -35,9 +36,9 @@ def _spec(case_id: int, *, method: str = "OPTIONS", seed: int | None = None) -> 
 class RuntimePromotionTests(unittest.TestCase):
     def _executor(self, **overrides) -> CampaignExecutor:
         with tempfile.TemporaryDirectory(suffix="vmf-results") as tmp:
-            return CampaignExecutor(_config(**overrides).model_copy(
-                update={"results_dir": tmp}
-            ))
+            return CampaignExecutor(
+                _config(**overrides).model_copy(update={"results_dir": tmp})
+            )
 
     def _persist(self, executor, *, verdict, payload, case_id=0):
         spec = _spec(case_id)
@@ -55,7 +56,10 @@ class RuntimePromotionTests(unittest.TestCase):
             unittest.mock.patch.object(executor._evidence, "collect"),
         ):
             executor._persist_case_artifacts(
-                spec, case_result, sent_payload=payload, timestamp=1.0,
+                spec,
+                case_result,
+                sent_payload=payload,
+                timestamp=1.0,
                 case_started_monotonic=1.0,
             )
 
@@ -100,9 +104,9 @@ class RuntimePromotionTests(unittest.TestCase):
 class LastSeedContinuationTests(unittest.TestCase):
     def _executor(self, **overrides) -> CampaignExecutor:
         with tempfile.TemporaryDirectory(suffix="vmf-results") as tmp:
-            return CampaignExecutor(_config(**overrides).model_copy(
-                update={"results_dir": tmp}
-            ))
+            return CampaignExecutor(
+                _config(**overrides).model_copy(update={"results_dir": tmp})
+            )
 
     def _with_last_seed(self, executor, *, method="OPTIONS") -> None:
         executor._last_seed = CorpusEntry(

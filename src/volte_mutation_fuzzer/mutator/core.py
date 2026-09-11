@@ -618,8 +618,7 @@ class SIPMutator:
         """Choose a line-boundary offset for a splice cut (inclusive ends)."""
         boundaries = {0, len(data)}
         boundaries.update(
-            offset + len(_CRLF_DELIMITER)
-            for offset in self._find_crlf_offsets(data)
+            offset + len(_CRLF_DELIMITER) for offset in self._find_crlf_offsets(data)
         )
         ordered = sorted(boundaries)
         return ordered[rng.randrange(len(ordered))]
@@ -3385,7 +3384,9 @@ class SIPMutator:
         if operator == "set_byte":
             index = self._parse_byte_index(target.path)
             before = data[index]
-            after = _INTERESTING_BYTE_VALUES[rng.randrange(len(_INTERESTING_BYTE_VALUES))]
+            after = _INTERESTING_BYTE_VALUES[
+                rng.randrange(len(_INTERESTING_BYTE_VALUES))
+            ]
             mutated_bytes = editable_bytes.overwrite(index, bytes([after]))
             record = self._record_mutation(
                 target=target,
@@ -3413,7 +3414,9 @@ class SIPMutator:
         if operator == "fill_range":
             start, end = self._parse_byte_range(target.path)
             before = data[start:end]
-            value = _INTERESTING_BYTE_VALUES[rng.randrange(len(_INTERESTING_BYTE_VALUES))]
+            value = _INTERESTING_BYTE_VALUES[
+                rng.randrange(len(_INTERESTING_BYTE_VALUES))
+            ]
             after = bytes([value]) * (end - start)
             mutated_bytes = editable_bytes.overwrite(start, after)
             record = self._record_mutation(
@@ -3431,7 +3434,9 @@ class SIPMutator:
             # prefixes the next line) or right before it (token suffixes the
             # current line). Both placements stress header-start parsing.
             boundary = offsets[rng.randrange(len(offsets))]
-            insert_at = boundary if rng.randrange(2) else boundary + len(_CRLF_DELIMITER)
+            insert_at = (
+                boundary if rng.randrange(2) else boundary + len(_CRLF_DELIMITER)
+            )
             mutated_bytes = editable_bytes.insert(insert_at, token)
             record = self._record_mutation(
                 target=target,
@@ -3743,7 +3748,9 @@ class SIPMutator:
             if index >= len(spans):
                 return False
             start, end = spans[index]
-            return any(start < p_end and end > p_start for p_start, p_end in protected_ranges)
+            return any(
+                start < p_end and end > p_start for p_start, p_end in protected_ranges
+            )
         if path == "segment:start_line":
             return True  # Start line contains Request-URI
         return False
@@ -4484,13 +4491,13 @@ class SIPMutator:
         spans.append((start, len(data)))
         return tuple(spans)
 
-    def _line_span_for_target(self, data: bytes, target: MutationTarget) -> tuple[int, int]:
+    def _line_span_for_target(
+        self, data: bytes, target: MutationTarget
+    ) -> tuple[int, int]:
         index = self._parse_line_index(target.path)
         spans = self._collect_line_spans(data)
         if index >= len(spans):
-            raise ValueError(
-                f"line target is not available for packet: {target.path}"
-            )
+            raise ValueError(f"line target is not available for packet: {target.path}")
         return spans[index]
 
     @staticmethod

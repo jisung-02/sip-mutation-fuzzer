@@ -106,9 +106,7 @@ def build_sequence_scenario(
     if repeat_override is None or repeat_override < 1:
         return scenario
     steps = tuple(
-        step.model_copy(update={"repeat": repeat_override})
-        if step.repeat > 1
-        else step
+        step.model_copy(update={"repeat": repeat_override}) if step.repeat > 1 else step
         for step in scenario.steps
     )
     return scenario.model_copy(update={"steps": steps})

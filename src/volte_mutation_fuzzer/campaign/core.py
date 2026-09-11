@@ -77,7 +77,10 @@ from volte_mutation_fuzzer.sip.completeness import (
 from volte_mutation_fuzzer.sip.render import render_packet
 from volte_mutation_fuzzer.analysis.crash_analyzer import CampaignCrashAnalyzer
 from volte_mutation_fuzzer.campaign.dashboard import ConsoleProgressReporter
-from volte_mutation_fuzzer.campaign.evidence import EvidenceCollector, INTERESTING_VERDICTS
+from volte_mutation_fuzzer.campaign.evidence import (
+    EvidenceCollector,
+    INTERESTING_VERDICTS,
+)
 from volte_mutation_fuzzer.campaign.report import HtmlReportGenerator
 
 _DEFAULT_PCSCF_IP: str = "172.22.0.21"
@@ -907,7 +910,10 @@ class CampaignExecutor:
             # Sequence mode: cataloged multi-message state-attack scenarios
             # (retransmit, early/double teardown). Runs its own step loop, so
             # it must not fall through to the single-fuzz-step dialog router.
-            if self._config.sequence_scenario is not None and spec.response_code is None:
+            if (
+                self._config.sequence_scenario is not None
+                and spec.response_code is None
+            ):
                 return self._execute_sequence_case(
                     spec, timestamp, case_started_monotonic
                 )
@@ -1699,9 +1705,7 @@ class CampaignExecutor:
             # targets already carry a host.
             sequence_target = self._target
             if sequence_target.host is None and config.target_msisdn is not None:
-                resolved = self._ue_resolver.resolve(
-                    self._target, impi=config.impi
-                )
+                resolved = self._ue_resolver.resolve(self._target, impi=config.impi)
                 sequence_target = sequence_target.model_copy(
                     update={"host": resolved.host}
                 )
@@ -1712,9 +1716,7 @@ class CampaignExecutor:
                 seed=spec.seed,
                 profile=spec.profile,
                 strategy=spec.strategy,
-                layer=cast(
-                    Literal["model", "wire", "byte", "auto"], spec.layer
-                ),
+                layer=cast(Literal["model", "wire", "byte", "auto"], spec.layer),
                 max_operations=config.mutations_per_case,
             )
             try:
@@ -1824,13 +1826,13 @@ class CampaignExecutor:
             elapsed_ms=verdict.elapsed_ms,
             process_alive=verdict.process_alive,
             raw_request=_payload_to_text(sent_payload),
-            raw_response=self._raw_response_from_send_result(verdict.verdict, send_result),
+            raw_response=self._raw_response_from_send_result(
+                verdict.verdict, send_result
+            ),
             reproduction_cmd=reproduction_cmd,
             profile=spec.profile,
             strategy=spec.strategy,
-            mutation_ops=(
-                f"sequence:{exchange.scenario_name}",
-            ),
+            mutation_ops=(f"sequence:{exchange.scenario_name}",),
             details={**details, **(getattr(verdict, "details", {}) or {})},
             timestamp=timestamp,
             pcap_path=pcap_path_saved,

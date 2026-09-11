@@ -43,14 +43,10 @@ class SequenceCatalogTests(unittest.TestCase):
     def test_every_scenario_has_mutated_and_cleanup_steps(self) -> None:
         for name in SEQUENCE_SCENARIO_NAMES:
             scenario = build_sequence_scenario(name)
-            self.assertTrue(
-                any(step.mutate for step in scenario.steps), name
-            )
+            self.assertTrue(any(step.mutate for step in scenario.steps), name)
             # cleanup: every INVITE-bearing scenario must end with CANCEL/BYE
             if any(step.method == "INVITE" for step in scenario.steps):
-                self.assertIn(
-                    scenario.steps[-1].method, {"CANCEL", "BYE"}, name
-                )
+                self.assertIn(scenario.steps[-1].method, {"CANCEL", "BYE"}, name)
 
     def test_repeat_override_only_touches_repeated_steps(self) -> None:
         scenario = build_sequence_scenario("invite_retransmit", repeat_override=5)
@@ -116,7 +112,9 @@ class ExecuteSequenceTests(unittest.TestCase):
                 SequenceStep(method="BYE", mutate=True),
             ),
         )
-        _, calls = self._run(scenario, [_step_result(0, "INVITE"), _step_result(1, "BYE")])
+        _, calls = self._run(
+            scenario, [_step_result(0, "INVITE"), _step_result(1, "BYE")]
+        )
         self.assertEqual([call["mutation"] for call in calls], [False, True])
 
     def test_failed_step_short_circuits_scenario(self) -> None:
