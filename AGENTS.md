@@ -48,6 +48,19 @@ Current docs index: [docs/README.md](docs/README.md).
 - `--layer auto` is profile-aware in mutator CLI paths.
 - Do not add `--impi` to examples unless debugging IMPI resolution, building a
   self-contained reproduction, or following an explicit user request.
+- `--corpus-dir` campaigns mutate seed buffers at the `byte` layer; seed
+  selection derives from the case seed so replay is exact.
+  `campaign promote` recycles crash/stack_failure/suspicious sent bytes into
+  a corpus directory for the next round.
+- `--strategy splice` (legacy/parser_breaker, corpus-only) crosses two
+  same-method seeds at CRLF boundaries; rejected without `--corpus-dir`.
+- Runtime feedback (`--feedback`, default on) promotes interesting payloads
+  into `<campaign>/corpus/` live; corpus campaigns continue mutating the
+  most recent promoted seed on even-numbered cases. Continuation cases are
+  response-dependent and do not byte-exact replay; the seed files do.
+- `campaign sequence --scenario <name>` runs INVITE-dialog state-attack
+  scenarios (retransmit, early/double teardown) with chained mutation;
+  mutually exclusive with `--mt`/`--packet-file`/`--corpus-dir`.
 
 ## Files To Read Before Logic Changes
 

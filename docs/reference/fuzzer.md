@@ -61,6 +61,14 @@ Poet (입력 생성기) → Courier (전달자) → Oracle (판정기)
 - **byte-layer**:
     - 비트 플립, 랜덤 바이트 삽입 등 가장 무차별적인 방식
     - 프로토콜 의미를 모르는 파서 버그를 찾는 데 특화
+    - 기본 연산자 풀: `flip_byte`, `set_byte`(0x00/0xFF 등 경계값 교체),
+      `arith_byte`(±1~35 산술 변이), `fill_range`(블록 동일값 채우기),
+      `delete_range`, `insert_bytes`(임의 위치 랜덤 바이트 삽입),
+      `insert_dict_token`(SIP 키워드/경계 정수 토큰 삽입),
+      `block_duplicate`/`block_move`(CRLF 라인 단위 블록 복제·이동),
+      `damage_crlf`, `truncate_bytes`
+    - `splice` 전략: 코퍼스 시드 두 개를 CRLF 경계에서 교차(앞부분+뒷부분)하는
+      AFL식 splicing. `--corpus-dir` 코퍼스 캠페인 전용
 
 퍼징은 재현성이 중요, 동일한 `profile/layer/strategy/seed` 조합에서는 동일한 패킷이 나와야 버그의 재현이 가능
 

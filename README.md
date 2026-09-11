@@ -49,6 +49,23 @@ uv run fuzzer campaign run \
   --max-cases 100
 ```
 
+Run a corpus campaign (mutate real/prior packets instead of generating new
+ones), then recycle anomalies into the next round's seeds:
+
+```bash
+uv run fuzzer campaign run --corpus-dir ./corpus --max-cases 100
+uv run fuzzer campaign promote results/<campaign_id>/campaign.jsonl
+uv run fuzzer campaign run --corpus-dir results/<campaign_id>/corpus --max-cases 100
+```
+
+Run a sequence-mode state-attack scenario (retransmitted INVITEs, early or
+double teardown, chained mutation across the dialog):
+
+```bash
+uv run fuzzer campaign sequence --scenario invite_retransmit --repeats 3 \
+  --profile legacy --strategy default --max-cases 10
+```
+
 ## Code-Checked Defaults
 
 These come from `src/volte_mutation_fuzzer/campaign/cli.py` and
@@ -63,6 +80,14 @@ These come from `src/volte_mutation_fuzzer/campaign/cli.py` and
 - `--mt` uses bundled template `mt_invite_3gpp.sip.tmpl`
 - `--packet-file` is real-UE only, raw-byte safe, and supports only `byte` layer
   plus `identity` strategy
+- `--corpus-dir` mutates a directory of seed packets at the `byte` layer;
+  `campaign promote` recycles interesting-case payloads into new seeds
+- runtime feedback (on by default) promotes interesting payloads into
+  `<campaign>/corpus/` live and lets corpus cases continue from the last hit;
+  `--no-feedback` disables it
+- `campaign sequence --scenario <name>` runs multi-message state-attack
+  scenarios (`invite_retransmit`, `invite_early_bye`, `invite_double_bye`,
+  `cancel_retransmit`)
 - real-UE campaigns auto-enable ADB and pcap unless `--no-adb` or `--no-pcap`
   is set
 
