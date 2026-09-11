@@ -275,6 +275,19 @@ def run_command(
             ),
         ),
     ] = None,
+    corpus_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--corpus-dir",
+            help=(
+                "Path to a directory of seed packets (.sip/.bin/.bytes/.txt). "
+                "Each case mutates one seed at the byte layer instead of "
+                "generating a fresh packet — feed 'campaign promote' output "
+                "here to re-fuzz previously interesting payloads. Mutually "
+                "exclusive with --mt and --packet-file. Real-ue-direct only."
+            ),
+        ),
+    ] = None,
     ipsec_mode: Annotated[
         str | None,
         typer.Option(
@@ -358,13 +371,26 @@ def run_command(
             help="Abort after N consecutive timeout/unknown verdicts. 0 to disable.",
         ),
     ] = 10,
+    feedback: Annotated[
+        bool,
+        typer.Option(
+            "--feedback/--no-feedback",
+            help=(
+                "Runtime feedback: promote interesting-case payloads into "
+                "<campaign>/corpus/ as they happen, and let corpus cases "
+                "continue mutating the most recent promoted seed."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Execute a fuzzing campaign against a SIP target."""
     strategies = _parse_csv(strategy) or (
         ("identity",) if packet_file is not None else ("default",)
     )
     layers = _parse_csv(layer) or (
-        ("byte",) if packet_file is not None else ("model", "wire", "byte")
+        ("byte",)
+        if packet_file is not None or corpus_dir is not None
+        else ("model", "wire", "byte")
     )
     profiles = tuple(profile.split(",")) if profile is not None else ("legacy",)
 
@@ -422,6 +448,7 @@ def run_command(
             impi=impi,
             mt=mt,
             packet_file=packet_file,
+            corpus_dir=corpus_dir,
             ipsec_mode=ipsec_mode_value,
             preserve_via=preserve_via,
             preserve_contact=preserve_contact,
@@ -433,6 +460,7 @@ def run_command(
             mt_local_port=mt_local_port,
             resume=resume,
             circuit_breaker_threshold=circuit_breaker,
+            feedback_enabled=feedback,
             adb_buffers=adb_buffers_value,
             oracle_log_grace_seconds=oracle_log_grace,
             post_campaign_log_grace_seconds=(
@@ -441,7 +469,7 @@ def run_command(
             wait_idle_timeout_seconds=wait_idle_timeout,
             invite_teardown=not no_teardown,
         )
-        if strategy is None and config.packet_file is None:
+        if strategy is None and config.packet_file is None and config.corpus_dir is None:
             default_strategies = (
                 ("default", "state_breaker")
                 if config.profiles == ("legacy",)
@@ -597,3 +625,211 @@ def replay_command(
     )
     result = executor._execute_case(spec)
     typer.echo(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
+
+@app.command("promote")
+def promote_command(
+    path: Annotated[str, typer.Argument(help="Path to campaign JSONL file.")],
+    out: Annotated[
+        str | None,
+        typer.Option(
+            "--out",
+            help=(
+                "Output corpus directory. Defaults to <campaign_dir>/corpus "
+                "next to the JSONL file."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Promote interesting-case payloads into a reusable corpus directory.
+
+    Copies the exact sent bytes (sent.bin / sent.sip) of every
+    crash/stack_failure/suspicious case into a seed directory that
+    'fuzzer campaign run --corpus-dir' consumes, plus a manifest.json
+    describing each promoted seed. This closes the loop: anomalies found by
+    one campaign become mutation seeds for the next.
+    """
+    from volte_mutation_fuzzer.campaign.evidence import promote_corpus
+
+    jsonl_path = Path(path)
+    if not jsonl_path.is_file():
+        typer.echo(f"Error: campaign JSONL not found: {path}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        count, out_path = promote_corpus(
+            jsonl_path, Path(out) if out is not None else None
+        )
+    except Exception as exc:
+        typer.echo(f"Error promoting corpus: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Promoted {count} seed(s) into {out_path}")
+    if count == 0:
+        typer.echo(
+            "No interesting cases with evidence payloads found — nothing to recycle.",
+            err=True,
+        )
+
+@app.command("sequence")
+def sequence_command(
+    scenario: Annotated[
+        str,
+        typer.Option(
+            "--scenario",
+            help=(
+                "Sequence scenario name. Available: cancel_retransmit, "
+                "invite_double_bye, invite_early_bye, invite_retransmit."
+            ),
+        ),
+    ],
+    repeats: Annotated[
+        int,
+        typer.Option(
+            "--repeats",
+            min=1,
+            max=10,
+            help="Retransmission count override for repeated scenario steps.",
+        ),
+    ] = 2,
+    target_host: Annotated[
+        str | None,
+        typer.Option("--target-host", help="Target SIP host (optional)."),
+    ] = None,
+    target_msisdn: Annotated[
+        str | None,
+        typer.Option("--target-msisdn", help="UE MSISDN (defaults to 111111)."),
+    ] = None,
+    ipsec_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--ipsec-mode", help="IPsec mode: null, bypass, or native (default)."
+        ),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Mutation profile (default legacy)."),
+    ] = None,
+    layer: Annotated[
+        str | None,
+        typer.Option("--layer", help="Mutation layer (default wire)."),
+    ] = None,
+    strategy: Annotated[
+        str | None,
+        typer.Option("--strategy", help="Mutation strategy (default identity)."),
+    ] = None,
+    mutations_per_case: Annotated[
+        int,
+        typer.Option(
+            "--mutations-per-case",
+            min=1,
+            max=100,
+            help="Mutation rounds applied to each mutated scenario step.",
+        ),
+    ] = 1,
+    max_cases: Annotated[
+        int,
+        typer.Option("--max-cases", min=0, help="Number of cases (0 = unlimited)."),
+    ] = 10,
+    seed_start: Annotated[
+        int,
+        typer.Option("--seed-start", min=0, help="First seed value."),
+    ] = 0,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", min=0.1, max=60.0, help="Per-response timeout (s)."),
+    ] = 5.0,
+    cooldown: Annotated[
+        float,
+        typer.Option("--cooldown", min=0.0, max=10.0, help="Cooldown between cases (s)."),
+    ] = 1.0,
+    adb: Annotated[
+        bool | None,
+        typer.Option("--adb/--no-adb", help="Override ADB evidence collection."),
+    ] = None,
+    pcap: Annotated[
+        bool | None,
+        typer.Option("--pcap/--no-pcap", help="Override pcap capture."),
+    ] = None,
+    feedback: Annotated[
+        bool,
+        typer.Option(
+            "--feedback/--no-feedback",
+            help="Promote interesting payloads into <campaign>/corpus/ live.",
+        ),
+    ] = True,
+) -> None:
+    """Run a multi-message sequence scenario (state-attack mode).
+
+    Unlike ``campaign run`` (one mutated packet per case), sequence mode
+    chains several messages in one dialog — retransmitted INVITEs, teardown
+    before provisional responses, double BYEs — mutating every step flagged
+    by the scenario.
+    """
+    from volte_mutation_fuzzer.dialog.sequence_catalog import (
+        SEQUENCE_SCENARIO_NAMES,
+    )
+
+    if ipsec_mode is not None and ipsec_mode not in _IPSEC_MODES:
+        typer.echo(
+            f"Error: --ipsec-mode must be one of {','.join(_IPSEC_MODES)}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if scenario.strip().lower() not in SEQUENCE_SCENARIO_NAMES:
+        typer.echo(
+            f"Error: unknown sequence scenario '{scenario}'. "
+            f"Available: {', '.join(SEQUENCE_SCENARIO_NAMES)}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    target_msisdn_value = target_msisdn or "111111"
+    ipsec_mode_value = cast(IpsecMode | None, ipsec_mode) or "native"
+
+    try:
+        config = CampaignConfig(
+            mode="real-ue-direct",
+            target_host=target_host,
+            target_msisdn=target_msisdn_value,
+            ipsec_mode=ipsec_mode_value,
+            methods=("INVITE",),
+            profiles=tuple(profile.split(",")) if profile is not None else ("legacy",),
+            strategies=_parse_csv(strategy) or ("identity",),
+            layers=_parse_csv(layer) or ("wire",),
+            max_cases=max_cases,
+            mutations_per_case=mutations_per_case,
+            timeout_seconds=timeout,
+            cooldown_seconds=cooldown,
+            seed_start=seed_start,
+            adb_enabled=adb,
+            pcap_enabled=pcap,
+            sequence_scenario=scenario.strip().lower(),
+            sequence_repeats=repeats,
+            feedback_enabled=feedback,
+        )
+    except ValidationError as exc:
+        typer.echo(f"Configuration error: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    print(
+        f"[vmf sequence] starting: scenario={config.sequence_scenario}"
+        f" repeats={config.sequence_repeats}"
+        f" strategy={','.join(config.strategies)}"
+        f" max_cases={max_cases}"
+        f" target=msisdn:{target_msisdn_value}",
+        file=sys.stderr,
+    )
+
+    executor = CampaignExecutor(config)
+    print(f"[vmf sequence] output: {executor.campaign_dir}", file=sys.stderr)
+    result = executor.run()
+
+    print(
+        f"[vmf sequence] {result.status}: total={result.summary.total}"
+        f" normal={result.summary.normal}"
+        f" suspicious={result.summary.suspicious}"
+        f" timeout={result.summary.timeout}"
+        f" crash={result.summary.crash}"
+        f" stack_failure={result.summary.stack_failure}",
+        file=sys.stderr,
+    )

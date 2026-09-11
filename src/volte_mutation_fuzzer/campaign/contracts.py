@@ -4,11 +4,19 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from volte_mutation_fuzzer.mutator.profile_catalog import normalize_profile_name
+from volte_mutation_fuzzer.mutator.profile_catalog import (
+    SUPPORTED_STRATEGIES_BY_LAYER,
+    normalize_profile_name,
+)
 from volte_mutation_fuzzer.sip.common import SIPMethod
 
 ALL_SIP_METHODS = tuple(method.value for method in SIPMethod)
 _PACKET_FILE_DEFAULT_STRATEGIES = ("default", "state_breaker")
+_CORPUS_DEFAULT_STRATEGIES = ("default", "state_breaker")
+# Only these extensions are scanned when a corpus directory is loaded. Hidden
+# files (e.g. macOS .DS_Store) and unrelated sidecars are skipped so a polluted
+# directory cannot inject garbage seeds or break start-line method parsing.
+CORPUS_FILE_SUFFIXES: frozenset[str] = frozenset({".sip", ".bin", ".bytes", ".txt"})
 
 
 def _parse_packet_file_method(packet_path: Path) -> str:
@@ -22,6 +30,49 @@ def _parse_packet_file_method(packet_path: Path) -> str:
             "packet_file start-line must be a SIP request line with a supported method"
         )
     return method
+
+
+class CorpusEntry(BaseModel):
+    """One raw seed packet loaded from a corpus directory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    method: str = Field(min_length=1)
+    data: bytes
+
+
+def load_corpus_entries(corpus_dir: Path) -> tuple[CorpusEntry, ...]:
+    """Load every recognized packet file under ``corpus_dir`` as a seed.
+
+    Files are processed in name order so entry indices (and therefore
+    seed-derived selection) are stable across runs and machines. Each file must
+    start with a supported SIP request line; an empty or unparsable file is an
+    error naming the offending file rather than a silent skip — a half-loaded
+    corpus would silently change which seeds a given seed value selects.
+    """
+    entries: list[CorpusEntry] = []
+    files = sorted(
+        path
+        for path in corpus_dir.iterdir()
+        if path.is_file()
+        and not path.name.startswith(".")
+        and path.suffix.lower() in CORPUS_FILE_SUFFIXES
+    )
+    for path in files:
+        data = path.read_bytes()
+        if not data:
+            raise ValueError(f"corpus file is empty: {path.name}")
+        try:
+            method = _parse_packet_file_method(path)
+        except ValueError as exc:
+            raise ValueError(f"corpus file rejected ({exc}): {path.name}") from exc
+        entries.append(CorpusEntry(name=path.name, method=method, data=data))
+    if not entries:
+        raise ValueError(
+            f"corpus_dir contains no packet files ({', '.join(sorted(CORPUS_FILE_SUFFIXES))}): {corpus_dir}"
+        )
+    return tuple(entries)
 
 
 class CampaignConfig(BaseModel):
@@ -70,6 +121,12 @@ class CampaignConfig(BaseModel):
     # raw bytes (null-byte safe). Mutually exclusive with --mt.
     # Bypasses generator + slot substitution; bytes flow straight to the sender.
     packet_file: str | None = None
+    # Path to a directory of seed packets (captured or promoted from
+    # interesting cases). Each case mutates one corpus entry at the byte layer
+    # instead of generating a fresh packet, so campaigns can build on real
+    # traffic and on previously-anomalous inputs. Mutually exclusive with
+    # --mt and --packet-file.
+    corpus_dir: str | None = None
     ipsec_mode: Literal["null", "bypass", "native"] | None = None
     preserve_via: bool = False
     preserve_contact: bool = False
@@ -100,6 +157,16 @@ class CampaignConfig(BaseModel):
     # On by default so campaigns don't leave the UE ringing. Set False to let
     # the call actually alert/ring — useful for baseline "does it ring" checks.
     invite_teardown: bool = True
+    # Runtime feedback: promote interesting-case payloads into
+    # <campaign_dir>/corpus/ as they happen, and let corpus cases continue
+    # mutating the most recent promoted seed (last-seed continuation).
+    feedback_enabled: bool = True
+    # Sequence mode: run a cataloged multi-message state-attack scenario
+    # (retransmit, early/double teardown) instead of the per-method loop.
+    sequence_scenario: str | None = None
+    # Overrides the repeat count of repeated steps in the sequence scenario
+    # (retransmission pressure).
+    sequence_repeats: int = Field(default=2, ge=1, le=10)
 
     # Internal fields derived from ipsec_mode (set by model_validator)
     source_ip: str | None = None
@@ -281,6 +348,107 @@ class CampaignConfig(BaseModel):
                 )
             if self.ipsec_mode is None:
                 object.__setattr__(self, "ipsec_mode", "null")
+
+        if self.corpus_dir is not None:
+            byte_strategies = SUPPORTED_STRATEGIES_BY_LAYER["byte"]
+            if self.mt:
+                raise ValueError("corpus_dir is mutually exclusive with --mt")
+            if self.packet_file is not None:
+                raise ValueError("corpus_dir is mutually exclusive with --packet-file")
+            if self.mode != "real-ue-direct":
+                raise ValueError("corpus_dir requires mode='real-ue-direct'")
+            if self.target_msisdn is None:
+                raise ValueError("corpus_dir requires target_msisdn")
+            corpus_path = Path(self.corpus_dir)
+            if not corpus_path.is_dir():
+                raise ValueError(
+                    f"corpus_dir not found or not a directory: {self.corpus_dir}"
+                )
+            entries = load_corpus_entries(corpus_path)
+            if self.response_codes:
+                raise ValueError("corpus_dir does not support response_codes")
+
+            # Corpus entries are raw bytes with no backing PacketModel, so only
+            # the byte layer can mutate them (same constraint as --packet-file,
+            # but mutation itself is allowed and is the whole point).
+            if "layers" not in self.model_fields_set:
+                object.__setattr__(self, "layers", ("byte",))
+            else:
+                if set(self.layers) - {"byte", "auto"}:
+                    raise ValueError("corpus_dir supports layers: byte, auto")
+                if "auto" in self.layers:
+                    object.__setattr__(
+                        self,
+                        "layers",
+                        tuple(layer for layer in self.layers if layer != "auto")
+                        or ("byte",),
+                    )
+
+            if (
+                "strategies" not in self.model_fields_set
+                and self.strategies == _CORPUS_DEFAULT_STRATEGIES
+            ):
+                object.__setattr__(self, "strategies", ("default",))
+            else:
+                unsupported = tuple(
+                    strategy
+                    for strategy in self.strategies
+                    if strategy not in byte_strategies
+                )
+                if unsupported:
+                    raise ValueError(
+                        "corpus_dir supports byte-layer strategies only "
+                        f"({', '.join(sorted(byte_strategies))}); "
+                        f"unsupported: {', '.join(unsupported)}"
+                    )
+
+            # Methods: default to the methods present in the corpus; an
+            # explicit list must be a subset so every case can resolve a seed.
+            corpus_methods = tuple(dict.fromkeys(entry.method for entry in entries))
+            if not self.methods or self.methods == ALL_SIP_METHODS:
+                object.__setattr__(self, "methods", corpus_methods)
+            else:
+                missing = tuple(
+                    method for method in self.methods if method not in corpus_methods
+                )
+                if missing:
+                    raise ValueError(
+                        f"corpus_dir has no seed for method(s): {', '.join(missing)} "
+                        f"(available: {', '.join(corpus_methods)})"
+                    )
+
+            if self.ipsec_mode is None:
+                object.__setattr__(self, "ipsec_mode", "null")
+
+        # Splice crosses two seed buffers; only corpus mode can supply the
+        # second one. Reject it everywhere else so generator-path campaigns
+        # fail at config time instead of emitting error cases at run time.
+        if self.corpus_dir is None and "splice" in self.strategies:
+            raise ValueError(
+                "strategy 'splice' requires --corpus-dir (it crosses two corpus seeds)"
+            )
+
+        if self.sequence_scenario is not None:
+            from volte_mutation_fuzzer.dialog.sequence_catalog import (
+                build_sequence_scenario,
+            )
+
+            if self.mt or self.packet_file is not None or self.corpus_dir is not None:
+                raise ValueError(
+                    "sequence_scenario is mutually exclusive with --mt, --packet-file,"
+                    " and --corpus-dir"
+                )
+            if self.response_codes:
+                raise ValueError("sequence_scenario does not support response_codes")
+            # Validates the name and raises with the available list on typos.
+            scenario = build_sequence_scenario(
+                self.sequence_scenario, repeat_override=self.sequence_repeats
+            )
+            del scenario
+            if self.methods != ("INVITE",):
+                raise ValueError(
+                    "sequence_scenario campaigns run with --methods INVITE only"
+                )
 
         # Convert ipsec_mode to internal fields for TargetEndpoint
         if self.ipsec_mode == "null":

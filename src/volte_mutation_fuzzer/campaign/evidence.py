@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 
@@ -12,6 +13,8 @@ logger = logging.getLogger(__name__)
 INTERESTING_VERDICTS: frozenset[str] = frozenset(
     {"crash", "stack_failure", "suspicious"}
 )
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class EvidenceCollector:
@@ -130,3 +133,96 @@ class EvidenceCollector:
                 exc,
             )
             return None
+
+def promote_corpus(
+    jsonl_path: Path,
+    out_dir: Path | None = None,
+) -> tuple[int, Path]:
+    """Recycle interesting-case payloads from a finished campaign into a corpus.
+
+    Scans ``campaign.jsonl`` for crash/suspicious/stack_failure cases and copies
+    the exact bytes the target saw (``interesting/case_<id>/sent.bin`` for raw
+    byte payloads, ``sent.sip`` for text payloads) into a seed directory that
+    ``fuzzer campaign run --corpus-dir`` can consume. This is the feedback half
+    of corpus mode: anomalies discovered by one campaign become mutation seeds
+    for the next.
+
+    Returns ``(promoted_count, out_dir)``. Cases whose evidence directory is
+    missing (e.g. evidence collection was disabled) are skipped with a count in
+    the manifest, not an error.
+    """
+    jsonl_path = Path(jsonl_path)
+    target_dir = out_dir if out_dir is not None else jsonl_path.parent / "corpus"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    interesting_dir = jsonl_path.parent / "interesting"
+    promoted: list[dict[str, object]] = []
+    skipped = 0
+
+    with jsonl_path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("type") != "case":
+                continue
+            if row.get("verdict") not in INTERESTING_VERDICTS:
+                continue
+
+            case_id = row.get("case_id")
+            method = str(row.get("method") or "unknown")
+            if case_id is None:
+                skipped += 1
+                continue
+
+            case_dir = interesting_dir / f"case_{int(case_id):06d}"
+            source = None
+            for candidate in ("sent.bin", "sent.sip"):
+                if (case_dir / candidate).is_file():
+                    source = case_dir / candidate
+                    break
+            if source is None:
+                skipped += 1
+                continue
+
+            safe_method = _UNSAFE_FILENAME_CHARS.sub("-", method).strip("-") or "unknown"
+            dest = target_dir / f"case_{int(case_id):06d}_{safe_method}{source.suffix}"
+            shutil.copy2(source, dest)
+            promoted.append(
+                {
+                    "file": dest.name,
+                    "case_id": int(case_id),
+                    "method": method,
+                    "verdict": row.get("verdict"),
+                    "strategy": row.get("strategy"),
+                    "profile": row.get("profile"),
+                    "layer": row.get("layer"),
+                    "seed": row.get("seed"),
+                    "response_code": row.get("response_code"),
+                    "reason": row.get("reason"),
+                    "source": str(source),
+                }
+            )
+
+    manifest = {
+        "source_jsonl": str(jsonl_path),
+        "promoted": promoted,
+        "promoted_count": len(promoted),
+        "skipped_no_evidence": skipped,
+    }
+    (target_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    logger.info(
+        "promoted %d corpus seed(s) from %s into %s (%d skipped)",
+        len(promoted),
+        jsonl_path,
+        target_dir,
+        skipped,
+    )
+    return len(promoted), target_dir
