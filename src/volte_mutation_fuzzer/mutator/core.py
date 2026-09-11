@@ -25,6 +25,7 @@ from volte_mutation_fuzzer.mutator.profile_catalog import (
     IMS_PROFILE_HEADER_NAMES,
     PIXEL_IMS_HEADER_NAMES,
     PROFILE_DEFAULT_STRATEGY_POOLS,
+    normalize_profile_name,
     resolve_effective_strategy,
     validate_profile_strategy,
 )
@@ -136,11 +137,43 @@ _BYTE_TARGET_ALIASES = {
 _HEADER_INDEX_PATTERN = re.compile(r"^header\[(\d+)\]$")
 _BYTE_INDEX_PATTERN = re.compile(r"^byte\[(\d+)\]$")
 _BYTE_RANGE_PATTERN = re.compile(r"^range\[(\d+):(\d+)\]$")
+_LINE_INDEX_PATTERN = re.compile(r"^line\[(\d+)\]$")
 _ALIAS_PORT_PATTERN = re.compile(
     r"(?P<prefix>;alias=[^~;>]+~)(?P<port_a>\d+)(?:~(?P<port_b>\d+))?(?P<suffix>~1)"
 )
 _CONTENT_LENGTH_HEADER = "Content-Length"
 _CRLF_DELIMITER = b"\r\n"
+
+# Classic mutation-fuzzing boundary values used by the byte-layer
+# "set_byte"/"fill_range" operators. Reaching for these first — instead of a
+# uniformly random byte — is what makes single-byte edits likely to hit
+# parser branch conditions (NUL terminators, sign bits, high-bit escapes).
+_INTERESTING_BYTE_VALUES: tuple[int, ...] = (0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF)
+
+# SIP dictionary tokens inserted verbatim by "insert_dict_token". Protocol
+# keywords and boundary numbers that SIP parsers branch on — the byte-layer
+# equivalent of an AFL dictionary.
+_SIP_DICT_TOKENS: tuple[bytes, ...] = (
+    b"INVITE",
+    b"REGISTER",
+    b"SUBSCRIBE",
+    b"NOTIFY",
+    b"Content-Length",
+    b"Content-Length: -1",
+    b"Content-Length: 999999999",
+    b"CSeq",
+    b"Via",
+    b"Call-ID",
+    b"Max-Forwards: 0",
+    b"Max-Forwards: 255",
+    b"SIP/2.0",
+    b"sip:",
+    b"tel:",
+    b"sec-agree",
+    b"4294967295",
+    b"2147483648",
+    b"-1",
+)
 
 _IPHONE_SECURITY_AGREEMENT_HEADER_NAMES: frozenset[str] = frozenset(
     {
@@ -484,6 +517,42 @@ class SIPMutator:
                 final_layer="byte",
             )
 
+        # Deterministic byte strategies (tail_chop_1, tail_garbage, ...) must
+        # dispatch through the same path as the other byte entry points;
+        # falling straight through to random ops silently mislabeled them.
+        # Multi-mutation mirrors ``_mutate_bytes``: ``max_operations - 1``
+        # further rounds, ValueError = once-only strategy exhausted.
+        rng = self._rng_from_seed(effective_config.seed)
+        deterministic_byte_mutation = self._apply_deterministic_byte_strategy(
+            editable_bytes,
+            effective_config.strategy,
+            rng,
+        )
+        if deterministic_byte_mutation is not None:
+            mutated_bytes, record = deterministic_byte_mutation
+            records: list[MutationRecord] = [record]
+            for _ in range(effective_config.max_operations - 1):
+                try:
+                    next_mutation = self._apply_deterministic_byte_strategy(
+                        mutated_bytes,
+                        effective_config.strategy,
+                        rng,
+                    )
+                except ValueError:
+                    break
+                if next_mutation is None:
+                    break
+                mutated_bytes, record = next_mutation
+                records.append(record)
+            return MutatedWireCase(
+                packet_bytes=self._finalize_packet_bytes(mutated_bytes),
+                records=tuple(records),
+                seed=effective_config.seed,
+                profile=effective_config.profile,
+                strategy=effective_config.strategy,
+                final_layer="byte",
+            )
+
         mutated_bytes, records = self._apply_byte_operations(
             editable_bytes,
             effective_config,
@@ -496,6 +565,64 @@ class SIPMutator:
             strategy=effective_config.strategy,
             final_layer="byte",
         )
+
+    def splice_packet_bytes(
+        self,
+        primary: bytes,
+        secondary: bytes,
+        *,
+        seed: int | None,
+        profile: str = "legacy",
+    ) -> MutatedWireCase:
+        """Deterministic CRLF-aligned crossover of two raw seed buffers.
+
+        Takes the head of ``primary`` up to a random line boundary and the
+        tail of ``secondary`` from another random line boundary. Cuts are
+        line-aligned so the spliced buffer usually still parses as a SIP
+        message — the classic AFL-style splicing operator, adapted so
+        recombination stress targets header-block semantics rather than
+        mid-token byte soup.
+
+        Same seed → same cuts, so replay reproduces the exact buffer.
+        """
+        normalized_profile = normalize_profile_name(profile)
+        if not primary:
+            raise ValueError("splice requires a non-empty primary buffer")
+        if not secondary:
+            raise ValueError("splice requires a non-empty secondary buffer")
+
+        rng = self._rng_from_seed(seed)
+        cut_primary = self._pick_splice_cut(primary, rng)
+        cut_secondary = self._pick_splice_cut(secondary, rng)
+        spliced = primary[:cut_primary] + secondary[cut_secondary:]
+        record = self._record_mutation(
+            target=MutationTarget(layer="byte", path=f"range[0:{cut_primary}]"),
+            operator="splice",
+            before=len(primary),
+            after=len(spliced),
+            note=(
+                f"primary[0:{cut_primary}] + secondary[{cut_secondary}:"
+                f"{len(secondary)}]"
+            ),
+        )
+        return MutatedWireCase(
+            packet_bytes=spliced,
+            records=(record,),
+            seed=seed,
+            profile=normalized_profile,
+            strategy="splice",
+            final_layer="byte",
+        )
+
+    def _pick_splice_cut(self, data: bytes, rng: random.Random) -> int:
+        """Choose a line-boundary offset for a splice cut (inclusive ends)."""
+        boundaries = {0, len(data)}
+        boundaries.update(
+            offset + len(_CRLF_DELIMITER)
+            for offset in self._find_crlf_offsets(data)
+        )
+        ordered = sorted(boundaries)
+        return ordered[rng.randrange(len(ordered))]
 
     def _apply_wire_operations(
         self,
@@ -590,6 +717,7 @@ class SIPMutator:
                     or not self._is_byte_target_protected(
                         candidate,
                         self._collect_protected_byte_ranges(current_bytes.data),
+                        current_bytes.data,
                     )
                 )
             )
@@ -867,6 +995,9 @@ class SIPMutator:
                 start = int(range_match.group(1))
                 end = int(range_match.group(2))
                 return f"range[{start}:{end}]"
+
+            if line_match := _LINE_INDEX_PATTERN.fullmatch(raw_name):
+                return f"line[{int(line_match.group(1))}]"
 
             canonical_name = _BYTE_TARGET_ALIASES.get(raw_name.lower())
             if canonical_name is None:
@@ -1227,6 +1358,7 @@ class SIPMutator:
                 "header_targeted",
                 "tail_chop_1",
                 "tail_garbage",
+                "splice",
             }:
                 raise ValueError(f"unsupported byte mutation strategy: {strategy}")
             return
@@ -3156,6 +3288,16 @@ class SIPMutator:
         strategy: str,
         rng: random.Random,
     ) -> tuple[EditablePacketBytes, MutationRecord] | None:
+        if strategy == "splice":
+            # Splicing crosses two seed buffers; single-buffer entry points
+            # (mutate / mutate_field / mutate_packet_bytes) cannot supply the
+            # second one. Fail loudly instead of falling through to random
+            # byte ops that would silently be recorded as "splice".
+            raise ValueError(
+                "splice requires two seed buffers; use SIPMutator.splice_packet_bytes"
+                " or campaign corpus mode (--corpus-dir)"
+            )
+
         if strategy == "tail_chop_1":
             if not editable_bytes.data:
                 raise ValueError("tail_chop_1 requires packet bytes")
@@ -3205,6 +3347,15 @@ class SIPMutator:
         if self._find_crlf_offsets(data):
             targets.append(MutationTarget(layer="byte", path="delimiter:CRLF"))
 
+        # One block target per CRLF-delimited line, driving the block-level
+        # operators (duplicate/move). Empty trailing spans are skipped — a
+        # zero-length line is not a usable block.
+        targets.extend(
+            MutationTarget(layer="byte", path=f"line[{index}]")
+            for index, (start, end) in enumerate(self._collect_line_spans(data))
+            if end > start
+        )
+
         targets.append(MutationTarget(layer="byte", path="segment:start_line"))
         return tuple(targets)
 
@@ -3231,10 +3382,106 @@ class SIPMutator:
             )
             return mutated_bytes, record
 
+        if operator == "set_byte":
+            index = self._parse_byte_index(target.path)
+            before = data[index]
+            after = _INTERESTING_BYTE_VALUES[rng.randrange(len(_INTERESTING_BYTE_VALUES))]
+            mutated_bytes = editable_bytes.overwrite(index, bytes([after]))
+            record = self._record_mutation(
+                target=target,
+                operator=operator,
+                before=before,
+                after=after,
+            )
+            return mutated_bytes, record
+
+        if operator == "arith_byte":
+            index = self._parse_byte_index(target.path)
+            before = data[index]
+            delta = rng.choice((1, -1)) * rng.randrange(1, 36)
+            after = (before + delta) % 256
+            mutated_bytes = editable_bytes.overwrite(index, bytes([after]))
+            record = self._record_mutation(
+                target=target,
+                operator=operator,
+                before=before,
+                after=after,
+                note=f"delta={delta - 256 if delta > 128 else delta}",
+            )
+            return mutated_bytes, record
+
+        if operator == "fill_range":
+            start, end = self._parse_byte_range(target.path)
+            before = data[start:end]
+            value = _INTERESTING_BYTE_VALUES[rng.randrange(len(_INTERESTING_BYTE_VALUES))]
+            after = bytes([value]) * (end - start)
+            mutated_bytes = editable_bytes.overwrite(start, after)
+            record = self._record_mutation(
+                target=target,
+                operator=operator,
+                before=before,
+                after=after,
+            )
+            return mutated_bytes, record
+
+        if operator == "insert_dict_token":
+            offsets = self._find_crlf_offsets(data)
+            token = _SIP_DICT_TOKENS[rng.randrange(len(_SIP_DICT_TOKENS))]
+            # Insert at a line boundary: either right after a CRLF (token
+            # prefixes the next line) or right before it (token suffixes the
+            # current line). Both placements stress header-start parsing.
+            boundary = offsets[rng.randrange(len(offsets))]
+            insert_at = boundary if rng.randrange(2) else boundary + len(_CRLF_DELIMITER)
+            mutated_bytes = editable_bytes.insert(insert_at, token)
+            record = self._record_mutation(
+                target=target,
+                operator=operator,
+                before=b"",
+                after=token,
+                note=f"at offset {insert_at}",
+            )
+            return mutated_bytes, record
+
+        if operator == "block_duplicate":
+            start, end = self._line_span_for_target(data, target)
+            block = self._line_block_with_delimiter(data, start, end)
+            # Insert after the block's own CRLF — inserting at the span end
+            # would land between the line and its delimiter and corrupt both.
+            mutated_bytes = editable_bytes.insert(start + len(block), block)
+            record = self._record_mutation(
+                target=target,
+                operator=operator,
+                before=b"",
+                after=block,
+            )
+            return mutated_bytes, record
+
+        if operator == "block_move":
+            start, end = self._line_span_for_target(data, target)
+            block = self._line_block_with_delimiter(data, start, end)
+            remainder = data[:start] + data[start + len(block) :]
+            boundaries = [0]
+            boundaries.extend(
+                offset + len(_CRLF_DELIMITER)
+                for offset in self._find_crlf_offsets(remainder)
+            )
+            boundaries.append(len(remainder))
+            insert_at = boundaries[rng.randrange(len(boundaries))]
+            after = remainder[:insert_at] + block + remainder[insert_at:]
+            mutated_bytes = editable_bytes.model_copy(update={"data": after})
+            record = self._record_mutation(
+                target=target,
+                operator=operator,
+                before=data[start:end],
+                after=block,
+                note=f"moved to offset {insert_at}",
+            )
+            return mutated_bytes, record
+
         if operator == "insert_bytes":
-            start, end = self._start_line_range(data)
-            del start
-            insert_at = end
+            # Random insertion point across the whole buffer — the legacy
+            # fixed "end of start line" position only ever stressed one spot.
+            insert_at = rng.randrange(len(data) + 1)
             inserted = bytes([0xFF, rng.randrange(256)])
             mutated_bytes = editable_bytes.insert(insert_at, inserted)
             record = self._record_mutation(
@@ -3242,6 +3489,7 @@ class SIPMutator:
                 operator=operator,
                 before=b"",
                 after=inserted,
+                note=f"at offset {insert_at}",
             )
             return mutated_bytes, record
 
@@ -3377,7 +3625,9 @@ class SIPMutator:
                         and (
                             not is_safe
                             or not self._is_byte_target_protected(
-                                candidate, protected_ranges
+                                candidate,
+                                protected_ranges,
+                                current_bytes.data,
                             )
                         )
                     )
@@ -3464,10 +3714,11 @@ class SIPMutator:
             offset = line_end + 2  # +2 for \r\n
         return tuple(ranges)
 
-    @staticmethod
     def _is_byte_target_protected(
+        self,
         target: MutationTarget,
         protected_ranges: tuple[tuple[int, int], ...],
+        data: bytes,
     ) -> bool:
         """Return True if byte target falls within a protected range."""
         path = target.path
@@ -3482,6 +3733,17 @@ class SIPMutator:
             return any(
                 rng_start < end and rng_end > start for start, end in protected_ranges
             )
+        line_match = _LINE_INDEX_PATTERN.match(path)
+        if line_match:
+            # Protected ranges are line-aligned (start line + Via/Call-ID/
+            # CSeq lines), so a line block is protected exactly when its
+            # span overlaps one of them.
+            index = int(line_match.group(1))
+            spans = self._collect_line_spans(data)
+            if index >= len(spans):
+                return False
+            start, end = spans[index]
+            return any(start < p_end and end > p_start for p_start, p_end in protected_ranges)
         if path == "segment:start_line":
             return True  # Start line contains Request-URI
         return False
@@ -3622,6 +3884,12 @@ class SIPMutator:
                 )
         elif canonical_path == "delimiter:CRLF":
             if not self._find_crlf_offsets(data):
+                raise ValueError(
+                    f"byte target is not available for packet: {canonical_path}"
+                )
+        elif _LINE_INDEX_PATTERN.fullmatch(canonical_path):
+            index = self._parse_line_index(canonical_path)
+            if index >= len(self._collect_line_spans(data)):
                 raise ValueError(
                     f"byte target is not available for packet: {canonical_path}"
                 )
@@ -3846,11 +4114,13 @@ class SIPMutator:
         rng: random.Random,
     ) -> str:
         if target.path.startswith("byte["):
-            operators = ("flip_byte",)
+            operators = ("flip_byte", "set_byte", "arith_byte")
         elif target.path.startswith("range["):
-            operators = ("delete_range",)
+            operators = ("delete_range", "fill_range")
         elif target.path == "delimiter:CRLF":
-            operators = ("damage_crlf",)
+            operators = ("damage_crlf", "insert_dict_token")
+        elif _LINE_INDEX_PATTERN.fullmatch(target.path):
+            operators = ("block_duplicate", "block_move")
         elif target.path == "segment:start_line":
             operators = ("truncate_bytes", "insert_bytes")
         else:
@@ -4192,6 +4462,43 @@ class SIPMutator:
         if byte_match is None:
             raise ValueError(f"unsupported byte target path: {path}")
         return int(byte_match.group(1))
+
+    def _parse_line_index(self, path: str) -> int:
+        line_match = _LINE_INDEX_PATTERN.fullmatch(path)
+        if line_match is None:
+            raise ValueError(f"unsupported byte target path: {path}")
+        return int(line_match.group(1))
+
+    def _collect_line_spans(self, data: bytes) -> tuple[tuple[int, int], ...]:
+        """Byte spans of each CRLF-delimited line, CRLF excluded.
+
+        Line 0 is the start line; the span after the final CRLF (the body, if
+        any) is the last line. Spans are returned even when empty so indices
+        stay aligned with visible line positions; callers skip empty spans.
+        """
+        spans: list[tuple[int, int]] = []
+        start = 0
+        for offset in self._find_crlf_offsets(data):
+            spans.append((start, offset))
+            start = offset + len(_CRLF_DELIMITER)
+        spans.append((start, len(data)))
+        return tuple(spans)
+
+    def _line_span_for_target(self, data: bytes, target: MutationTarget) -> tuple[int, int]:
+        index = self._parse_line_index(target.path)
+        spans = self._collect_line_spans(data)
+        if index >= len(spans):
+            raise ValueError(
+                f"line target is not available for packet: {target.path}"
+            )
+        return spans[index]
+
+    @staticmethod
+    def _line_block_with_delimiter(data: bytes, start: int, end: int) -> bytes:
+        """Line bytes including the trailing CRLF when one follows the line."""
+        if data[end : end + len(_CRLF_DELIMITER)] == _CRLF_DELIMITER:
+            return data[start : end + len(_CRLF_DELIMITER)]
+        return data[start:end]
 
     def _parse_byte_range(self, path: str) -> tuple[int, int]:
         range_match = _BYTE_RANGE_PATTERN.fullmatch(path)
