@@ -175,6 +175,21 @@ _SIP_DICT_TOKENS: tuple[bytes, ...] = (
     b"-1",
 )
 
+# Delimiter-flood tuning for "delimiter_flood" (wire). Adapted from HTTP
+# parser audit findings (Django/DRF, incl. CVE-2025-14550 class): repeated
+# ';' / ',' / ';a=a' runs in one header value force re-entrant splitting in
+# parameter/list parsers and degrade CPU availability on text-based
+# protocols. Sizes are characters of flood appended per application.
+_DELIMITER_FLOOD_SIZES: tuple[int, ...] = (128, 512, 2048)
+_DELIMITER_FLOOD_VARIANTS: tuple[str, ...] = ("semi", "param", "comma")
+
+# Declared-Content-Length lie magnitudes for "content_length_mismatch"
+# (wire). The lie is always relative to the actual body: body+1 (off-by-one
+# framing), ~1000x (preallocation pressure on size-trusting parsers), and
+# 32-bit boundary magnitudes. 0-with-body is added separately when a body
+# exists.
+_CONTENT_LENGTH_LIE_MAGNITUDES: tuple[int, ...] = (999_999_999, 2_147_483_647)
+
 _IPHONE_SECURITY_AGREEMENT_HEADER_NAMES: frozenset[str] = frozenset(
     {
         "security-client",
@@ -796,6 +811,11 @@ class SIPMutator:
         layer: str,
         editable_message: EditableSIPMessage | None,
     ) -> bool:
+        if strategy == "delimiter_flood" and layer == "wire":
+            return editable_message is not None and any(
+                self._header_name_key(header.name) not in _SAFE_PROTECTED_HEADER_NAMES
+                for header in editable_message.headers
+            )
         if strategy == "alias_port_desync" and layer == "wire":
             return editable_message is not None and self._has_contact_alias(
                 editable_message
@@ -1329,6 +1349,8 @@ class SIPMutator:
                 "header_whitespace_noise",
                 "final_crlf_loss",
                 "duplicate_content_length_conflict",
+                "delimiter_flood",
+                "content_length_mismatch",
                 "alias_port_desync",
                 "null_byte_only",
                 "boundary_only",
@@ -1826,6 +1848,10 @@ class SIPMutator:
             return self._apply_final_crlf_loss(editable_message)
         if strategy == "duplicate_content_length_conflict":
             return self._apply_duplicate_content_length_conflict(editable_message, rng)
+        if strategy == "delimiter_flood":
+            return self._apply_delimiter_flood(editable_message, rng)
+        if strategy == "content_length_mismatch":
+            return self._apply_content_length_mismatch(editable_message, rng)
         if strategy == "null_byte_only":
             return self._apply_null_byte_only(editable_message, rng)
         if strategy == "boundary_only":
@@ -4060,6 +4086,119 @@ class SIPMutator:
             operator="duplicate_content_length_conflict",
             before=before_values,
             after=after_values,
+        )
+
+    def _apply_delimiter_flood(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        """Flood a non-protected header value with repeated delimiters.
+
+        HTTP-parser audit insight (Django/DRF, CVE-2025-14550 class): long
+        runs of ``;`` / ``,`` / ``;a=a`` inside one header value make
+        parameter/list splitters re-enter per delimiter and burn CPU. SIP
+        shares the text-header parsing structure, so the same shape targets
+        the UE/SBC parser. Routing-critical headers (via/call-id/cseq) are
+        excluded so the packet still reaches the target — the flood is meant
+        to be parsed, not dropped.
+        """
+        headers = list(editable_message.headers)
+        candidates = [
+            (index, header)
+            for index, header in enumerate(headers)
+            if self._header_name_key(header.name) not in _SAFE_PROTECTED_HEADER_NAMES
+        ]
+        if not candidates:
+            raise ValueError(
+                "delimiter_flood requires at least one non-protected header"
+            )
+        index, header = candidates[rng.randrange(len(candidates))]
+        variant = _DELIMITER_FLOOD_VARIANTS[
+            rng.randrange(len(_DELIMITER_FLOOD_VARIANTS))
+        ]
+        size = _DELIMITER_FLOOD_SIZES[rng.randrange(len(_DELIMITER_FLOOD_SIZES))]
+        unit = {"semi": ";", "param": ";a=a", "comma": ","}[variant]
+        repeats = max(1, size // len(unit))
+        flood = unit * repeats
+        mutated_value = f"{header.value}{flood}"
+        headers[index] = header.model_copy(update={"value": mutated_value})
+        mutated_message = editable_message.model_copy(
+            update={"headers": tuple(headers)}
+        )
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path=f"header[{index}]"),
+            operator="delimiter_flood",
+            before=header.value,
+            # Keep the record compact: JSONL would otherwise carry the full
+            # multi-KB flood verbatim on every interesting case.
+            after={
+                "variant": variant,
+                "units": repeats,
+                "chars": len(flood),
+                "prefix": flood[:32],
+            },
+            note=f"flooded {header.name} with {len(flood)} chars ({variant})",
+        )
+
+    def _apply_content_length_mismatch(
+        self,
+        editable_message: EditableSIPMessage,
+        rng: random.Random,
+    ) -> tuple[EditableSIPMessage, MutationRecord]:
+        """Declare a Content-Length that clashes with the actual body size.
+
+        Size-trusting parsers preallocate or index from the declared value;
+        forcing a declared-vs-actual gap probes both directions —
+        over-declaration (huge allocation / framing wait) and
+        under-declaration (truncation / stale-buffer reads), including the
+        body+1 off-by-one edge. Replaces existing Content-Length headers
+        (unlike ``duplicate_content_length_conflict``, which appends) and is
+        once-only: reapplication raises so multi-round loops degrade
+        gracefully.
+        """
+        actual_length = len(editable_message.body.encode("utf-8"))
+        lie_pool = [
+            actual_length + 1,
+            actual_length * 1000 + 999,
+            *_CONTENT_LENGTH_LIE_MAGNITUDES,
+        ]
+        if actual_length > 0:
+            lie_pool.append(0)
+
+        current = editable_message.declared_content_length
+        if current is None:
+            current = actual_length
+        if current in lie_pool:
+            raise ValueError("content_length_mismatch already applied")
+        candidates = [value for value in lie_pool if value != current]
+        lie = candidates[rng.randrange(len(candidates))]
+
+        headers = list(editable_message.headers)
+        before_values: list[str] = []
+        replaced = False
+        for index, header in enumerate(headers):
+            if self._header_name_key(header.name) != "content-length":
+                continue
+            before_values.append(header.value)
+            headers[index] = header.model_copy(update={"value": str(lie)})
+            replaced = True
+        if not replaced:
+            headers.append(EditableHeader(name=_CONTENT_LENGTH_HEADER, value=str(lie)))
+            before_values.append(str(current))
+
+        mutated_message = editable_message.model_copy(
+            update={
+                "headers": tuple(headers),
+                "declared_content_length": lie,
+            }
+        )
+        return mutated_message, self._record_mutation(
+            target=MutationTarget(layer="wire", path="header:Content-Length"),
+            operator="content_length_mismatch",
+            before={"actual_body_bytes": actual_length, "declared": before_values},
+            after=str(lie),
+            note=f"declared {lie} vs actual {actual_length}",
         )
 
     def _apply_alias_port_desync(
