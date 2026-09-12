@@ -24,6 +24,11 @@ SUPPORTED_STRATEGIES_BY_LAYER: dict[str, frozenset[str]] = {
             "header_whitespace_noise",
             "final_crlf_loss",
             "duplicate_content_length_conflict",
+            # Availability-oriented parser stress from HTTP-audit insight
+            # (Django/DRF, CVE-2025-14550 class): delimiter floods degrade
+            # CPU, Content-Length lies stress size-trusting allocations.
+            "delimiter_flood",
+            "content_length_mismatch",
             "alias_port_desync",
             "null_byte_only",
             "boundary_only",
@@ -132,6 +137,8 @@ PROFILE_ALLOWED_STRATEGIES: dict[str, dict[str, frozenset[str]]] = {
                 "identity",
                 "final_crlf_loss",
                 "duplicate_content_length_conflict",
+                "delimiter_flood",
+                "content_length_mismatch",
                 "edge_boundary",
             }
         ),
@@ -211,6 +218,8 @@ PROFILE_DEFAULT_STRATEGY_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "wire": (
             "final_crlf_loss",
             "duplicate_content_length_conflict",
+            "delimiter_flood",
+            "content_length_mismatch",
             "edge_boundary",
         ),
         "byte": ("tail_chop_1", "tail_garbage"),
