@@ -129,6 +129,18 @@ uv run fuzzer campaign run \
   --max-cases 100
 ```
 
+Availability-oriented parser stress (delimiter flood / Content-Length lie):
+
+```bash
+uv run fuzzer campaign run \
+  --methods OPTIONS \
+  --profile parser_breaker \
+  --layer wire \
+  --strategy delimiter_flood,content_length_mismatch \
+  --mutations-per-case 3 \
+  --max-cases 200
+```
+
 `campaign promote` closes the feedback loop: it recycles the exact sent bytes
 of every `crash`/`stack_failure`/`suspicious` case (from
 `interesting/case_<id>/sent.bin` or `sent.sip`) into a corpus directory the
